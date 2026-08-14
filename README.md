@@ -1,9 +1,13 @@
 # text-graph
 
-A fast, native graph viewer for a folder of markdown notes. Point it at a
-vault (an Obsidian vault works as-is) and get an interactive, Obsidian-style
-force-directed graph — one static Rust binary, no Electron, no webview, no
-runtime.
+A fast, native graph viewer for a folder of markdown notes — with your AI
+agents living inside it. Point it at a vault (an Obsidian vault works
+as-is) and get an Obsidian-style force-directed graph you can drive
+entirely from the keyboard, ranger-style. Terminal agents (claude, codex,
+pi, …) running in the vault appear as **live, typeable terminal cards**
+tethered to the folder they work in: watch them stream, jump in to type,
+and watch the graph ripple as they write notes. One static Rust binary —
+no Electron, no webview, no runtime.
 
 ```
 cargo run --release -- ~/notes          # open the graph window
@@ -65,31 +69,59 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 
 ## Controls
 
+The one rule: **selection is the mode**. With nothing selected, the
+keyboard drives the camera; select a node and the same keys walk the vault
+ranger-style (the camera follows); focus a terminal and every key goes to
+the agent until `Ctrl+Q`.
+
+### Camera (nothing selected)
+
 | Input | Action |
 |---|---|
-| drag empty space | pan |
-| mouse wheel | zoom toward the cursor |
+| drag empty space / `h` `j` `k` `l` | pan (hold to glide) |
+| mouse wheel / `u` `d` | zoom (wheel zooms toward the cursor) |
+| `0` / `Home` | reset — fit the whole graph |
+| `z` | center on the selection |
 | drag a node | move it — pins to the cursor, the simulation responds live |
 | hover | highlight the node's neighborhood, dim everything else |
-| click | select — opens the **navigator pane**: breadcrumb, sibling column, and rendered-markdown preview |
+| `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals; matches stay lit, `Enter` jumps to the ringed best hit (a winning terminal lands focused, ready to type), `Esc` closes |
+
+### Navigator (a node is selected)
+
+Click any node (or search into one) to open the navigator pane:
+breadcrumb, sibling column with the cursor, preview, and the color-coded
+connections strip.
+
+| Input | Action |
+|---|---|
+| `j` / `k` | step through siblings (sorted, dirs first) |
+| `h` | up to the parent |
+| `l` | enter a directory / open a file in the editor |
+| `gg` / `G` | first / last sibling |
+| `f` | find in this directory — fuzzy-jumps the cursor live as you type |
+| `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
-| right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **New terminal** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
-| right-click a terminal card | additionally: **Attach in terminal…** (a real terminal window on the same session) and **Kill terminal** (confirm submenu) |
-| `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals (agent name, session, folder); matches stay lit, `Enter` jumps to the ringed best hit — a winning terminal lands focused, ready to type |
-| `f` | find in the current directory (node selected): a prompt atop the sibling column, fuzzy-jumping the cursor and camera live as you type; `Enter`/`Esc` closes |
-| `z` | center the view on the selection |
-| `0` / `Home` | reset the view — fit the whole graph |
-| `h` `j` `k` `l` | **selection is the mode**: with a node selected, walk the tree ranger-style — `j`/`k` step siblings, `h` goes to the parent, `l` enters a dir / opens a file — and the camera follows; with nothing selected, pan (hold to glide). `Esc` gets you back to panning |
-| `gg` / `G` | first / last sibling (while a node is selected) |
-| `]` / `[` | walk a highlight forward / backward through the **connections strip** (children, then outgoing `→`, then incoming `←`); `Enter` or `l` follows the highlighted one, `Esc` dismisses, tree moves clear it |
-| `u` / `d` | zoom in / out (both modes) |
-| `t` | hop the terminal cursor from card to card (flies to each); `Enter` starts typing into the highlighted one, `Esc` dismisses |
-| `Esc` | close search, else deselect |
-| click a terminal card | focus it — the keyboard now types into that agent |
-| double-click a terminal card | fly the view into that terminal: zooms to a readable size and centers it |
-| drag a terminal card | arrange it (it stays put, following its anchor node) |
-| drag a card's corner grip (`tg_` cards, full view — compact zoomed-out cards have no grip) | **natively resize the terminal** — the tmux session itself changes size and the card follows; foreign sessions resize from their own terminal |
-| `Ctrl+Q` / click empty space | release terminal focus |
+| `Esc` | dismiss the link cursor, then deselect — back to camera mode |
+
+### Terminal cards
+
+| Input | Action |
+|---|---|
+| click a card | select + focus: it expands to full readable size at any zoom, turns **cyan ⌨**, and the keyboard types into the agent |
+| `t` | hop the (orange) terminal cursor from card to card, each expanding in place; `Enter` dives in to type |
+| `Ctrl+Q` / click empty space | release focus back to the graph |
+| double-click a card | fly the camera into it (zoom + center) |
+| drag a card | arrange it (it stays put, following its anchor node) |
+| drag the corner grip (`tg_` cards, full view) | **natively resize the terminal** — the tmux session itself changes size and the card follows |
+| right-click a card | **Attach in terminal…** (a real terminal window on that session) / **Kill terminal** (confirm submenu), plus the anchor folder's creation actions |
+
+### Creating (right-click anywhere)
+
+Context menu for the node under the cursor: **New note…** / **New
+folder…** / **New terminal** / **Launch agent** in that folder (a file
+targets its folder, empty space the vault root, a card its anchor); on a
+ghost node: **write it** into a real note. Details in *Creating from the
+graph* below.
 
 Edit any file in the vault and the graph updates ~300ms after you save — new
 links, files, and ghosts appear in place, and existing nodes keep their
@@ -226,7 +258,8 @@ src/
   app/        egui shell: transform, input, painting, search, navigator,
               reload worker, terminal cards + focus; diag.rs = health badge
 examples/
-  tmux_debug.rs  raw control-client event dump — the mirror's debug harness
+  tmux_debug.rs       raw control-client event dump — the mirror's debug harness
+  discovery_probe.rs  what discovery + mirrors see for a vault, headless
 fixtures/
   vault/      synthetic test vault — every link variant and trap
   EXPECTED.md hand-counted ground truth the integration tests assert exactly

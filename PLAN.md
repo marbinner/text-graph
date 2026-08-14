@@ -213,6 +213,16 @@ are done; note/folder creation and ghost materialization landed alongside
 (right-click menu, `create.rs`). Remaining E4: procfs fallback for non-tmux
 agents.
 
+Since then (post-E polish wave): ranger navigator (sibling column + preview +
+connections strip, modal hjkl / gg / G / f / ]-[ link walking, camera follow),
+query-layer core (out/backlink indexes, by_path, preserved offsets),
+background reload worker, ⚠ health badge, per-vault persistence, native card
+resize, bracketed paste, Alt chords, node type glyphs, focus-vs-cursor card
+states with any-zoom expansion, compact-card live status lines, CI +
+rustfmt, and the app/ module decomposition. Next candidates: the
+agent-needs-attention signal (bell/idle → amber card + t-priority), jump
+history (Ctrl+O / Ctrl+I), then Phase 2 step 0 (query JSON + read-only MCP).
+
 1. **E1 — control-mode client + screen mirror** (lib, egui-free). Protocol parsing
    (`%begin/%end/%error` reply blocks FIFO-correlated, `%output` octal-unescaped,
    layout-change notifications), per-pane screens via `vt100` behind our own

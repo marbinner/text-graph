@@ -72,7 +72,10 @@
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
   anything else in either mode; `l` guards against key-repeat spawning
-  editors.
+  editors. `]`/`[` walk `conn_cursor` over the connections strip —
+  `navigator::connections()` is the single source of its entry order
+  (children, outs, backs); Enter/l follow, Esc dismisses it FIRST, tree
+  moves and reloads clear it (stale indexes point into the old graph).
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
 - Node bodies are never held in memory; the detail pane reads the selected
