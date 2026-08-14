@@ -11,7 +11,7 @@ commit.
 | `.obsidian/` and `.trash/` skipped entirely | `.trash/deleted-note.md` contains `[[index]]` — must not appear anywhere |
 | Non-md files are not nodes | `assets/diagram.png` |
 | Dirs with no md descendants are pruned | `assets/` must not become a Dir node |
-| Embeds skipped in v1 | `![[diagram.png]]` in index.md |
+| Embeds skipped in v1 | `![[diagram.png]]` and `![[embedded-note-trap]]` in index.md — the second is md-resolvable, so an extraction regression surfaces as a ghost |
 | Markdown-style links not edges in v1 | `[ideas](projects/ideas.md)` in index.md |
 | Links in fenced code blocks are not edges | ```` ```text [[trap-link]] ``` ```` in index.md |
 | Links in inline code are not edges | `` `[[inline-trap]]` `` in index.md |
@@ -71,8 +71,8 @@ Per-source totals: 3+5+1+1+1+2+1+1+1 = 16 file edges; 2 ghost edges.
 
 - Parse warnings: **1** (scratch.md frontmatter)
 - Ambiguous resolutions: **1** (`[[rust]]`)
-- Raw `[[` occurrences in countable files: **22** = 18 edges + 2 code traps
-  + 1 embed + 1 dropped self-link (useful cross-check when editing the vault)
+- Raw `[[` occurrences in countable files: **23** = 18 edges + 2 code traps
+  + 2 embeds + 1 dropped self-link (useful cross-check when editing the vault)
 - Depth histogram — dirs: d0×1 (root), d1×4, d2×1 (daily);
   files: d1×4, d2×7, d3×2
 

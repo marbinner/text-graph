@@ -18,6 +18,15 @@ fn tmux(socket: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// Kills the private server on every exit path — without this, a panic
+/// before cleanup leaks a background tmux (test 2's `cat` never exits).
+struct ServerGuard(String);
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        tmux(&self.0, &["kill-server"]);
+    }
+}
+
 #[test]
 fn mirrors_a_scripted_session() {
     let have_tmux = Command::new("tmux")
@@ -31,6 +40,7 @@ fn mirrors_a_scripted_session() {
     }
 
     let socket = format!("tg-test-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
     assert!(
         tmux(&socket, &[
             "new-session",
@@ -57,8 +67,10 @@ fn mirrors_a_scripted_session() {
         let grids = m.grids();
         if let Some((_, g)) = grids.first() {
             last_row = g.cells[..g.cols as usize].iter().map(|c| c.ch).collect();
-            if let Some(r_at) = last_row.find("RED") {
-                let cell = g.cells[r_at];
+            if let Some(byte_at) = last_row.find("RED") {
+                // cells are indexed by CHAR position, not byte offset
+                let cell_at = last_row[..byte_at].chars().count();
+                let cell = g.cells[cell_at];
                 success = last_row.contains("plain")
                     && cell.bold
                     && cell.fg == Some(indexed_rgb(1));
@@ -66,7 +78,6 @@ fn mirrors_a_scripted_session() {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    tmux(&socket, &["kill-server"]);
     assert!(success, "expected styled 'plain RED text'; row 0 was {last_row:?}");
 }
 
@@ -85,6 +96,7 @@ fn typed_input_round_trips() {
     }
 
     let socket = format!("tg-test-in-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
     assert!(
         tmux(&socket, &["new-session", "-d", "-s", "t2", "-x", "80", "-y", "24", "cat"]),
         "failed to create cat session"
@@ -101,7 +113,6 @@ fn typed_input_round_trips() {
         std::thread::sleep(Duration::from_millis(50));
     }
     let Some(pane) = pane else {
-        tmux(&socket, &["kill-server"]);
         panic!("pane never discovered");
     };
 
@@ -125,6 +136,5 @@ fn typed_input_round_trips() {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    tmux(&socket, &["kill-server"]);
     assert!(success, "typed text never echoed back; screen was:\n{seen}");
 }

@@ -111,8 +111,10 @@ fn alias_resolution_works_and_stem_beats_alias() {
 #[test]
 fn traps_embeds_and_skip_dirs_leave_no_trace() {
     let g = build_fixture();
-    // code-fence / inline-code links would surface as ghost nodes if extracted
+    // code-fence / inline-code links and the md-resolvable embed would all
+    // surface as ghost nodes if extraction regressed
     assert!(!g.nodes.iter().any(|n| n.path.contains("trap")));
+    assert!(!g.nodes.iter().any(|n| n.path.contains("embedded-note")));
     // the embed target and the asset dir must not exist as nodes
     assert!(!g.nodes.iter().any(|n| n.path.contains("diagram")));
     assert!(!g.nodes.iter().any(|n| n.path == "assets"));
@@ -185,6 +187,39 @@ fn radial_layout_is_deterministic_and_siblings_are_distinct() {
             }
         }
     }
+}
+
+/// Pins the rendered report's stable prefix (everything up to the warnings
+/// section, whose YAML error text may vary across serde_yaml_ng versions).
+#[test]
+fn stats_render_snapshot() {
+    let g = build_fixture();
+    let s = stats::compute(&g);
+    let text = stats::render(&g, &s);
+    let expected = "\
+vault: vault
+nodes: 21 total = 13 files + 6 dirs + 2 ghosts
+edges: 18 contains, 18 wikilinks (16 -> files, 2 -> ghosts)
+depth: d0: 1 dir | d1: 4 dirs + 4 files | d2: 1 dir + 7 files | d3: 2 files
+largest dirs (direct md files):
+    4  <root>
+    2  notes
+    2  notes/daily
+    2  projects
+    2  topics
+    1  languages
+ambiguous links (1):
+  projects/rust-app.md: [[rust]] -> languages/rust.md  (not: topics/rust.md)
+ghosts (2):
+  [[missing-note]]  <- index.md
+  [[nonexistent/deep/ghost]]  <- projects/ideas.md
+self-links dropped: 1
+warnings (1):
+";
+    assert!(
+        text.starts_with(expected),
+        "stats render drifted; got:\n{text}"
+    );
 }
 
 #[test]

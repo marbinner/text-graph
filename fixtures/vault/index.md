@@ -15,6 +15,9 @@ A classic markdown link (not a wikilink, not an edge in v1): [ideas](projects/id
 
 Embedded image (embed + non-md target, skipped in v1): ![[diagram.png]]
 
+Embedded note (md-resolvable target — if embed handling regressed, this would
+surface loudly as a ghost node): ![[embedded-note-trap]]
+
 ```text
 This fenced block mentions [[trap-link]] and must NOT create an edge.
 ```
