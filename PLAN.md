@@ -185,16 +185,47 @@ Checkpoint after C: daily-drive it against the real vault; annoyances set D's or
 shows up, persist camera/selection per vault under `.text-graph/`, sim-constant tuning
 pass, label collision avoidance if labels annoy.
 
+**E — Terminals in the graph (current).** Agent TUIs (claude, codex, pi, any harness)
+live in tmux sessions; the viewer renders them as live terminal cards anchored to the
+node they were opened at, and you type into them in place. Architecture: the viewer
+attaches as a **tmux control-mode client** (`tmux -C attach`) — the iTerm2 approach —
+so sessions persist beyond the viewer, external `tmux attach` keeps working, and tmux
+answers every terminal query the TUI makes; we only ever render display streams.
+
+1. **E1 — control-mode client + screen mirror** (lib, egui-free). Protocol parsing
+   (`%begin/%end/%error` reply blocks FIFO-correlated, `%output` octal-unescaped,
+   layout-change notifications), per-pane screens via `vt100` behind our own
+   `TermGrid` facade (parser swappable for `alacritty_terminal` if fidelity demands),
+   initial paint via `capture-pane -e`. Integration-tested against a scripted real
+   tmux on a private `-L` socket; skipped gracefully where tmux is absent.
+2. **E2 — read-only live mirrors in the graph.** Terminal cards anchored to dir
+   nodes; LOD (zoomed out: name + activity glow + last line; zoomed in: the live
+   styled grid); discovery of vault sessions (`tg_*` ours by name, foreign panes by
+   cwd-in-vault + agent-command allowlist with ~10s hysteresis against
+   foreground-command flicker during tool calls).
+   — **Decision point: mirror a real claude session and judge fidelity before E3.**
+3. **E3 — input.** Click-to-focus; egui key/text events → xterm byte sequences →
+   `send-keys -H`; all graph keybinds suspend while a terminal is focused; release
+   by clicking empty space or Ctrl+Shift+Q. Known long tail: bracketed paste,
+   Shift+Enter, extended keys — expect a punch-list from real use. Mouse-into-
+   terminal and in-graph scrollback are explicitly v2 (attach externally for those).
+4. **E4 — lifecycle.** Launch-from-node buttons (`tmux new-session -d -s tg_… -c
+   <dir> <agent>`), kill, external attach in a new terminal window (reuses the
+   editor-window machinery), card drag-to-arrange, and the procfs fallback tier so
+   agents running in a bare terminal (no tmux) still show as presence badges.
+
 ---
 
 ## Phase 2: the intelligence layer
 
-Ordered so each step is useful on its own:
+Reframed after milestone E: agents arrive by being *opened in the vault* (terminals
+in the graph), not by registering infrastructure. Ordered so each step is useful on
+its own:
 
-1. **MCP server first** — expose the graph as tools (`search`, `read`, `create`,
-   `append`, `link`, `children`) over stdio. Agents (Claude Code etc.) read/write the
-   vault as shared memory; the viewer shows their work live via C4's reload. No LLM
-   calls inside text-graph yet — agents bring their own.
+1. **MCP server — now optional, later.** Graph-aware tools (`search`, `read`,
+   `create`, `append`, `link`, `children`) over stdio, for agents that want
+   structured access instead of raw file edits. Presence, launching, and live
+   observation are milestone E's job and need none of this.
 2. **Retrieval** — tantivy BM25, incremental via blake3-gated reindex; powers both the
    MCP `search` tool and, later, the decider's context. Still $0.
 3. **The decider** — `text-graph add`: buffer → retrieve → one structured-output call
