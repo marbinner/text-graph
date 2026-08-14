@@ -5,6 +5,7 @@
 - `cargo test` — unit + integration. Integration (`tests/fixture_vault.rs`)
   asserts the exact hand-counted numbers in `fixtures/EXPECTED.md`.
 - `cargo clippy --all-targets` — keep it at zero warnings.
+- `cargo fmt` before committing — CI gates on `cargo fmt -- --check`.
 - `cargo run --release -- <vault>` opens the GUI; `-- stats <vault>` is headless.
 - GUI smoke test without interaction: `timeout 6 cargo run --release -- fixtures/vault`
   → exit 124 means it launched and ran fine.
