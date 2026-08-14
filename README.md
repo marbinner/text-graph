@@ -38,8 +38,10 @@ heading/block (`[[x#h]]`, `[[x#^id]]`) suffixes are stripped before resolving.
    `[[SAE]]`, and the alias becomes its label in the graph.
 4. Several candidates → the **first in sorted path order** wins and the link
    is flagged ambiguous (visible in `stats`).
-5. Not edges at all: `![[embeds]]`, links to asset extensions (png/pdf/…),
-   anything inside code fences or inline code, and self-links.
+5. Not edges at all: `![[embeds]]`, anything inside code fences or inline
+   code, self-links, and *unresolved* links with asset extensions (png/pdf/…)
+   — a real note named `pic.png.md` or `Drawing.excalidraw.md` stays
+   linkable; only plain references to images and files are skipped.
 6. Still unresolved → a ghost node.
 
 Labels prefer frontmatter `title:`, then the first alias, then the file stem.
@@ -82,8 +84,10 @@ of the folder the agent runs in. Zoomed out it's a summary (`claude · work %0`,
 colors, cursor, everything, mirrored in real time.
 
 **Click the card and type.** Every key goes to the agent — Enter, Esc,
-arrows, Shift+Tab, Ctrl chords — while graph keybinds suspend; `Ctrl+Shift+Q`
-or clicking empty space gives you the graph back. Drag cards to arrange your
+arrows, Shift+Tab, Ctrl chords including Ctrl+C to interrupt — while graph
+keybinds suspend; `Ctrl+Shift+Q` or clicking empty space gives you the graph
+back. A card stays up for the pane's whole lifetime, including while the
+agent runs long tool calls. Drag cards to arrange your
 workspace. Watch the card glow while an agent streams, and the graph ripple
 as it writes notes.
 

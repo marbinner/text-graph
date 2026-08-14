@@ -39,9 +39,16 @@
   never send size hints (`set_size`) to sessions we didn't create (it would
   reflow the user's real terminal view). Special keys go as tmux key NAMES
   (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
-  (quoting-proof). After a capture replay the pane cursor MUST be restored
-  via the queried position — the replay parks it at the bottom row
-  (regression-guarded by `typed_input_round_trips`).
+  (quoting-proof); Ctrl+C/X arrive from egui as Copy/Cut events, not Key
+  events. While a terminal is focused, keyboard events are DRAINED from
+  egui's input (not just read) so widget focus/shortcuts never fire. After
+  a capture replay the pane cursor MUST be restored via the queried
+  position — the replay parks it at the bottom row (regression-guarded by
+  `typed_input_round_trips`). Reply blocks terminate only on the %end/%error
+  matching their %begin's command number — protocol-shaped screen text is
+  data. Agent identity is sticky for a pane's lifetime (tool calls flip
+  pane_current_command to bash for arbitrarily long); GRACE only governs
+  remembering vanished panes.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
   suspend), drag = arrange (world-space offset from anchor in
   `term_offsets`), Ctrl+Shift+Q or click-away = release. Cards win pointer
