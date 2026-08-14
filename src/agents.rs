@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// How long a previously-matching pane stays "active" after its foreground
-/// command stops matching (tool-call flicker).
+/// How long a vanished pane's agent identity is remembered (covers scan
+/// flicker). While a pane still EXISTS, identity is sticky — see
+/// [`Tracker::update`].
 pub const GRACE: Duration = Duration::from_secs(10);
 
 /// A raw tmux pane whose cwd is inside the vault (pre-filtering).
@@ -56,15 +57,16 @@ pub fn default_allowlist() -> Vec<String> {
 }
 
 /// One-shot scan of the default tmux server. Returns every pane whose cwd is
-/// inside `vault`; allowlist and grace filtering happen in [`Tracker`].
-/// tmux absent or no server running → empty.
+/// inside `vault`; allowlist and stickiness filtering happen in [`Tracker`].
+/// tmux absent or no server running → empty. The path field comes LAST in
+/// the format so a tab inside a path (legal in POSIX) can't shear the record.
 pub fn scan(vault: &Path) -> Vec<PaneInfo> {
     let out = Command::new("tmux")
         .args([
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}",
+            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
         ])
         .output();
     let Ok(out) = out else { return Vec::new() };
@@ -77,8 +79,8 @@ pub fn scan(vault: &Path) -> Vec<PaneInfo> {
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
     text.lines()
         .filter_map(|l| {
-            let mut f = l.split('\t');
-            let (Some(session), Some(pane), Some(pid), Some(cwd), Some(command)) =
+            let mut f = l.splitn(5, '\t');
+            let (Some(session), Some(pane), Some(pid), Some(command), Some(cwd)) =
                 (f.next(), f.next(), f.next(), f.next(), f.next())
             else {
                 return None;
@@ -132,10 +134,15 @@ impl Tracker {
                     cmd_base.to_string()
                 };
                 self.last_ok.insert(key.clone(), (now, agent));
+            } else if let Some(e) = self.last_ok.get_mut(&key) {
+                e.0 = now; // refresh last-seen for sticky entries
             }
-            if let Some((t, agent)) = self.last_ok.get(&key)
-                && now.duration_since(*t) <= GRACE
-            {
+            // Sticky: once a pane has been an agent, it stays one while the
+            // pane exists — pane_current_command reads bash/python for the
+            // whole duration of a tool call (which can far outlast any grace
+            // window), and dropping the mirror mid-call would blank the card
+            // and steal typing focus at the worst possible moment.
+            if let Some((_, agent)) = self.last_ok.get(&key) {
                 out.push(AgentPane {
                     session: p.session.clone(),
                     pane: p.pane.clone(),
@@ -146,7 +153,8 @@ impl Tracker {
                 });
             }
         }
-        // forget panes that no longer exist and are past grace
+        // forget identities only once the pane itself is gone past the
+        // (scan-flicker) grace
         self.last_ok.retain(|k, (t, _)| {
             now.duration_since(*t) <= GRACE
                 || panes
@@ -163,14 +171,24 @@ mod tests {
 
     #[test]
     fn parse_filters_to_vault() {
-        let text = "work\t%1\t100\t/v/notes\tclaude\n\
-                    other\t%2\t200\t/elsewhere\tclaude\n\
-                    tg_pi_1\t%3\t300\t/v/notes/topics\tpi\n\
+        let text = "work\t%1\t100\tclaude\t/v/notes\n\
+                    other\t%2\t200\tclaude\t/elsewhere\n\
+                    tg_pi_1\t%3\t300\tpi\t/v/notes/topics\n\
                     bad-line\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 2);
         assert_eq!(panes[0].session, "work");
         assert_eq!(panes[1].pane, "%3");
+    }
+
+    #[test]
+    fn parse_survives_tabs_in_paths() {
+        // path is the last field, so an embedded tab stays part of the path
+        let text = "work\t%1\t100\tclaude\t/v/notes/weird\tdir\n";
+        let panes = parse_scan(text, Path::new("/v/notes"));
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].cwd, PathBuf::from("/v/notes/weird\tdir"));
+        assert_eq!(panes[0].command, "claude");
     }
 
     fn pane(session: &str, command: &str) -> PaneInfo {
@@ -184,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_grace_keeps_agent_name_through_tool_calls() {
+    fn identity_is_sticky_while_the_pane_exists() {
         let allow = vec!["claude".to_string()];
         let mut tr = Tracker::new();
         let t0 = Instant::now();
@@ -193,17 +211,19 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].agent, "claude");
 
-        // foreground command flips to bash during a tool call — still active,
-        // still labeled claude
-        let t1 = t0 + Duration::from_secs(5);
+        // an hour into a tool call the foreground command still reads bash —
+        // the card must not vanish nor lose its label
+        let t1 = t0 + Duration::from_secs(3600);
         let active = tr.update(&[pane("work", "bash")], &allow, t1);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].agent, "claude");
 
-        // past the grace period it drops
+        // pane gone → identity forgotten once past the scan-flicker grace
         let t2 = t1 + GRACE + Duration::from_secs(1);
-        let active = tr.update(&[pane("work", "bash")], &allow, t2);
-        assert!(active.is_empty());
+        assert!(tr.update(&[], &allow, t2).is_empty());
+        let t3 = t2 + Duration::from_secs(1);
+        let active = tr.update(&[pane("work", "bash")], &allow, t3);
+        assert!(active.is_empty(), "closed pane's identity must not revive");
     }
 
     #[test]
