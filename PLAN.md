@@ -24,7 +24,8 @@ Nodes are directories and files; edges are typed and come from multiple sources 
 coexist rather than competing:
 
 ```rust
-enum NodeKind { Dir, File, Ghost }        // Ghost = referenced but nonexistent target
+enum NodeKind { Dir, File, Image, Ghost } // Ghost = referenced but nonexistent target;
+                                          // Image = raster file, rendered as a thumbnail
 enum EdgeKind { Contains, WikiLink }      // later: MdLink, Tag, Embed, Frontmatter
 
 struct Edge { from: NodeId, to: NodeId, kind: EdgeKind }

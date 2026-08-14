@@ -45,8 +45,10 @@
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
   lifecycle; `navigator.rs` = the ranger pane; `actions.rs` = right-click
   menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
-  worker pump + apply + persistence glue; `diag.rs` = health badge. New
-  GUI code goes into the matching child module, not into mod.rs.
+  worker pump + apply + persistence glue; `diag.rs` = health badge;
+  `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
+  does the pixel work, headless). New GUI code goes into the matching
+  child module, not into mod.rs.
 - Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
   never send size hints (`set_size`) or `resize-window` to sessions we
   didn't create (it would reflow the user's real terminal view). The corner
