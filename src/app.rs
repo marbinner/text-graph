@@ -396,7 +396,9 @@ struct Viewer {
     /// Fuzzy-search scores for agent panes (aligned with `agent_panes`,
     /// re-scored every frame while searching — the pane list is live).
     term_scores: Vec<Option<u32>>,
-    term_best: Option<usize>,
+    /// Best terminal hit: index at scoring time PLUS its key, so consumers
+    /// can survive the pane list shifting underneath the index.
+    term_best: Option<(usize, (String, String))>,
     // ---- creation (right-click menu) ----
     /// Node captured at right-click time — the context menu's subject.
     ctx_node: Option<NodeId>,
@@ -644,36 +646,17 @@ impl Viewer {
         self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));
-        // Arrangements are never dropped, only parked by session name: a
-        // vanished (or not-yet-scanned) session's offsets wait in
-        // restore_offsets and are reclaimed when a session with that name
-        // reappears — including across viewer restarts via .text-graph/view.
-        let parked: Vec<((String, String), Vec2)> = self
-            .term_offsets
+        // Arrangements are never dropped, only parked by session name and
+        // reclaimed when a session with that name reappears (exact pane
+        // first, then any spot) — including across viewer restarts via
+        // .text-graph/view. Logic lives in state.rs, where it's unit-tested.
+        state::park_absent(&mut self.term_offsets, &mut self.restore_offsets, &sessions);
+        let pane_keys: Vec<(String, String)> = self
+            .agent_panes
             .iter()
-            .filter(|((s, _), _)| !sessions.contains(s))
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|a| (a.session.clone(), a.pane.clone()))
             .collect();
-        for ((s, p), off) in parked {
-            self.term_offsets.remove(&(s.clone(), p.clone()));
-            self.restore_offsets.entry(s).or_default().push((p, off));
-        }
-        for a in &self.agent_panes {
-            let key = (a.session.clone(), a.pane.clone());
-            if self.term_offsets.contains_key(&key) {
-                continue;
-            }
-            if let Some(list) = self.restore_offsets.get_mut(&a.session) {
-                // exact pane match first; else claim any parked spot for this
-                // session (pane ids change across tmux server restarts)
-                let i = list.iter().position(|(p, _)| p == &a.pane).unwrap_or(0);
-                let (_, off) = list.remove(i);
-                self.term_offsets.insert(key, off);
-                if list.is_empty() {
-                    self.restore_offsets.remove(&a.session);
-                }
-            }
-        }
+        state::claim(&mut self.term_offsets, &mut self.restore_offsets, &pane_keys);
         let focus_dead = self
             .focused_term
             .as_ref()
@@ -822,7 +805,8 @@ impl Viewer {
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
             let searching = self.search_open && !self.query.is_empty();
             let smatch = searching && self.term_scores.get(i).copied().flatten().is_some();
-            let sbest = searching && self.term_best == Some(i);
+            let sbest = searching
+                && self.term_best.as_ref().is_some_and(|(_, bk)| bk == &key);
             let cursor = self.term_selected.as_ref() == Some(&key);
             let (border, bw) = if focused {
                 (SELECT, 2.5)
@@ -887,10 +871,7 @@ impl Viewer {
                     FontId::proportional(10.5),
                     Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
                 );
-                if a.ours {
-                    paint_resize_grip(&cp, card, border);
-                }
-                continue;
+                continue; // compact cards: no grip — resize is gated off too
             }
 
             let origin = card.left_top() + Vec2::new(pad, title_h + pad);
@@ -1083,19 +1064,27 @@ impl Viewer {
                 // a terminal hit that outscores every node wins the jump —
                 // and lands focused, ready to type
                 let node_score = self.best.and_then(|id| self.scores[id.0 as usize]);
-                let term_score =
-                    self.term_best.and_then(|i| self.term_scores.get(i).copied().flatten());
+                let term_score = self
+                    .term_best
+                    .as_ref()
+                    .and_then(|(i, _)| self.term_scores.get(*i).copied().flatten());
                 if term_score > node_score
-                    && let Some(a) = self.term_best.and_then(|i| self.agent_panes.get(i))
+                    && let Some((_, bk)) = self.term_best.clone()
+                    // resolve by key, not index: the pane list may have
+                    // shifted since the scores were computed
+                    && let Some(i) = self
+                        .agent_panes
+                        .iter()
+                        .position(|a| a.session == bk.0 && a.pane == bk.1)
                 {
-                    let key = (a.session.clone(), a.pane.clone());
-                    self.term_cycle = self.term_best.unwrap_or(0) + 1;
-                    self.term_selected = Some(key.clone());
-                    self.focused_term = Some(key.clone());
-                    self.fly_to_card(key);
+                    self.term_cycle = i + 1;
+                    self.term_selected = Some(bk.clone());
+                    self.focused_term = Some(bk.clone());
+                    self.fly_to_card(bk);
                 } else if let Some(best) = self.best {
                     self.selected = Some(best);
                     self.frame_node(best);
+                    self.term_selected = None; // Enter must not later hijack
                 }
                 self.close_search();
             }
@@ -1497,7 +1486,10 @@ impl Viewer {
                 score
             })
             .collect();
-        self.term_best = tbest.map(|(_, i)| i);
+        self.term_best = tbest.map(|(_, i)| {
+            let a = &self.agent_panes[i];
+            (i, (a.session.clone(), a.pane.clone()))
+        });
         if self.query == self.last_query {
             return;
         }
@@ -1688,8 +1680,13 @@ impl Viewer {
                     .iter()
                     .find(|a| a.session == t.0 && a.pane == t.1)
                     .is_some_and(|a| a.ours);
+                // no resize from compact LOD: the fixed summary box gives no
+                // feedback and its ~1.5px cell advance makes a twitch reflow
+                // the real session by dozens of columns
+                let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0;
                 if on_handle
                     && ours
+                    && !compact
                     && let Some(c) = self.term_cache.get(&t)
                     && let Some(pos) = response.hover_pos()
                 {

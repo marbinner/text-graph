@@ -6,6 +6,7 @@
 //! inside a session name can't shear the record); unknown lines are ignored
 //! for forward compatibility, and any unparsable line is simply dropped.
 
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 
@@ -71,6 +72,64 @@ fn num(v: Option<&str>) -> Option<f32> {
     v.and_then(|t| t.parse::<f32>().ok()).filter(|f| f.is_finite())
 }
 
+/// Move every arrangement whose session is absent into the parking map,
+/// keyed by session name. Arrangements are never dropped — a session that
+/// reappears (even after a tmux server restart) reclaims its spot.
+pub fn park_absent<V: Copy>(
+    offsets: &mut HashMap<(String, String), V>,
+    parked: &mut HashMap<String, Vec<(String, V)>>,
+    live_sessions: &HashSet<String>,
+) {
+    let mut gone: Vec<((String, String), V)> = offsets
+        .iter()
+        .filter(|((s, _), _)| !live_sessions.contains(s))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    gone.sort_by(|a, b| a.0.cmp(&b.0)); // parking order independent of map order
+    for ((s, p), v) in gone {
+        offsets.remove(&(s.clone(), p.clone()));
+        parked.entry(s).or_default().push((p, v));
+    }
+}
+
+/// Hand parked arrangements to live panes. Two passes: exact
+/// (session, pane) matches claim their own spot first — only then may a
+/// leftover pane of the same session take any remaining spot (pane ids
+/// change across tmux server restarts). A single greedy pass would let an
+/// earlier unrelated pane steal a later pane's exact match.
+pub fn claim<V: Copy>(
+    offsets: &mut HashMap<(String, String), V>,
+    parked: &mut HashMap<String, Vec<(String, V)>>,
+    panes: &[(String, String)],
+) {
+    for key in panes {
+        if offsets.contains_key(key) {
+            continue;
+        }
+        if let Some(list) = parked.get_mut(&key.0)
+            && let Some(i) = list.iter().position(|(p, _)| p == &key.1)
+        {
+            let (_, v) = list.remove(i);
+            offsets.insert(key.clone(), v);
+            if list.is_empty() {
+                parked.remove(&key.0);
+            }
+        }
+    }
+    for key in panes {
+        if offsets.contains_key(key) {
+            continue;
+        }
+        if let Some(list) = parked.get_mut(&key.0) {
+            let (_, v) = list.remove(0);
+            offsets.insert(key.clone(), v);
+            if list.is_empty() {
+                parked.remove(&key.0);
+            }
+        }
+    }
+}
+
 pub fn load(vault: &Path) -> ViewState {
     std::fs::read_to_string(vault.join(".text-graph/view"))
         .map(|t| from_text(&t))
@@ -122,5 +181,51 @@ mod tests {
     fn empty_or_missing_is_default() {
         assert_eq!(from_text(""), ViewState::default());
         assert_eq!(load(Path::new("/nonexistent-vault-path")), ViewState::default());
+    }
+
+    fn k(s: &str, p: &str) -> (String, String) {
+        (s.to_string(), p.to_string())
+    }
+
+    #[test]
+    fn claim_prefers_exact_pane_matches_over_scan_order() {
+        // session with panes %1 and %2; only %2 was ever arranged. %1 comes
+        // first in scan order and must NOT steal %2's spot.
+        let mut offsets: HashMap<(String, String), (f32, f32)> = HashMap::new();
+        let mut parked = HashMap::new();
+        parked.insert("work".to_string(), vec![("%2".to_string(), (7.0, 9.0))]);
+        claim(&mut offsets, &mut parked, &[k("work", "%1"), k("work", "%2")]);
+        assert_eq!(offsets.get(&k("work", "%2")), Some(&(7.0, 9.0)));
+        assert!(!offsets.contains_key(&k("work", "%1")));
+        assert!(parked.is_empty());
+    }
+
+    #[test]
+    fn claim_falls_back_across_pane_id_changes() {
+        // server restart: saved pane %9 no longer exists; the session's new
+        // pane %1 inherits the arrangement
+        let mut offsets: HashMap<(String, String), (f32, f32)> = HashMap::new();
+        let mut parked = HashMap::new();
+        parked.insert("tg_claude".to_string(), vec![("%9".to_string(), (1.0, 2.0))]);
+        claim(&mut offsets, &mut parked, &[k("tg_claude", "%1")]);
+        assert_eq!(offsets.get(&k("tg_claude", "%1")), Some(&(1.0, 2.0)));
+        assert!(parked.is_empty());
+    }
+
+    #[test]
+    fn park_then_claim_round_trips() {
+        let mut offsets: HashMap<(String, String), (f32, f32)> = HashMap::new();
+        offsets.insert(k("a", "%1"), (3.0, 4.0));
+        offsets.insert(k("b", "%2"), (5.0, 6.0));
+        let mut parked = HashMap::new();
+        // session b vanished
+        let live: HashSet<String> = ["a".to_string()].into();
+        park_absent(&mut offsets, &mut parked, &live);
+        assert_eq!(offsets.len(), 1, "a stays live");
+        assert_eq!(parked["b"], vec![("%2".to_string(), (5.0, 6.0))]);
+        // b comes back
+        claim(&mut offsets, &mut parked, &[k("b", "%2")]);
+        assert_eq!(offsets.get(&k("b", "%2")), Some(&(5.0, 6.0)));
+        assert!(parked.is_empty());
     }
 }
