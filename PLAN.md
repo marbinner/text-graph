@@ -1,8 +1,9 @@
 # text-graph — Plan
 
-*Last updated 2026-08-14 (v0.2.0, 93 tests). Where to pick up: the
-agent-needs-attention signal, jump history (Ctrl+O/I), or Phase 2 step 0 —
-see the Status paragraph under milestone E and the audit backlog under D.*
+*Last updated 2026-08-14 (v0.2.0, 93 tests). Where to pick up: milestone F
+(agents talk) is fully spec'd below — design converged, NO code yet; start at
+slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
+step 0, the audit backlog under D.*
 
 **Phase 1 (current):** a fast native GUI over a markdown vault. Point it at a folder of
 `.md` files and it renders an interactive graph. One static Rust binary — egui, no
@@ -250,6 +251,56 @@ history (Ctrl+O / Ctrl+I), then Phase 2 step 0 (query JSON + read-only MCP).
    <dir> <agent>`), kill, external attach in a new terminal window (reuses the
    editor-window machinery), card drag-to-arrange, and the procfs fallback tier so
    agents running in a bare terminal (no tmux) still show as presence badges.
+
+**F — Agents talk (current).** Multi-agent communication, designed from first
+principles and deliberately bus-free: agents ping each other **directly
+through tmux** (which we already speak), remember **through the vault**
+(conclusions written as notes), and each agent **is a text node** — live body
+= its terminal, persistent body = its transcript, which outlives the session
+as its ghost. Relevance-routing is the reader's job (LLMs judge "what
+matters" better than any router we'd write), so there is no watch list, no
+event queue, no digest machinery, no `mail/` directory, and the viewer never
+types into a pane on its own — only agents and the human do.
+
+1. **F1 — CLI trio** (lib `comm.rs`, egui-free; hand-parsed subcommands like
+   `stats`): `roster` (live agents: session, anchor, busy/idle via
+   `window_activity`, status line), `send <agent> <msg>` (paste-safe via
+   `load-buffer` + `paste-buffer -p` + Enter; sender attribution from
+   `$TMUX_PANE`; roster-validated addressing that fails loudly with
+   suggestions), `peek <agent> [-n]` (capture-pane wrapper), `protocol`
+   (prints the conventions: chatter in terminals, conclusions in notes; the
+   first ping teaches newcomers). Vault root found git-style: walk up from
+   cwd to the nearest `.text-graph/`, else cwd. Private-socket integration
+   test; scan-format additions verified against a real server.
+2. **F2 — the experiment (decision point).** Two real `tg_` agents on a
+   scratch vault negotiate one small artifact purely over `send`/`peek` and a
+   shared topic note, no human relay. Ergonomics verdict gates the rest.
+3. **F3 — identity pinning.** Mint a UUID per `tg_` launch; `claude
+   --session-id`, `pi --session-id` (pi's native store co-located via
+   `--session-dir` under `.text-graph/sessions/`); session meta (harness,
+   uuid, cwd, started) written to `.text-graph/sessions/<name>/meta`. This is
+   what makes resume exact later. Foreign panes degrade gracefully (no pin).
+4. **F4 — attention signal.** Per-pane last-output timestamps in the mirror;
+   busy→idle transition sets attention (amber card), cleared by focusing;
+   `t` cycles attention cards. Also gates transcript sync.
+5. **F5 — three-layer transcripts** in `agents/<session>/` (gitignore hint
+   for project vaults): the harness's own jsonl stays home and powers
+   *native* resume (pointer only, never written by us); adapters normalize
+   claude/pi jsonl into generic `events.jsonl` ({ts, role, text, tool});
+   `transcript.md` renders from it — a real node whose `[[links]]` become
+   edges, so conversations wire themselves into the graph. Screen-scrape is
+   the universal fallback tier (bare shells, unknown harnesses, broken
+   adapters). Sync on idle transitions + exit flush; `history-limit` bumped
+   on `tg_` launches so attach back-fill is deep.
+6. **F6 — agent-as-node GUI.** Card ↔ transcript note association;
+   detail-pane live tail; on session death the note remains as the agent's
+   ghost in place; right-click → Resume (native, from pinned meta) or
+   Rebirth from transcript (fresh session in *any* harness, pointed at the
+   transcript — cross-harness handoff).
+
+MCP stays deferred to Phase 2 as a thin adapter over the same files. No
+sockets, no daemons: message latency is dominated by agent thinking time,
+and every layer stays inspectable as plain files.
 
 ---
 
