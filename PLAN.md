@@ -185,14 +185,14 @@ Checkpoint after C: daily-drive it against the real vault; annoyances set D's or
 shows up, sim-constant tuning pass, label collision avoidance if labels annoy.
 Camera + card-arrangement persistence under `.text-graph/` ✓ done (state.rs).
 
-Audit backlog (external audit, 2026-08; do when the trigger appears):
-- Background rebuild worker (generation-numbered, stale-result-discarding) once a
-  vault is big enough that reload stalls the frame — today's vaults rebuild in ms.
-- In-GUI diagnostics: health badge + clickable panel for warnings/errors/ambiguities
-  (already collected in the graph), plus surfacing watcher/attach failures.
+Audit backlog (external audit, 2026-08):
+- Background rebuild worker ✓ done (generation-numbered, stale discarded).
+- In-GUI diagnostics ✓ done (⚠ badge + health window, app/diag.rs).
+- Query layer core ✓ done (outlinks/backlinks indexes, by_path/by_ident,
+  Link.offset preserved) — JSON/headless output still deferred to Phase 2.
+- app decomposition: started (app/ dir; diag split out). Move terminals and the
+  navigator into child modules opportunistically as they're next touched.
 - Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
-- app.rs decomposition (canvas / terminals / reload / actions) with pure state
-  transitions extracted — do it before the next big feature lands there, not after.
 - License + release packaging (user decision on license first).
 
 **E — Terminals in the graph (current).** Agent TUIs (claude, codex, pi, any harness)

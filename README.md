@@ -90,7 +90,13 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 
 Edit any file in the vault and the graph updates ~300ms after you save — new
 links, files, and ghosts appear in place, and existing nodes keep their
-positions (the layout ripples instead of re-settling).
+positions (the layout ripples instead of re-settling). Rebuilds run on a
+worker thread, so saves never hitch the UI.
+
+When anything is off — parse warnings, unreadable files, ambiguous links, a
+dead file watcher, a failed reload, a tmux session that won't mirror — a
+**⚠ badge** appears in the corner; click it for the health list (entries
+jump to the affected note).
 
 ## Creating from the graph
 
@@ -208,8 +214,8 @@ src/
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
   keys.rs     keyboard → send-keys commands (tmux names + raw hex)
-  app.rs      egui shell: transform, input, painting, search, detail pane,
-              reload, terminal cards + focus
+  app/        egui shell: transform, input, painting, search, navigator,
+              reload worker, terminal cards + focus; diag.rs = health badge
 examples/
   tmux_debug.rs  raw control-client event dump — the mirror's debug harness
 fixtures/
