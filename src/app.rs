@@ -2241,7 +2241,7 @@ impl eframe::App for Viewer {
         ctx.request_repaint_after(Duration::from_secs(3));
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_state(true);
     }
 }

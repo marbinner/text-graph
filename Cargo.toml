@@ -5,7 +5,16 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-eframe = "0.36"
+# glow backend, not the default wgpu: same egui, a fraction of the build
+# (wgpu alone was most of an 8GB target dir and minutes of compile time)
+eframe = { version = "0.36", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "links",
+    "wayland",
+    "x11",
+] }
 egui_commonmark = "0.25"
 ignore = "0.4"
 notify = "8"
