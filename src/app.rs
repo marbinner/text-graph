@@ -318,17 +318,20 @@ impl Viewer {
         }
     }
 
-    /// Open the selected file for editing — always in a NEW window. Terminal
-    /// editors ($EDITOR=nvim etc.) are wrapped in a fresh terminal emulator
-    /// instead of hijacking whatever terminal launched the viewer; GUI
-    /// editors and xdg-open open their own windows anyway.
+    /// Open the selection externally — always in a NEW window. Files go to
+    /// the editor: terminal editors ($EDITOR=nvim etc.) are wrapped in a
+    /// fresh terminal emulator instead of hijacking whatever terminal
+    /// launched the viewer; GUI editors open their own windows anyway. Dirs
+    /// open in the file manager; ghosts have nothing to open.
     fn open_in_editor(&self, id: NodeId) {
         let node = self.g.node(id);
-        if node.kind != NodeKind::File {
-            return;
-        }
         let path = self.root.join(&node.path);
-        if let Err(e) = spawn_editor(&path) {
+        let result = match node.kind {
+            NodeKind::File => spawn_editor(&path),
+            NodeKind::Dir => detached(std::process::Command::new("xdg-open").arg(&path)),
+            NodeKind::Ghost => return,
+        };
+        if let Err(e) = result {
             eprintln!("failed to open {}: {e}", path.display());
         }
     }
