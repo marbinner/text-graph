@@ -192,6 +192,11 @@ attaches as a **tmux control-mode client** (`tmux -C attach`) — the iTerm2 app
 so sessions persist beyond the viewer, external `tmux attach` keeps working, and tmux
 answers every terminal query the TUI makes; we only ever render display streams.
 
+Status: E1–E3 ✓ done (fidelity decision point passed — a live claude TUI mirrors
+faithfully on vt100; capture-replay cursor restore was the one real bug found).
+Card drag-to-arrange (an E4 item) landed early. Remaining E4: launch-from-node
+buttons, kill, external attach, procfs fallback for non-tmux agents.
+
 1. **E1 — control-mode client + screen mirror** (lib, egui-free). Protocol parsing
    (`%begin/%end/%error` reply blocks FIFO-correlated, `%output` octal-unescaped,
    layout-change notifications), per-pane screens via `vt100` behind our own

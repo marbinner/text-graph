@@ -32,8 +32,20 @@
 - `vault.rs` parses per-file with no global state; `resolve.rs` is the only
   place link strings become NodeIds. New edge sources = extractor + resolver
   case + render arm.
-- `layout.rs` and `sim.rs` must stay egui-free (headless-testable).
-  `app.rs` is the only module allowed to touch egui.
+- `layout.rs`, `sim.rs`, `tmux.rs`, `mirror.rs`, `agents.rs`, and `keys.rs`
+  must stay egui-free (headless-testable). `app.rs` is the only module
+  allowed to touch egui.
+- Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
+  never send size hints (`set_size`) to sessions we didn't create (it would
+  reflow the user's real terminal view). Special keys go as tmux key NAMES
+  (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
+  (quoting-proof). After a capture replay the pane cursor MUST be restored
+  via the queried position — the replay parks it at the bottom row
+  (regression-guarded by `typed_input_round_trips`).
+- Card interaction contract: click = focus (keyboard → pane, graph keybinds
+  suspend), drag = arrange (world-space offset from anchor in
+  `term_offsets`), Ctrl+Shift+Q or click-away = release. Cards win pointer
+  contention over nodes beneath them via last-frame `term_rects`.
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
 - Node bodies are never held in memory; the detail pane reads the selected
@@ -50,3 +62,8 @@
   tail expression.
 - `egui_commonmark` 0.25 pairs with egui 0.36; viewer API is
   `CommonMarkViewer::new().show(ui, &mut cache, text)`.
+- `Painter::rect_stroke` needs a `StrokeKind` argument; `Painter::layout_job`
+  exists (use it — `ctx().fonts()` gives a read-only view that can't layout).
+- `gen` is a reserved keyword in edition 2024 — don't name variables that.
+- Debugging the mirror: `examples/tmux_debug.rs` dumps raw control-client
+  events against any socket/session (`cargo run --example tmux_debug S t`).
