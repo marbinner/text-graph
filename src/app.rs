@@ -189,6 +189,35 @@ impl Viewer {
             self.search_focus_pending = true;
         } else if esc {
             self.selected = None;
+        } else if enter
+            && let Some(sel) = self.selected
+        {
+            self.open_in_editor(sel);
+        }
+    }
+
+    /// Spawn $VISUAL / $EDITOR (split on whitespace so "code --wait" works),
+    /// falling back to xdg-open. Detached; the viewer stays read-only.
+    fn open_in_editor(&self, id: NodeId) {
+        let node = self.g.node(id);
+        if node.kind != NodeKind::File {
+            return;
+        }
+        let path = self.root.join(&node.path);
+        let editor = std::env::var("VISUAL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()));
+        let result = match &editor {
+            Some(ed) => {
+                let mut parts = ed.split_whitespace();
+                let prog = parts.next().unwrap_or("xdg-open");
+                std::process::Command::new(prog).args(parts).arg(&path).spawn()
+            }
+            None => std::process::Command::new("xdg-open").arg(&path).spawn(),
+        };
+        if let Err(e) = result {
+            eprintln!("failed to open {}: {e}", path.display());
         }
     }
 
@@ -267,6 +296,10 @@ impl Viewer {
         let mut jump: Option<NodeId> = None;
         match kind {
             NodeKind::File => {
+                if ui.button("open in editor  (Enter)").clicked() {
+                    self.open_in_editor(sel);
+                }
+                ui.add_space(4.0);
                 // take/put-back so the markdown cache and the body can be
                 // borrowed simultaneously without cloning the body per frame
                 let detail = self.detail.take();
@@ -412,6 +445,11 @@ impl Viewer {
         }
         if response.clicked() {
             self.selected = self.hover;
+        }
+        if response.double_clicked()
+            && let Some(h) = self.hover
+        {
+            self.open_in_editor(h);
         }
         let active = self.hover.or(self.selected);
 
