@@ -19,6 +19,15 @@ eframe = { version = "0.36", default-features = false, features = [
 ] }
 egui_commonmark = "0.25"
 ignore = "0.4"
+# decoders only for the formats the scanner accepts as Image nodes — the
+# default feature set drags in AVIF/rayon/etc.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+] }
 notify = "8"
 nucleo-matcher = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false }

@@ -19,5 +19,6 @@ pub mod resolve;
 pub mod sim;
 pub mod state;
 pub mod stats;
+pub mod thumb;
 pub mod tmux;
 pub mod vault;
