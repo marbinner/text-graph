@@ -66,7 +66,9 @@ pub fn special_cmd(pane: &str, key: Special, mods: Mods) -> String {
         PageDown => ("PageDown".into(), true),
         Delete => ("DC".into(), true),
         Insert => ("IC".into(), true),
-        F(n) => (format!("F{n}"), true),
+        // tmux's key table defines F1–F12 only; an unknown name would be
+        // sent as literal characters ("F13" would type F, 1, 3)
+        F(n) => (format!("F{}", n.clamp(1, 12)), true),
     };
     let mut prefixed = String::new();
     if mods.ctrl {
@@ -103,7 +105,16 @@ pub fn chord_cmd(pane: &str, c: char, mods: Mods) -> Option<String> {
             ']' => 0x1d,
             '^' => 0x1e,
             '_' | '/' => 0x1f,
-            '0'..='9' => c as u8, // terminals send digits unchanged under ctrl
+            // xterm-family Ctrl+digit: 2..8 map onto the control bytes
+            // NUL ESC FS GS RS US DEL; 1, 9, 0 pass through unchanged
+            '2' => 0x00,
+            '3' => 0x1b,
+            '4' => 0x1c,
+            '5' => 0x1d,
+            '6' => 0x1e,
+            '7' => 0x1f,
+            '8' | '?' => 0x7f,
+            '0' | '1' | '9' => c as u8,
             _ => return None,
         };
         bytes.push(b);
@@ -142,6 +153,7 @@ mod tests {
             "shift on enter drops to plain"
         );
         assert_eq!(special_cmd("%1", Special::F(5), none), "send-keys -t %1 F5");
+        assert_eq!(special_cmd("%1", Special::F(13), none), "send-keys -t %1 F12", "clamped");
     }
 
     #[test]
@@ -153,6 +165,10 @@ mod tests {
         assert_eq!(chord_cmd("%1", 'x', alt), Some("send-keys -t %1 -H 1b 78".into()));
         assert_eq!(chord_cmd("%1", 'b', both), Some("send-keys -t %1 -H 1b 02".into()));
         assert_eq!(chord_cmd("%1", ' ', ctrl), Some("send-keys -t %1 -H 00".into()));
+        // xterm Ctrl+digit control bytes (Ctrl+6 = RS is vim's alternate-file)
+        assert_eq!(chord_cmd("%1", '6', ctrl), Some("send-keys -t %1 -H 1e".into()));
+        assert_eq!(chord_cmd("%1", '8', ctrl), Some("send-keys -t %1 -H 7f".into()));
+        assert_eq!(chord_cmd("%1", '1', ctrl), Some("send-keys -t %1 -H 31".into()));
         assert_eq!(chord_cmd("%1", 'a', Mods::default()), None, "plain chars go via text");
     }
 }

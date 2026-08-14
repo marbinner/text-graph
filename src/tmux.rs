@@ -80,8 +80,8 @@ impl Drop for TmuxClient {
 
 #[derive(Default)]
 struct ReaderState {
-    /// Accumulating lines of an open `%begin` block.
-    reply: Option<Vec<String>>,
+    /// Open `%begin` block: (command number, accumulated lines).
+    reply: Option<(String, Vec<String>)>,
 }
 
 fn reader_loop(stdout: ChildStdout, tx: Sender<TmuxEvent>, wake: impl Fn()) {
@@ -120,8 +120,26 @@ const CHANGED: &[&str] = &[
 ];
 
 /// One protocol line → at most one event. Command output blocks are atomic
-/// (tmux does not interleave notifications inside `%begin`…`%end`).
+/// (tmux does not interleave notifications inside `%begin`…`%end`), and only
+/// the `%end`/`%error` carrying the SAME command number terminates a block —
+/// captured screen text that merely looks like protocol lines (a pane
+/// showing tmux logs, or this project's own debug output) is data, not
+/// control flow. Without the number check such text could truncate replies,
+/// fire a bogus Exit, and desync the pending FIFO permanently.
 fn parse_line(l: &str, state: &mut ReaderState) -> Option<TmuxEvent> {
+    if state.reply.is_some() {
+        let is_err = l.starts_with("%error ");
+        if (l.starts_with("%end ") || is_err)
+            && block_num(l) == state.reply.as_ref().map(|(n, _)| n.as_str())
+        {
+            let (_, lines) = state.reply.take().expect("checked is_some");
+            return Some(TmuxEvent::Reply { lines, error: is_err });
+        }
+        if let Some((_, lines)) = state.reply.as_mut() {
+            lines.push(l.to_string());
+        }
+        return None;
+    }
     if let Some(rest) = l.strip_prefix("%output ") {
         let (pane, data) = rest.split_once(' ').unwrap_or((rest, ""));
         return Some(TmuxEvent::Output {
@@ -130,17 +148,7 @@ fn parse_line(l: &str, state: &mut ReaderState) -> Option<TmuxEvent> {
         });
     }
     if l.starts_with("%begin ") {
-        state.reply = Some(Vec::new());
-        return None;
-    }
-    if l.starts_with("%end ") {
-        return state.reply.take().map(|lines| TmuxEvent::Reply { lines, error: false });
-    }
-    if l.starts_with("%error ") {
-        return state.reply.take().map(|lines| TmuxEvent::Reply { lines, error: true });
-    }
-    if let Some(lines) = state.reply.as_mut() {
-        lines.push(l.to_string());
+        state.reply = Some((block_num(l).unwrap_or_default().to_string(), Vec::new()));
         return None;
     }
     if l == "%exit" || l.starts_with("%exit ") {
@@ -150,6 +158,11 @@ fn parse_line(l: &str, state: &mut ReaderState) -> Option<TmuxEvent> {
         return Some(TmuxEvent::Changed);
     }
     None
+}
+
+/// `%begin <time> <num> <flags>` → the command-number token.
+fn block_num(l: &str) -> Option<&str> {
+    l.split_whitespace().nth(2)
 }
 
 /// tmux escapes control bytes and backslash in `%output` data as `\ooo`.
@@ -213,6 +226,28 @@ mod tests {
                 TmuxEvent::Changed,
                 TmuxEvent::Exit,
             ]
+        );
+    }
+
+    #[test]
+    fn protocol_shaped_text_inside_a_block_is_data() {
+        // a captured screen can contain lines that LOOK like protocol —
+        // only the %end with the matching command number terminates
+        let lines = [
+            "%begin 9 5 1",
+            "%output %1 fake",
+            "%exit",
+            "%end 9 4 1", // wrong number — still data
+            "%end 9 5 1", // the real terminator
+        ];
+        let mut st = ReaderState::default();
+        let evs: Vec<_> = lines.iter().filter_map(|l| parse_line(l, &mut st)).collect();
+        assert_eq!(
+            evs,
+            vec![TmuxEvent::Reply {
+                lines: vec!["%output %1 fake".into(), "%exit".into(), "%end 9 4 1".into()],
+                error: false,
+            }]
         );
     }
 }
