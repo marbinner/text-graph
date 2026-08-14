@@ -63,6 +63,28 @@ pub fn default_allowlist() -> Vec<String> {
 /// session dies with the agent process, which removes the card.
 /// `socket` is for tests (private `-L` server); the GUI passes `None`.
 pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<String> {
+    // keep the slug '_'-free: the Tracker reads the tag as split('_').nth(1)
+    let slug: String = agent
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect();
+    let slug = if slug.is_empty() { "agent".to_string() } else { slug };
+    launch_named(socket, dir, &slug, Some(agent))
+}
+
+/// Launch a plain interactive terminal (tmux's default-shell) in a
+/// `tg_term` session at `dir` — a shell card in the graph, no agent.
+pub fn launch_shell(socket: Option<&str>, dir: &Path) -> std::io::Result<String> {
+    launch_named(socket, dir, "term", None)
+}
+
+fn launch_named(
+    socket: Option<&str>,
+    dir: &Path,
+    slug: &str,
+    cmd: Option<&str>,
+) -> std::io::Result<String> {
     let tmux = |args: &[&str]| {
         let mut c = Command::new("tmux");
         if let Some(l) = socket {
@@ -71,13 +93,6 @@ pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<
         c.args(args);
         c
     };
-    // keep the slug '_'-free: the Tracker reads the tag as split('_').nth(1)
-    let slug: String = agent
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .flat_map(char::to_lowercase)
-        .collect();
-    let slug = if slug.is_empty() { "agent".to_string() } else { slug };
     for n in 1..=99u32 {
         let name = if n == 1 { format!("tg_{slug}") } else { format!("tg_{slug}_{n}") };
         // '=' prefix = exact session-name match, not prefix match
@@ -88,10 +103,12 @@ pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<
         if taken {
             continue;
         }
-        let status = tmux(&["new-session", "-d", "-s", &name, "-x", "90", "-y", "26", "-c"])
-            .arg(dir)
-            .arg(agent)
-            .status()?;
+        let mut c = tmux(&["new-session", "-d", "-s", &name, "-x", "90", "-y", "26", "-c"]);
+        c.arg(dir);
+        if let Some(cmd) = cmd {
+            c.arg(cmd);
+        }
+        let status = c.status()?;
         return if status.success() {
             Ok(name)
         } else {

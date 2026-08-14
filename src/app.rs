@@ -976,6 +976,13 @@ impl Viewer {
         }
         if self.tmux_ok {
             ui.separator();
+            if ui.button("New terminal").clicked() {
+                let path = self.ctx_path(&dir);
+                match agents::launch_shell(None, &path) {
+                    Ok(name) => self.set_flash(format!("opened terminal — session {name}")),
+                    Err(e) => self.set_flash(format!("terminal failed: {e}")),
+                }
+            }
             ui.menu_button("Launch agent", |ui| {
                 for agent in agents::default_allowlist() {
                     if ui.button(&agent).clicked() {
@@ -986,6 +993,11 @@ impl Viewer {
         }
     }
 
+    /// Absolute path for a vault-relative dir ("" = root).
+    fn ctx_path(&self, dir: &str) -> PathBuf {
+        if dir.is_empty() { self.root.clone() } else { self.root.join(dir) }
+    }
+
     fn open_create(&mut self, folder: bool, dir: String, label: String) {
         self.focused_term = None; // the dialog owns the keyboard now
         self.close_search();
@@ -994,7 +1006,7 @@ impl Viewer {
     }
 
     fn launch_agent(&mut self, dir: &str, agent: &str) {
-        let path = if dir.is_empty() { self.root.clone() } else { self.root.join(dir) };
+        let path = self.ctx_path(dir);
         match agents::launch(None, &path, agent) {
             Ok(name) => self.set_flash(format!("launched {agent} — session {name}")),
             Err(e) => self.set_flash(format!("launch failed: {e}")),

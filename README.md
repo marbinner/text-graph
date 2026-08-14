@@ -57,7 +57,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | hover | highlight the node's neighborhood, dim everything else |
 | click | select (opens the detail pane with rendered markdown) |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
-| right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
+| right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **New terminal** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, and paths; matches stay lit, `Enter` jumps to the ringed best hit, `Esc` closes |
 | `f` | frame the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
@@ -90,6 +90,8 @@ you clicked:
   folder; its live card fades in within a couple of seconds. The session is
   plain tmux and outlives the viewer — `tmux attach -t tg_claude` works from
   any terminal.
+- **New terminal** — the same thing with a plain shell (`tg_term`): a
+  terminal card at that folder you can type into right in the graph.
 
 ## Agent terminals in the graph
 

@@ -103,14 +103,16 @@ fn launch_creates_uniquely_named_tg_sessions() {
     assert_eq!(first, "tg_sh");
     let second = agents::launch(Some(&socket), &dir, "sh").expect("second launch");
     assert_eq!(second, "tg_sh_2", "name probing must skip the live session");
+    let shell = agents::launch_shell(Some(&socket), &dir).expect("shell launch");
+    assert_eq!(shell, "tg_term");
 
-    // both sessions exist, cwd'd where we asked
+    // all sessions exist, cwd'd where we asked
     let out = Command::new("tmux")
         .args(["-L", &socket, "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}"])
         .output()
         .expect("list-panes");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    for name in [&first, &second] {
+    for name in [&first, &second, &shell] {
         let line = text
             .lines()
             .find(|l| l.starts_with(&format!("{name}\t")))
