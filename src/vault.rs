@@ -65,7 +65,8 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     // Collect .md paths. Hidden files/dirs are skipped (.obsidian, .trash,
     // .git); git-ignore semantics are deliberately disabled — a notes viewer
     // should show what's on disk, not what git tracks.
-    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut paths: Vec<(String, PathBuf)> = Vec::new();
+    let mut errors = Vec::new();
     let walker = ignore::WalkBuilder::new(&root)
         .hidden(true)
         .ignore(false)
@@ -76,7 +77,15 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         .follow_links(false)
         .build();
     for entry in walker {
-        let Ok(entry) = entry else { continue };
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                // an unreadable subdirectory must not silently vanish from
+                // the graph while stats report "errors: 0"
+                errors.push(ScanError { rel_path: "(walk)".into(), message: e.to_string() });
+                continue;
+            }
+        };
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -86,19 +95,19 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("md"));
         if is_md && !in_skipped_dir(&root, &path) {
-            paths.push(path);
+            paths.push((rel_str(&root, &path), path));
         }
     }
 
-    // The walker's yield order is not guaranteed; sorting here is what makes
-    // runs deterministic.
+    // Sort by the relative-path STRING: this is both what makes runs
+    // deterministic and the byte order that "first in sorted path order"
+    // means everywhere else (docs, ambiguity resolution). PathBuf's
+    // component-wise order differs around '/' vs '.'/'-' in dirnames.
     paths.sort();
 
     let mut files = Vec::with_capacity(paths.len());
-    let mut errors = Vec::new();
-    for path in &paths {
-        let rel = rel_str(&root, path);
-        match std::fs::read(path) {
+    for (rel, path) in paths {
+        match std::fs::read(&path) {
             Ok(bytes) => files.push(parse_file(rel, &bytes)),
             Err(e) => errors.push(ScanError { rel_path: rel, message: e.to_string() }),
         }

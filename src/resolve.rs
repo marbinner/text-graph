@@ -3,8 +3,8 @@
 //! Rules: casefolded matching; a bare name matches files by stem first, then
 //! by frontmatter `aliases:`; a target containing `/` matches by
 //! path-component suffix (so any unambiguous suffix of a path works).
-//! Ambiguity resolves to the first candidate in sorted path order
-//! (component-wise) and is flagged. Unresolved targets become Ghost nodes.
+//! Ambiguity resolves to the first candidate in sorted path order and is
+//! flagged. Unresolved targets become Ghost nodes.
 //! Self-links resolve and are then dropped. Duplicate (from, to) edges are
 //! deduplicated.
 
@@ -23,8 +23,8 @@ const ASSET_EXTS: &[&str] = &[
 
 pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
     // Index all File nodes. Files are indexed in NodeId order, which is
-    // sorted-path order (component-wise PathBuf ordering), so the first
-    // candidate in any bucket is the deterministic ambiguity winner.
+    // sorted relative-path (string) order, so the first candidate in any
+    // bucket is the deterministic ambiguity winner.
     let mut by_stem: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut by_alias: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut comp_paths: Vec<(NodeId, Vec<String>)> = Vec::new();
@@ -51,7 +51,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
     for (src, links) in file_links {
         for link in links {
             let target = normalize(&link.target);
-            if target.is_empty() || is_asset(&target) {
+            if target.is_empty() {
                 continue;
             }
 
@@ -74,7 +74,14 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
             };
 
             let to = match candidates.len() {
-                0 => *ghosts.entry(casefold(&target)).or_insert_with(|| {
+                0 => {
+                    // The asset skip applies only to UNRESOLVED targets — a
+                    // real note named pic.png.md (or an Obsidian-Excalidraw
+                    // Drawing.excalidraw.md) stays linkable by its stem.
+                    if is_asset(&target) {
+                        continue;
+                    }
+                    *ghosts.entry(casefold(&target)).or_insert_with(|| {
                     g.push_node(Node {
                         kind: NodeKind::Ghost,
                         path: target.clone(),
@@ -84,7 +91,8 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                         parent: None,
                         children: Vec::new(),
                     })
-                }),
+                    })
+                }
                 1 => candidates[0],
                 _ => {
                     let chosen = candidates[0];
@@ -110,7 +118,10 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
 }
 
 fn casefold(s: &str) -> String {
-    s.to_lowercase()
+    // NFC first: macOS-created vaults store filenames in NFD while link text
+    // is typically NFC — without normalization such notes are unlinkable.
+    use unicode_normalization::UnicodeNormalization as _;
+    s.nfc().collect::<String>().to_lowercase()
 }
 
 fn strip_md(path: &str) -> &str {
@@ -169,6 +180,50 @@ mod tests {
         assert!(!is_asset("v1.2"));
         assert!(!is_asset("2026-08-14"));
         assert!(!is_asset("plain"));
+    }
+
+    #[test]
+    fn casefold_bridges_nfc_and_nfd() {
+        assert_eq!(casefold("grafe\u{301}r"), casefold("graf\u{e9}r"));
+    }
+
+    #[test]
+    fn asset_skip_applies_only_to_unresolved_targets() {
+        use crate::graph::{Graph, Node, NodeId, NodeKind};
+        use crate::vault::RawLink;
+        let node = |kind, path: &str, name: &str, parent| Node {
+            kind,
+            path: path.into(),
+            name: name.into(),
+            title: None,
+            aliases: Vec::new(),
+            parent,
+            children: Vec::new(),
+        };
+        let mut g = Graph {
+            nodes: vec![
+                node(NodeKind::Dir, "", "r", None),
+                node(NodeKind::File, "pic.png.md", "pic.png", Some(NodeId(0))),
+                node(NodeKind::File, "b.md", "b", Some(NodeId(0))),
+            ],
+            links: Vec::new(),
+            root: NodeId(0),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            ambiguities: Vec::new(),
+            self_links_dropped: 0,
+        };
+        let links = vec![(
+            NodeId(2),
+            vec![
+                RawLink { target: "pic.png".into(), offset: 0 },
+                RawLink { target: "missing.png".into(), offset: 1 },
+            ],
+        )];
+        resolve(&mut g, &links);
+        assert_eq!(g.links.len(), 1, "a note with an asset-like stem is linkable");
+        assert_eq!(g.links[0].to, NodeId(1));
+        assert_eq!(g.nodes.len(), 3, "an unresolved asset target must not ghost");
     }
 
     #[test]

@@ -12,4 +12,5 @@ notify = "8"
 nucleo-matcher = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false }
 serde_yaml_ng = "0.10"
+unicode-normalization = "0.1.25"
 vt100 = "0.16.2"
