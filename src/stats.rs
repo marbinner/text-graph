@@ -116,9 +116,11 @@ pub fn render(g: &Graph, s: &Stats) -> String {
         .filter(|(c, _)| *c > 0)
         .collect();
     dir_counts.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-    let _ = writeln!(w, "largest dirs (direct md files):");
-    for (count, path) in dir_counts.iter().take(6) {
-        let _ = writeln!(w, "  {count:3}  {path}");
+    if !dir_counts.is_empty() {
+        let _ = writeln!(w, "largest dirs (direct md files):");
+        for (count, path) in dir_counts.iter().take(6) {
+            let _ = writeln!(w, "  {count:3}  {path}");
+        }
     }
 
     if !g.ambiguities.is_empty() {

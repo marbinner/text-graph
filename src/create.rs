@@ -22,6 +22,14 @@ pub fn note_rel_path(dir: &str, input: &str) -> Result<String> {
     Ok(if has_md { rel } else { format!("{rel}.md") })
 }
 
+/// Materialize a ghost: the file whose STEM must equal the ghost's target.
+/// `.md` is appended unconditionally — a ghost from `[[x.md.md]]` has
+/// target `x.md` (resolution strips one suffix), so the note that resolves
+/// it is `x.md.md`, not `x.md`.
+pub fn ghost_rel_path(target: &str) -> Result<String> {
+    Ok(format!("{}.md", clean_rel("", target)?))
+}
+
 /// Same, for a folder (no extension handling).
 pub fn folder_rel_path(dir: &str, input: &str) -> Result<String> {
     clean_rel(dir, input)
@@ -35,7 +43,16 @@ fn clean_rel(dir: &str, input: &str) -> Result<String> {
     if input.contains('\\') {
         bail!("backslashes are not allowed");
     }
+    if input.contains(':') {
+        // on Windows, root.join("C:x") REPLACES the base path entirely —
+        // a vault escape. ':' in names breaks tmux targets anyway.
+        bail!("':' is not allowed in names");
+    }
+    let mut parts = Vec::new();
     for part in input.split('/') {
+        // the trimmed form is what gets created — checking one string and
+        // writing another would let "a /b" produce a dir literally named
+        // "a " whose notes ([[b]] vs " b") never resolve
         let part = part.trim();
         if part.is_empty() {
             bail!("empty path component");
@@ -46,22 +63,29 @@ fn clean_rel(dir: &str, input: &str) -> Result<String> {
         if part.starts_with('.') {
             bail!("hidden names (leading '.') would be invisible to the graph");
         }
+        parts.push(part);
     }
-    Ok(if dir.is_empty() { input.to_string() } else { format!("{dir}/{input}") })
+    let rel = parts.join("/");
+    Ok(if dir.is_empty() { rel } else { format!("{dir}/{rel}") })
 }
 
 /// Create an empty note at `rel` (creating parent folders), refusing to
 /// overwrite anything. Returns the absolute path.
 pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
     let abs = root.join(rel);
-    if abs.exists() {
-        bail!("{rel} already exists");
-    }
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&abs, "")?;
-    Ok(abs)
+    // O_CREAT|O_EXCL, not exists()-then-write: a racing writer (an agent
+    // saving x.md at the same moment) must not be truncated, and a dangling
+    // symlink must not be followed to create a file outside the vault.
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&abs) {
+        Ok(_) => Ok(abs),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!("{rel} already exists")
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Create a folder at `rel` (and parents). Idempotent.
@@ -99,9 +123,60 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_dots_hidden_and_backslash() {
-        for bad in ["", "  ", "..", "a/../b", ".", "a//b", ".hidden", "a/.b", "a\\b"] {
+    fn rejects_empty_dots_hidden_backslash_and_colon() {
+        for bad in
+            ["", "  ", "..", "a/../b", ".", "a//b", ".hidden", "a/.b", "a\\b", "C:x", "C:/x"]
+        {
             assert!(note_rel_path("", bad).is_err(), "should reject {bad:?}");
         }
+    }
+
+    #[test]
+    fn components_are_trimmed_in_the_result_too() {
+        // the checked form and the created form must be the same string
+        assert_eq!(note_rel_path("", "a / b").unwrap(), "a/b.md");
+        assert_eq!(folder_rel_path("d", " x / y ").unwrap(), "d/x/y");
+    }
+
+    #[test]
+    fn ghost_rel_path_appends_md_unconditionally() {
+        // a ghost from [[x.md.md]] has target "x.md"; the file that
+        // resolves it is x.md.md (stem "x.md") — NOT x.md (stem "x")
+        assert_eq!(ghost_rel_path("x.md").unwrap(), "x.md.md");
+        assert_eq!(ghost_rel_path("missing-note").unwrap(), "missing-note.md");
+        assert_eq!(ghost_rel_path("deep/ghost").unwrap(), "deep/ghost.md");
+    }
+
+    fn scratch() -> PathBuf {
+        let d = std::env::temp_dir()
+            .join(format!("tg-create-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn write_note_refuses_to_overwrite() {
+        let root = scratch();
+        write_note(&root, "a/n.md").unwrap();
+        std::fs::write(root.join("a/n.md"), "agent wrote this").unwrap();
+        assert!(write_note(&root, "a/n.md").is_err(), "must not clobber");
+        assert_eq!(
+            std::fs::read_to_string(root.join("a/n.md")).unwrap(),
+            "agent wrote this",
+            "existing content must survive the refused create"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_note_does_not_follow_dangling_symlinks() {
+        let root = scratch();
+        let outside = root.join("outside-target");
+        std::os::unix::fs::symlink(&outside, root.join("link.md")).unwrap();
+        assert!(write_note(&root, "link.md").is_err(), "dangling symlink must not be followed");
+        assert!(!outside.exists(), "nothing may be created at the symlink target");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

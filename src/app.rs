@@ -1288,7 +1288,7 @@ impl Viewer {
         {
             let target = self.g.node(id).path.clone();
             if ui.button(format!("Write \"{target}\"")).clicked() {
-                let res = create::note_rel_path("", &target)
+                let res = create::ghost_rel_path(&target)
                     .and_then(|rel| create::write_note(&self.root, &rel).map(|_| rel));
                 match res {
                     Ok(rel) => {
