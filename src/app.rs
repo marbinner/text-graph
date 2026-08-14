@@ -60,7 +60,6 @@ struct CachedPane {
     cols: u16,
     rows: Vec<Vec<Run>>, // trailing blank rows trimmed
     cursor: Option<(u16, u16)>,
-    last_line: String,
 }
 
 fn brighten(c: Color32) -> Color32 {
@@ -90,7 +89,6 @@ fn build_cached(grid: &TermGrid) -> CachedPane {
     let shown = shown.clamp(2, grid.rows.max(2) as usize);
 
     let mut rows = Vec::with_capacity(shown);
-    let mut last_line = String::new();
     for r in 0..shown {
         let mut runs: Vec<Run> = Vec::new();
         for (ci, cell) in grid.cells[r * cols..(r + 1) * cols].iter().enumerate() {
@@ -124,13 +122,9 @@ fn build_cached(grid: &TermGrid) -> CachedPane {
                 }),
             }
         }
-        let t: String = runs.iter().map(|r| r.text.as_str()).collect();
-        if !t.trim().is_empty() {
-            last_line = t.trim_end().to_string();
-        }
         rows.push(runs);
     }
-    CachedPane { cols: grid.cols, rows, cursor: grid.cursor, last_line }
+    CachedPane { cols: grid.cols, rows, cursor: grid.cursor }
 }
 
 fn hash_angle(session: &str, pane: &str, index: usize) -> f32 {
@@ -534,24 +528,41 @@ impl Viewer {
             let key = (a.session.clone(), a.pane.clone());
             let Some(c) = self.term_cache.get(&key) else { continue };
             let anchor = self.anchor_for(&a.cwd);
-            let anchor_s = self.to_screen(rect, self.world_pos(anchor.0 as usize));
-            let off = Vec2::angled(hash_angle(&a.session, &a.pane, i)) * 170.0 * self.zoom.max(0.35);
+            let anchor_w = self.world_pos(anchor.0 as usize);
+            let anchor_s = self.to_screen(rect, anchor_w);
             let size = if compact {
-                Vec2::new(220.0, 42.0)
+                Vec2::new(230.0, 40.0)
             } else {
                 Vec2::new(
                     c.cols as f32 * adv + pad * 2.0,
                     c.rows.len() as f32 * line_h + title_h + pad * 2.0,
                 )
             };
-            let card = Rect::from_min_size(anchor_s + off, size);
+            // Place the card outward from the graph center relative to its
+            // anchor (jittered so several cards fan out), past the node's
+            // radius in screen space — the tether points inward and the card
+            // never sits on top of the cluster it's attached to.
+            let jitter = (hash_angle(&a.session, &a.pane, i) - std::f32::consts::PI) * 0.25;
+            let base = if anchor_w.to_vec2().length() > 1.0 {
+                anchor_w.to_vec2().angle()
+            } else {
+                hash_angle(&a.session, &a.pane, i)
+            };
+            let dir = Vec2::angled(base + jitter);
+            let anchor_r = (self.radius[anchor.0 as usize] * self.zoom).clamp(1.5, 16.0);
+            let p = anchor_s + dir * (anchor_r + 22.0);
+            let min = Pos2::new(
+                if dir.x >= 0.0 { p.x } else { p.x - size.x },
+                if dir.y >= 0.0 { p.y } else { p.y - size.y },
+            );
+            let card = Rect::from_min_size(min, size);
             if !view.intersects(card) {
                 continue;
             }
             self.term_rects.push((a.session.clone(), a.pane.clone(), card));
 
             painter.extend(egui::Shape::dashed_line(
-                &[anchor_s, card.left_center()],
+                &[anchor_s, p],
                 Stroke::new(1.0, EDGE),
                 6.0,
                 4.0,
@@ -574,6 +585,8 @@ impl Viewer {
             };
             painter.rect_filled(card, 4.0, TERM_BG);
             painter.rect_stroke(card, 4.0, Stroke::new(bw, border), egui::StrokeKind::Inside);
+            // everything inside the card is clipped to it — no overflow, ever
+            let cp = painter.with_clip_rect(card);
             let title = format!(
                 "{} · {} {}{}",
                 a.agent,
@@ -581,7 +594,7 @@ impl Viewer {
                 a.pane,
                 if focused { "  · typing — Ctrl+Shift+Q releases" } else { "" }
             );
-            painter.text(
+            cp.text(
                 card.left_top() + Vec2::new(pad, 2.0),
                 Align2::LEFT_TOP,
                 title,
@@ -596,11 +609,25 @@ impl Viewer {
             );
 
             if compact {
-                painter.text(
-                    card.left_top() + Vec2::new(pad, 22.0),
+                // metadata beats a TUI's bottom status bar for glanceability
+                let state = match self.term_activity.get(&a.session) {
+                    Some(t) if t.elapsed() < Duration::from_secs(3) => "active".to_string(),
+                    Some(t) => {
+                        let s = t.elapsed().as_secs();
+                        if s < 60 {
+                            format!("idle {s}s")
+                        } else {
+                            format!("idle {}m", s / 60)
+                        }
+                    }
+                    None => "quiet".to_string(),
+                };
+                let meta = format!("in {}/ · {}", self.g.node(anchor).display_name(), state);
+                cp.text(
+                    card.left_top() + Vec2::new(pad, 21.0),
                     Align2::LEFT_TOP,
-                    &c.last_line,
-                    FontId::monospace(10.0),
+                    meta,
+                    FontId::proportional(10.5),
                     Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
                 );
                 continue;
@@ -614,7 +641,7 @@ impl Viewer {
                     if let Some(bg) = run.bg {
                         let x0 = origin.x + run.start_col as f32 * adv;
                         let w = run.text.chars().count() as f32 * adv;
-                        painter.rect_filled(
+                        cp.rect_filled(
                             Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, line_h)),
                             0.0,
                             bg,
@@ -627,14 +654,14 @@ impl Viewer {
                     }
                     job.append(&run.text, 0.0, fmt);
                 }
-                let galley = painter.layout_job(job);
-                painter.galley(Pos2::new(origin.x, y), galley, Color32::WHITE);
+                let galley = cp.layout_job(job);
+                cp.galley(Pos2::new(origin.x, y), galley, Color32::WHITE);
             }
             if let Some((cr, cc)) = c.cursor
                 && (cr as usize) < c.rows.len()
             {
                 let p0 = Pos2::new(origin.x + cc as f32 * adv, origin.y + cr as f32 * line_h);
-                painter.rect_filled(
+                cp.rect_filled(
                     Rect::from_min_size(p0, Vec2::new(adv.max(2.0), line_h)),
                     0.0,
                     HOVER.gamma_multiply(0.55),
