@@ -37,6 +37,27 @@ const TEXT: Color32 = Color32::from_rgb(0x9a, 0xa0, 0xac);
 /// Dim factor applied to everything outside the active node's neighborhood.
 const DIM: f32 = 0.18;
 
+/// Focused terminal cards expand to this font size regardless of zoom.
+const FOCUS_FONT: f32 = 13.0;
+
+/// Bottom-right corner zone that resizes a card instead of moving it.
+fn resize_handle(card: Rect) -> Rect {
+    Rect::from_min_max(card.max - Vec2::splat(16.0), card.max)
+}
+
+/// Two diagonal grip lines marking the resize corner.
+fn paint_resize_grip(p: &egui::Painter, card: Rect, color: Color32) {
+    let m = card.max;
+    p.line_segment(
+        [Pos2::new(m.x - 11.0, m.y - 3.0), Pos2::new(m.x - 3.0, m.y - 11.0)],
+        Stroke::new(1.5, color),
+    );
+    p.line_segment(
+        [Pos2::new(m.x - 6.0, m.y - 3.0), Pos2::new(m.x - 3.0, m.y - 6.0)],
+        Stroke::new(1.5, color),
+    );
+}
+
 // ---- terminal cards ----
 const AGENT: Color32 = Color32::from_rgb(0x4e, 0xc9, 0x8b);
 const TERM_BG: Color32 = Color32::from_rgb(0x10, 0x13, 0x19);
@@ -285,8 +306,12 @@ struct Viewer {
     /// User-arranged card positions: world-space offset of the card's min
     /// corner from its anchor node. Absent = automatic outward placement.
     term_offsets: HashMap<(String, String), Vec2>,
+    /// User-resized card font sizes. Absent = focused/zoom-derived default.
+    term_scale: HashMap<(String, String), f32>,
     /// Card currently being dragged.
     drag_card: Option<(String, String)>,
+    /// Card currently being resized via its corner handle.
+    resize_card: Option<(String, String)>,
 }
 
 impl Viewer {
@@ -372,7 +397,9 @@ impl Viewer {
             focused_term: None,
             term_rects: Vec::new(),
             term_offsets: HashMap::new(),
+            term_scale: HashMap::new(),
             drag_card: None,
+            resize_card: None,
         }
     }
 
@@ -485,6 +512,7 @@ impl Viewer {
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));
         self.term_offsets.retain(|(s, _), _| sessions.contains(s));
+        self.term_scale.retain(|(s, _), _| sessions.contains(s));
         let focus_dead = self
             .focused_term
             .as_ref()
@@ -540,18 +568,25 @@ impl Viewer {
         if self.agent_panes.is_empty() {
             return;
         }
-        let f = (6.0 * self.zoom).clamp(2.5, 16.0);
-        let compact = f < 5.0;
-        let font = FontId::monospace(f);
-        // measured monospace advance keeps columns honest at any zoom
-        let probe = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
-        let (adv, line_h) = (probe.size().x, probe.size().y);
         let title_h = 16.0;
         let pad = 6.0;
 
         for (i, a) in self.agent_panes.iter().enumerate() {
             let key = (a.session.clone(), a.pane.clone());
             let Some(c) = self.term_cache.get(&key) else { continue };
+            let focused = self.focused_term.as_ref() == Some(&key);
+            // Font: user-resized wins, else a focused card expands to a
+            // readable fixed size regardless of zoom, else zoom-derived LOD.
+            let f = self.term_scale.get(&key).copied().unwrap_or(if focused {
+                FOCUS_FONT
+            } else {
+                (6.0 * self.zoom).clamp(2.5, 16.0)
+            });
+            let compact = !focused && !self.term_scale.contains_key(&key) && f < 5.0;
+            let font = FontId::monospace(f);
+            // measured monospace advance keeps columns honest at any size
+            let probe = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
+            let (adv, line_h) = (probe.size().x, probe.size().y);
             let anchor = self.anchor_for(&a.cwd);
             let anchor_w = self.world_pos(anchor.0 as usize);
             let anchor_s = self.to_screen(rect, anchor_w);
@@ -600,10 +635,6 @@ impl Viewer {
                 4.0,
             ));
 
-            let focused = self
-                .focused_term
-                .as_ref()
-                .is_some_and(|(fs, fp)| fs == &a.session && fp == &a.pane);
             let hot = self
                 .term_activity
                 .get(&a.session)
@@ -619,13 +650,7 @@ impl Viewer {
             painter.rect_stroke(card, 4.0, Stroke::new(bw, border), egui::StrokeKind::Inside);
             // everything inside the card is clipped to it — no overflow, ever
             let cp = painter.with_clip_rect(card);
-            let title = format!(
-                "{} · {} {}{}",
-                a.agent,
-                a.session,
-                a.pane,
-                if focused { "  · typing — Ctrl+Shift+Q releases" } else { "" }
-            );
+            let title = format!("{} · {} {}", a.agent, a.session, a.pane);
             cp.text(
                 card.left_top() + Vec2::new(pad, 2.0),
                 Align2::LEFT_TOP,
@@ -662,6 +687,7 @@ impl Viewer {
                     FontId::proportional(10.5),
                     Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
                 );
+                paint_resize_grip(&cp, card, border);
                 continue;
             }
 
@@ -699,6 +725,7 @@ impl Viewer {
                     HOVER.gamma_multiply(0.55),
                 );
             }
+            paint_resize_grip(&cp, card, border);
         }
     }
 
@@ -1058,31 +1085,58 @@ impl Viewer {
         });
         if response.drag_started() {
             if let Some(t) = over_card.clone() {
-                // seed the override from where the card currently is, so the
-                // first dragged frame doesn't jump
-                let cur_min = self
-                    .term_rects
-                    .iter()
-                    .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
-                    .map(|(_, _, r)| r.min);
-                let anchor_s = self
-                    .agent_panes
-                    .iter()
-                    .find(|a| a.session == t.0 && a.pane == t.1)
-                    .map(|a| {
-                        let id = self.anchor_for(&a.cwd);
-                        self.to_screen(rect, self.world_pos(id.0 as usize))
+                // corner handle resizes; anywhere else moves
+                let on_handle = response
+                    .hover_pos()
+                    .zip(
+                        self.term_rects
+                            .iter()
+                            .rev()
+                            .find(|(s, p, _)| (s, p) == (&t.0, &t.1)),
+                    )
+                    .is_some_and(|(pos, (_, _, r))| resize_handle(*r).contains(pos));
+                if on_handle {
+                    let focused = self.focused_term.as_ref() == Some(&t);
+                    let seed = self.term_scale.get(&t).copied().unwrap_or(if focused {
+                        FOCUS_FONT
+                    } else {
+                        (6.0 * self.zoom).clamp(2.5, 16.0)
                     });
-                if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
-                    self.term_offsets.insert(t.clone(), (min - anchor_s) / self.zoom);
+                    self.term_scale.insert(t.clone(), seed);
+                    self.resize_card = Some(t);
+                } else {
+                    // seed the override from where the card currently is, so
+                    // the first dragged frame doesn't jump
+                    let cur_min = self
+                        .term_rects
+                        .iter()
+                        .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
+                        .map(|(_, _, r)| r.min);
+                    let anchor_s = self
+                        .agent_panes
+                        .iter()
+                        .find(|a| a.session == t.0 && a.pane == t.1)
+                        .map(|a| {
+                            let id = self.anchor_for(&a.cwd);
+                            self.to_screen(rect, self.world_pos(id.0 as usize))
+                        });
+                    if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
+                        self.term_offsets.insert(t.clone(), (min - anchor_s) / self.zoom);
+                    }
+                    self.drag_card = Some(t);
                 }
-                self.drag_card = Some(t);
             } else {
                 self.drag_node = self.hover;
             }
         }
         if response.dragged() {
-            if let Some(t) = self.drag_card.clone() {
+            if let Some(t) = self.resize_card.clone() {
+                let d = response.drag_delta();
+                if let Some(fsz) = self.term_scale.get_mut(&t) {
+                    *fsz = (*fsz + (d.x + d.y) * 0.02).clamp(6.0, 26.0);
+                }
+                ui.ctx().request_repaint();
+            } else if let Some(t) = self.drag_card.clone() {
                 if let Some(off) = self.term_offsets.get_mut(&t) {
                     *off += response.drag_delta() / self.zoom;
                 }
@@ -1100,6 +1154,7 @@ impl Viewer {
             self.sim.unpin();
             self.drag_node = None;
             self.drag_card = None;
+            self.resize_card = None;
         }
         let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
         let factor = pinch * (scroll * 0.0025).exp();
@@ -1298,7 +1353,7 @@ impl Viewer {
 
         // status line
         let status = if let Some((s, p)) = &self.focused_term {
-            format!("typing into {s} {p} — Ctrl+Shift+Q or click away releases")
+            format!("typing into {s} {p} — click empty space to release")
         } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
             format!(

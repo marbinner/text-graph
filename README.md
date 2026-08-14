@@ -60,9 +60,10 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `f` | frame the selection |
 | `Home` | fit the whole graph |
 | `Esc` | close search, else deselect |
-| click a terminal card | focus it — the keyboard now types into that agent |
+| click a terminal card | focus it — the card expands to a readable size at any zoom and the keyboard types into that agent |
 | drag a terminal card | arrange it (it stays put, following its anchor node) |
-| `Ctrl+Shift+Q` / click empty space | release terminal focus |
+| drag a card's corner grip | resize that card's text — the override sticks until the pane closes |
+| click empty space | release terminal focus |
 
 Edit any file in the vault and the graph updates ~300ms after you save — new
 links, files, and ghosts appear in place, and existing nodes keep their
@@ -83,13 +84,14 @@ of the folder the agent runs in. Zoomed out it's a summary (`claude · work %0`,
 `in notes/ · active|idle 3m`); zoom in and it becomes the full styled screen —
 colors, cursor, everything, mirrored in real time.
 
-**Click the card and type.** Every key goes to the agent — Enter, Esc,
+**Click the card and type.** The card expands to a readable size no matter
+how far you're zoomed out, and every key goes to the agent — Enter, Esc,
 arrows, Shift+Tab, Ctrl chords including Ctrl+C to interrupt — while graph
-keybinds suspend; `Ctrl+Shift+Q` or clicking empty space gives you the graph
-back. A card stays up for the pane's whole lifetime, including while the
-agent runs long tool calls. Drag cards to arrange your
-workspace. Watch the card glow while an agent streams, and the graph ripple
-as it writes notes.
+keybinds suspend; clicking empty space gives you the graph back. A card
+stays up for the pane's whole lifetime, including while the agent runs long
+tool calls. Drag cards to arrange your workspace, and drag the grip in a
+card's bottom-right corner to resize its text. Watch the card glow while an
+agent streams, and the graph ripple as it writes notes.
 
 How it works, and why it's safe:
 
