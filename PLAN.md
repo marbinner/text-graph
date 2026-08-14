@@ -1,6 +1,6 @@
 # text-graph — Plan
 
-*Last updated 2026-08-14 (v0.2.0, 93 tests). Where to pick up: milestone F
+*Last updated 2026-08-14 (v0.2.0, 108 tests). Where to pick up: milestone F
 (agents talk) is fully spec'd below — design converged, NO code yet; start at
 slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
 step 0, the audit backlog under D.*
@@ -57,8 +57,12 @@ become `Ghost` nodes — in the model from A, rendered from C.
 
 ### v1 scope cuts (decisions, not accidents)
 
-- Only `.md` files and directories become nodes; other files are skipped.
-- `![[embeds]]` and links to non-`.md` targets are skipped.
+- Only `.md` files, raster images (as `Image` nodes with thumbnails — a v0.2
+  addition that reversed the original "only .md" cut), and directories become
+  nodes; other files are skipped.
+- `![[embeds]]` are skipped. A plain `[[pic.png]]` link resolves to the Image
+  node when the image exists; links to *missing* assets are skipped, not
+  ghosted.
 - A flat vault (everything in one folder) degrades to a single ring around the root —
   acceptable, not a bug; hover cross-links still make it useful.
 
@@ -225,9 +229,17 @@ query-layer core (out/backlink indexes, by_path, preserved offsets),
 background reload worker, ⚠ health badge, per-vault persistence, native card
 resize, bracketed paste, Alt chords, node type glyphs, focus-vs-cursor card
 states with any-zoom expansion, compact-card live status lines, CI +
-rustfmt, and the app/ module decomposition. Next candidates: the
-agent-needs-attention signal (bell/idle → amber card + t-priority), jump
-history (Ctrl+O / Ctrl+I), then Phase 2 step 0 (query JSON + read-only MCP).
+rustfmt, and the app/ module decomposition.
+
+Second polish wave (2026-08-14): images as first-class nodes (scan →
+resolve → stats → live reload; canvas thumbnails via a background decode
+worker, lib thumb.rs); zoom-in text preview cards on File nodes; full-body
+hover preview popup on dwell (markdown-rendered, images large); cursor
+flashlight labels; Ctrl+click card pinning (several expanded at once,
+persisted); one-gesture terminal release that keeps the selection; and the
+anti-flicker rules — file-backed caches evict by (mtime, len) stamp, boxes
+cull by extent, dims fade. Next: milestone F below; then jump history
+(Ctrl+O / Ctrl+I) and Phase 2 step 0 (query JSON + read-only MCP).
 
 1. **E1 — control-mode client + screen mirror** (lib, egui-free). Protocol parsing
    (`%begin/%end/%error` reply blocks FIFO-correlated, `%output` octal-unescaped,

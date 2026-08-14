@@ -26,25 +26,36 @@ graph live-reloads when you save.
 | Element | Source |
 |---|---|
 | **File node** | every `.md` file (`.obsidian/`, `.trash/`, hidden dirs skipped; git-ignore semantics deliberately off) |
-| **Dir node** | every directory with markdown somewhere beneath it (empty ones pruned) |
+| **Image node** | every raster image (png/jpg/jpeg/gif/webp/bmp) — rendered as its actual picture once you zoom in |
+| **Dir node** | every directory with markdown or images somewhere beneath it (empty ones pruned) |
 | **Ghost node** | a `[[target]]` that resolves to nothing — a note you've referenced but not written; drawn hollow |
 | **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton |
 | **WikiLink edge** | `[[...]]` in note bodies; drawn as faint curves, bright on the hovered node |
 
 Zoomed in, discs reveal a type glyph: a folder silhouette on dirs, a
 dog-eared page on files, an outlined page on ghosts — zoomed out they stay
-plain color-coded circles (blue dirs, gray files), so huge graphs render
-cheap.
+plain color-coded circles (blue dirs, gray files, green images), so huge
+graphs render cheap.
+
+**The closer you look, the more you see.** Moving the mouse acts as a label
+flashlight: node names near the cursor fade in even when the zoom would
+hide them. Zoom into an image and its disc becomes the picture (decoded on
+a background thread, so big photos never hitch a frame); zoom into a note
+and it opens into a card showing its first lines, text growing with the
+zoom. And hovering any note or image for a moment pops up the full thing —
+the whole body rendered as markdown, or the image at popup size — without
+selecting anything.
 
 Selecting a node opens the **navigator**: a ranger-style pane with a
 clickable breadcrumb, the selection's siblings in a cursor column (dirs
 colored, `/`-suffixed), and a preview — rendered markdown for notes, the
-child listing for folders. Walk it with vim keys (`hjkl`, `gg`, `G`, `f`
-to find within the directory); the graph camera follows the walk, so the
-neighborhood you're reading is always the neighborhood you're seeing. A
-**connections strip** along the bottom lists everything the node touches,
-color-coded and clickable: blue `▸ folder/` and gray `▸ file` children,
-amber `→` outgoing links, purple `←` incoming links.
+child listing for folders, the picture for images. Walk it with vim keys
+(`hjkl`, `gg`, `G`, `f` to find within the directory); the graph camera
+follows the walk, so the neighborhood you're reading is always the
+neighborhood you're seeing. A **connections strip** along the bottom lists
+everything the node touches, color-coded and clickable: blue `▸ folder/`
+and gray `▸ file` children, amber `→` outgoing links, purple `←` incoming
+links.
 
 ### Link resolution
 
@@ -59,11 +70,13 @@ heading/block (`[[x#h]]`, `[[x#^id]]`) suffixes are stripped before resolving.
    `[[SAE]]`, and the alias becomes its label in the graph.
 4. Several candidates → the **first in sorted path order** wins and the link
    is flagged ambiguous (visible in `stats`).
-5. Not edges at all: `![[embeds]]`, anything inside code fences or inline
+5. A plain `[[pic.png]]` (with extension) resolves to the **image node** if
+   the image exists in the vault.
+6. Not edges at all: `![[embeds]]`, anything inside code fences or inline
    code, self-links, and *unresolved* links with asset extensions (png/pdf/…)
    — a real note named `pic.png.md` or `Drawing.excalidraw.md` stays
-   linkable; only plain references to images and files are skipped.
-6. Still unresolved → a ghost node.
+   linkable; only references to assets that don't exist are skipped.
+7. Still unresolved → a ghost node.
 
 Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 
@@ -83,7 +96,8 @@ the agent until `Ctrl+Q`.
 | `0` / `Home` | reset — fit the whole graph |
 | `z` | center on the selection |
 | drag a node | move it — pins to the cursor, the simulation responds live |
-| hover | highlight the node's neighborhood, dim everything else |
+| hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
+| hover + linger | full preview popup: the whole note rendered as markdown, or the image large |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals; matches stay lit, `Enter` jumps to the ringed best hit (a winning terminal lands focused, ready to type), `Esc` closes |
 
 ### Navigator (a node is selected)
@@ -108,8 +122,9 @@ connections strip.
 | Input | Action |
 |---|---|
 | click a card | select + focus: it expands to full readable size at any zoom, turns **cyan ⌨**, and the keyboard types into the agent |
+| **Ctrl+click a card** | 📌 pin it open — expanded at any zoom, several at once, without taking the keyboard; Ctrl+click again unpins. Pins survive restarts |
 | `t` | hop the (orange) terminal cursor from card to card, each expanding in place; `Enter` dives in to type |
-| `Ctrl+Q` / click empty space | release focus back to the graph |
+| `Ctrl+Q` / click away | release focus back to the graph in one gesture — a click on a node also selects it, a click on empty space just releases (your selection stays) |
 | double-click a card | fly the camera into it (zoom + center) |
 | drag a card | arrange it (it stays put, following its anchor node) |
 | drag the corner grip (`tg_` cards, full view) | **natively resize the terminal** — the tmux session itself changes size and the card follows |
@@ -177,9 +192,10 @@ the last shell output), so you can see what each agent is doing at a
 glance; zoom in and it becomes the full styled screen — colors, cursor,
 everything, mirrored in real time. The card under the terminal cursor (or
 focused for typing) always renders full-size, whatever the zoom: stand
-back and click through your agents to inspect them. Border colors state
-the mode — **cyan + ⌨ = your keyboard is in it, orange = selected**,
-green = streaming.
+back and click through your agents to inspect them — or **Ctrl+click
+several to pin them open** (📌 in the title) and watch a whole fleet at
+once. Border colors state the mode — **cyan + ⌨ = your keyboard is in it,
+orange = selected**, green = streaming.
 
 **Click the card and type** — or drive it all from the keyboard: `t` hops
 a highlight from card to card, `Enter` dives into the highlighted one, and
@@ -249,14 +265,17 @@ src/
   graph.rs    arena: typed nodes, Contains tree, overlay links
   layout.rs   pure radial layout — the simulation's deterministic seed
   sim.rs      force simulation (springs, repulsion, gravity, cooling)
-  state.rs    per-vault persistence (.text-graph/view: camera, card layout)
+  state.rs    per-vault persistence (.text-graph/view: camera, cards, pins)
   stats.rs    headless statistics (`stats` subcommand)
+  thumb.rs    image file → downscaled RGBA pixels (headless decode)
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
   keys.rs     keyboard → send-keys commands (tmux names + raw hex)
   app/        egui shell: transform, input, painting, search, navigator,
-              reload worker, terminal cards + focus; diag.rs = health badge
+              reload worker, terminal cards + focus; images.rs = thumbnail
+              textures, previews.rs = text previews + hover popup,
+              diag.rs = health badge
 examples/
   tmux_debug.rs       raw control-client event dump — the mirror's debug harness
   discovery_probe.rs  what discovery + mirrors see for a vault, headless
