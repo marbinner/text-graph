@@ -53,6 +53,10 @@
   %0 on a new tmux server); GRACE only governs remembering vanished panes.
   The control-mode reader must consume BYTES (read_until + lossy), never
   read_line — panes emit raw >=0x80 bytes and an Err would kill the mirror.
+  tmux octal-escapes non-printables in FORMAT output (`-F` with a 0x1f
+  separator comes back as literal "\037" text; tab passes raw) — any scan
+  format change must be verified against a real server, e.g. with
+  `cargo run --example discovery_probe <vault>`.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
   suspend), drag = arrange (world-space offset from anchor in
   `term_offsets`), Ctrl+Q or click-away = release. Cards win pointer

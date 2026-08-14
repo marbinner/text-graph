@@ -125,23 +125,24 @@ fn launch_named(
     Err(std::io::Error::other("all tg_ session names taken"))
 }
 
-/// Separator for scan records: ASCII unit separator. Session names may
-/// legally contain tabs (tmux rewrites only `.` and `:`), so tab-separated
-/// records could be sheared by a hostile-but-legal name; 0x1f appears in
-/// neither names nor paths in practice.
-const SEP: char = '\u{1f}';
-
 /// One-shot scan of the default tmux server. Returns every pane whose cwd is
 /// inside `vault`; allowlist and stickiness filtering happen in [`Tracker`].
-/// tmux absent or no server running → empty. The path field still comes
-/// LAST as defense in depth.
+/// tmux absent or no server running → empty.
+///
+/// Separator: TAB. tmux octal-escapes non-printables in format output
+/// (a 0x1f separator arrives as the literal text `\037` — tried it), but
+/// tab passes through raw. The path field comes LAST so a tab inside a
+/// path can't shear the record; a tab inside a *session name* (legal but
+/// pathological) shifts the pid field, fails its numeric parse, and drops
+/// that line safely — the degradation is a missing card, never a
+/// mis-parsed one.
 pub fn scan(vault: &Path) -> Vec<PaneInfo> {
     let out = Command::new("tmux")
         .args([
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\u{1f}#{pane_id}\u{1f}#{pane_pid}\u{1f}#{pane_current_command}\u{1f}#{pane_current_path}",
+            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
         ])
         .output();
     let Ok(out) = out else { return Vec::new() };
@@ -154,7 +155,7 @@ pub fn scan(vault: &Path) -> Vec<PaneInfo> {
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
     text.lines()
         .filter_map(|l| {
-            let mut f = l.splitn(5, SEP);
+            let mut f = l.splitn(5, '\t');
             let (Some(session), Some(pane), Some(pid), Some(command), Some(cwd)) =
                 (f.next(), f.next(), f.next(), f.next(), f.next())
             else {
@@ -258,9 +259,9 @@ mod tests {
 
     #[test]
     fn parse_filters_to_vault() {
-        let text = "work\u{1f}%1\u{1f}100\u{1f}claude\u{1f}/v/notes\n\
-                    other\u{1f}%2\u{1f}200\u{1f}claude\u{1f}/elsewhere\n\
-                    tg_pi_1\u{1f}%3\u{1f}300\u{1f}pi\u{1f}/v/notes/topics\n\
+        let text = "work\t%1\t100\tclaude\t/v/notes\n\
+                    other\t%2\t200\tclaude\t/elsewhere\n\
+                    tg_pi_1\t%3\t300\tpi\t/v/notes/topics\n\
                     bad-line\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 2);
@@ -269,15 +270,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_survives_tabs_in_names_and_paths() {
-        // tabs are legal in session names AND paths — the 0x1f separator
-        // keeps both intact
-        let text = "we\tird\u{1f}%1\u{1f}100\u{1f}claude\u{1f}/v/notes/weird\tdir\n";
+    fn parse_survives_tabs_in_paths_and_drops_tabbed_names_safely() {
+        // path is the last field, so an embedded tab stays part of the path
+        let text = "work\t%1\t100\tclaude\t/v/notes/weird\tdir\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
-        assert_eq!(panes[0].session, "we\tird");
         assert_eq!(panes[0].cwd, PathBuf::from("/v/notes/weird\tdir"));
         assert_eq!(panes[0].command, "claude");
+        // a tab inside a session name shifts the pid field; the numeric
+        // parse fails and the record is DROPPED — never mis-assigned
+        let sheared = "we\tird\t%1\t100\tclaude\t/v/notes\n\
+                       work\t%2\t200\tclaude\t/v/notes\n";
+        let panes = parse_scan(sheared, Path::new("/v/notes"));
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].session, "work");
     }
 
     fn pane(session: &str, command: &str) -> PaneInfo {
