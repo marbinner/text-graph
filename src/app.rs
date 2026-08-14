@@ -373,27 +373,37 @@ impl Viewer {
         }
     }
 
-    /// Forward this frame's keyboard input to the focused pane. Text and
-    /// Ctrl-chords go as raw hex; special keys go as tmux key names so tmux
-    /// applies the pane's terminal modes.
+    /// Forward this frame's keyboard input to the focused pane, DRAINING the
+    /// keyboard events so egui's own focus/shortcut machinery never sees
+    /// them — otherwise Tab moves widget focus to a detail-pane button and
+    /// Enter fake-clicks it (spawning an editor) while the user is just
+    /// typing into a terminal. Pointer/window events are put back untouched.
+    ///
+    /// Text and Ctrl-chords go as raw hex; special keys go as tmux key names
+    /// so tmux applies the pane's terminal modes. Ctrl+C/X arrive from
+    /// egui-winit as clipboard events with NO Key event, so they're handled
+    /// as Copy/Cut — without that, an agent can't be interrupted.
     fn forward_input(&mut self, ui: &egui::Ui) {
         let Some((session, pane)) = self.focused_term.clone() else { return };
         if !self.mirrors.contains_key(&session) {
             self.focused_term = None;
             return;
         }
-        let events = ui.input(|i| i.events.clone());
+        let events = ui.ctx().input_mut(|i| std::mem::take(&mut i.events));
+        let mut keep: Vec<egui::Event> = Vec::with_capacity(events.len());
         let mut cmds: Vec<String> = Vec::new();
-        for ev in &events {
+        for ev in events {
             match ev {
-                egui::Event::Text(t) if !t.is_empty() => {
+                egui::Event::Text(ref t) if !t.is_empty() => {
                     cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
                 }
-                egui::Event::Paste(t) if !t.is_empty() => {
+                egui::Event::Paste(ref t) if !t.is_empty() => {
                     cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
                 }
+                egui::Event::Copy => cmds.push(keys::hex_cmd(&pane, &[0x03])), // Ctrl+C
+                egui::Event::Cut => cmds.push(keys::hex_cmd(&pane, &[0x18])),  // Ctrl+X
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                    if modifiers.ctrl && modifiers.shift && *key == Key::Q {
+                    if modifiers.ctrl && modifiers.shift && key == Key::Q {
                         continue; // the release chord, handled in ui()
                     }
                     let mods = Mods {
@@ -401,20 +411,24 @@ impl Viewer {
                         alt: modifiers.alt,
                         shift: modifiers.shift,
                     };
-                    if let Some(sp) = map_key(*key) {
+                    if let Some(sp) = map_key(key) {
                         cmds.push(keys::special_cmd(&pane, sp, mods));
                     } else if mods.ctrl
-                        && let Some(c) = key_char(*key)
+                        && let Some(c) = key_char(key)
                         && let Some(cmd) = keys::chord_cmd(&pane, c, mods)
                     {
-                        // ctrl suppresses the text event, so no double-send;
-                        // alt-only letters arrive as plain text (v1 limit)
                         cmds.push(cmd);
                     }
                 }
-                _ => {}
+                egui::Event::Key { .. } => {} // key releases: swallow
+                other => keep.push(other),
             }
         }
+        ui.ctx().input_mut(|i| {
+            let mut late = std::mem::take(&mut i.events);
+            keep.append(&mut late);
+            i.events = keep;
+        });
         if !cmds.is_empty()
             && let Some(m) = self.mirrors.get_mut(&session)
         {
@@ -820,6 +834,10 @@ impl Viewer {
         } else if esc {
             self.selected = None;
         } else if enter
+            // if an egui widget (e.g. the detail pane's button, tab-focused)
+            // has focus, Enter already activates it — don't also fire here,
+            // or the editor opens twice
+            && ui.memory(|m| m.focused().is_none())
             && let Some(sel) = self.selected
         {
             self.open_in_editor(sel);
