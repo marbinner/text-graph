@@ -77,9 +77,11 @@
   `cargo run --example discovery_probe <vault>`.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
   suspend), drag = arrange (world-space offset from anchor in
-  `terms.offsets`), Ctrl+Q or click-away = release. The click-away also
-  lands as a normal graph click in the same gesture (select the node under
-  it / deselect on empty space) — release must never cost a second click.
+  `terms.offsets`), Ctrl+Q or click-away = release. A click-away onto a
+  node also selects it in the same gesture (release must never cost a
+  second click), but a release-click on empty space ONLY releases — it
+  must not deselect, or leaving a terminal would slam the navigator pane
+  shut. Deselect-on-empty-click applies only when no terminal was focused.
   Cards win pointer contention over nodes beneath them via last-frame
   `terms.rects`.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,

@@ -1077,11 +1077,15 @@ impl Viewer {
                 self.close_search();
             } else {
                 // click-away releases terminal focus AND lands as a normal
-                // graph click in the same gesture — selecting a node (or
-                // deselecting on empty space) must never cost a second click
-                self.terms.focused = None;
+                // graph click in the same gesture — selecting a node must
+                // never cost a second click. But a release-click on EMPTY
+                // space only releases: it must not also close the navigator
+                // pane the selection holds open.
+                let was_focused = self.terms.focused.take().is_some();
                 self.terms.cursor = None;
-                self.selected = self.hover;
+                if self.hover.is_some() || !was_focused {
+                    self.selected = self.hover;
+                }
             }
         }
         if response.double_clicked() {
