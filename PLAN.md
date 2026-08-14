@@ -182,8 +182,8 @@ Checkpoint after C: daily-drive it against the real vault; annoyances set D's or
 
 **D — Scale & polish (as needed, not speculatively).** Collapse/expand subtrees
 (default-collapse huge sibling sets), Barnes–Hut repulsion only if a >2k-node vault
-shows up, persist camera/selection per vault under `.text-graph/`, sim-constant tuning
-pass, label collision avoidance if labels annoy.
+shows up, sim-constant tuning pass, label collision avoidance if labels annoy.
+Camera + card-arrangement persistence under `.text-graph/` ✓ done (state.rs).
 
 **E — Terminals in the graph (current).** Agent TUIs (claude, codex, pi, any harness)
 live in tmux sessions; the viewer renders them as live terminal cards anchored to the

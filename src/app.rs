@@ -21,7 +21,7 @@ use text_graph::graph::{Graph, Node, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
-use text_graph::{create, graph, vault};
+use text_graph::{create, graph, state, vault};
 
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);
@@ -221,6 +221,9 @@ pub fn run(path: &Path) -> ExitCode {
         ..Default::default()
     };
     let app = Box::new(move |cc: &eframe::CreationContext<'_>| {
+        // egui quits on Ctrl+Q by default; that key releases terminal focus
+        // here. Closing the window still quits.
+        cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
         let mut viewer = viewer;
         viewer.start_watcher(cc.egui_ctx.clone());
         viewer.start_agent_scan(cc.egui_ctx.clone());
@@ -300,6 +303,13 @@ struct Viewer {
     /// User-arranged card positions: world-space offset of the card's min
     /// corner from its anchor node. Absent = automatic outward placement.
     term_offsets: HashMap<(String, String), Vec2>,
+    /// Parked arrangements (from disk, or from sessions that went away),
+    /// keyed by session name: reclaimed when a matching session reappears.
+    restore_offsets: HashMap<String, Vec<(String, Vec2)>>,
+    /// View state as last written to `.text-graph/view` (skip no-op saves).
+    saved_state: Option<state::ViewState>,
+    last_save: Instant,
+    save_warned: bool,
     /// Card currently being dragged.
     drag_card: Option<(String, String)>,
     /// Set on double-click: next paint recenters the view on this card.
@@ -369,16 +379,25 @@ impl Viewer {
         let sim = Sim::new(&g);
         let Derived { radius, haystacks, n_files, n_dirs, dir_by_path } = Self::derived(&g);
         let n = haystacks.len();
+        let vs = state::load(&root);
+        let cam = vs.camera;
+        let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
+        for c in vs.cards {
+            restore_offsets
+                .entry(c.session)
+                .or_default()
+                .push((c.pane, Vec2::new(c.dx, c.dy)));
+        }
         Self {
             g,
             sim,
             radius,
-            center: Pos2::ZERO,
-            zoom: 1.0,
+            center: cam.map_or(Pos2::ZERO, |(x, y, _)| Pos2::new(x, y)),
+            zoom: cam.map_or(1.0, |(_, _, z)| z.clamp(0.02, 50.0)),
             hover: None,
             selected: None,
             drag_node: None,
-            fitted: false,
+            fitted: cam.is_some(), // a restored camera must not be re-fit away
             n_files,
             n_dirs,
             matcher: Matcher::new(Config::DEFAULT),
@@ -404,6 +423,10 @@ impl Viewer {
             focused_term: None,
             term_rects: Vec::new(),
             term_offsets: HashMap::new(),
+            restore_offsets,
+            saved_state: None,
+            last_save: Instant::now(),
+            save_warned: false,
             drag_card: None,
             zoom_to_card: None,
             term_cycle: 0,
@@ -528,7 +551,36 @@ impl Viewer {
         self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));
-        self.term_offsets.retain(|(s, _), _| sessions.contains(s));
+        // Arrangements are never dropped, only parked by session name: a
+        // vanished (or not-yet-scanned) session's offsets wait in
+        // restore_offsets and are reclaimed when a session with that name
+        // reappears — including across viewer restarts via .text-graph/view.
+        let parked: Vec<((String, String), Vec2)> = self
+            .term_offsets
+            .iter()
+            .filter(|((s, _), _)| !sessions.contains(s))
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        for ((s, p), off) in parked {
+            self.term_offsets.remove(&(s.clone(), p.clone()));
+            self.restore_offsets.entry(s).or_default().push((p, off));
+        }
+        for a in &self.agent_panes {
+            let key = (a.session.clone(), a.pane.clone());
+            if self.term_offsets.contains_key(&key) {
+                continue;
+            }
+            if let Some(list) = self.restore_offsets.get_mut(&a.session) {
+                // exact pane match first; else claim any parked spot for this
+                // session (pane ids change across tmux server restarts)
+                let i = list.iter().position(|(p, _)| p == &a.pane).unwrap_or(0);
+                let (_, off) = list.remove(i);
+                self.term_offsets.insert(key, off);
+                if list.is_empty() {
+                    self.restore_offsets.remove(&a.session);
+                }
+            }
+        }
         let focus_dead = self
             .focused_term
             .as_ref()
@@ -974,6 +1026,55 @@ impl Viewer {
 
     fn set_flash(&mut self, msg: String) {
         self.flash = Some((msg, Instant::now()));
+    }
+
+    /// Camera + every card arrangement, live or parked, sorted for a
+    /// deterministic file.
+    fn snapshot_state(&self) -> state::ViewState {
+        let mut cards: Vec<state::CardPos> = self
+            .term_offsets
+            .iter()
+            .map(|((s, p), off)| state::CardPos {
+                session: s.clone(),
+                pane: p.clone(),
+                dx: off.x,
+                dy: off.y,
+            })
+            .collect();
+        for (s, list) in &self.restore_offsets {
+            for (p, off) in list {
+                cards.push(state::CardPos {
+                    session: s.clone(),
+                    pane: p.clone(),
+                    dx: off.x,
+                    dy: off.y,
+                });
+            }
+        }
+        cards.sort_by(|a, b| (&a.session, &a.pane).cmp(&(&b.session, &b.pane)));
+        state::ViewState { camera: Some((self.center.x, self.center.y, self.zoom)), cards }
+    }
+
+    /// Debounced view-state save; `force` (exit) skips the debounce. Errors
+    /// warn once and go quiet (read-only vaults stay usable).
+    fn persist_state(&mut self, force: bool) {
+        if !force && self.last_save.elapsed() < Duration::from_secs(3) {
+            return;
+        }
+        let s = self.snapshot_state();
+        if self.saved_state.as_ref() == Some(&s) {
+            return;
+        }
+        self.last_save = Instant::now();
+        match state::save(&self.root, &s) {
+            Ok(()) => self.saved_state = Some(s),
+            Err(e) => {
+                if !self.save_warned {
+                    eprintln!("couldn't save view state: {e}");
+                    self.save_warned = true;
+                }
+            }
+        }
     }
 
     /// The directory the context menu's actions apply to (vault-relative,
@@ -1812,5 +1913,13 @@ impl eframe::App for Viewer {
             .show(ui, |ui| self.canvas(ui));
         let ctx = ui.ctx().clone();
         self.create_dialog_ui(&ctx);
+        self.persist_state(false);
+        // egui repaints on demand; without a heartbeat the debounced save
+        // would never run once the sim settles and input stops
+        ctx.request_repaint_after(Duration::from_secs(3));
+    }
+
+    fn on_exit(&mut self) {
+        self.persist_state(true);
     }
 }

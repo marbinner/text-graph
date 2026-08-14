@@ -12,9 +12,10 @@ cargo run --release -- stats ~/notes    # headless statistics
 
 The vault is the database: nodes are your `.md` files and directories, edges
 come from the directory structure and `[[wikilinks]]`. text-graph never
-edits your notes — the only thing it ever writes is the empty file or folder
-you explicitly create from the right-click menu. Editing happens in your own
-editor, and the graph live-reloads when you save.
+edits your notes — it writes only the empty file or folder you explicitly
+create from the right-click menu, plus a small hidden `.text-graph/` state
+dir (camera + card arrangement). Editing happens in your own editor, and the
+graph live-reloads when you save.
 
 ## The graph model
 
@@ -125,7 +126,10 @@ clicking empty space gives you the graph back.
 where the terminal is full-size and readable, centered on that card — pan
 or zoom back out whenever you like. A card stays up for the pane's whole
 lifetime, including while the agent runs long tool calls. Drag cards to
-arrange your workspace. Watch the card glow while an agent streams, and the
+arrange your workspace — the arrangement and your camera survive restarts
+(saved to `.text-graph/view` in the vault), and arrangements are remembered
+**by session name**: relaunch `tg_claude` tomorrow and its card lands back
+where you left it. Watch the card glow while an agent streams, and the
 graph ripple as it writes notes.
 
 How it works, and why it's safe:
@@ -172,6 +176,7 @@ src/
   graph.rs    arena: typed nodes, Contains tree, overlay links
   layout.rs   pure radial layout — the simulation's deterministic seed
   sim.rs      force simulation (springs, repulsion, gravity, cooling)
+  state.rs    per-vault persistence (.text-graph/view: camera, card layout)
   stats.rs    headless statistics (`stats` subcommand)
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade

@@ -59,6 +59,13 @@
   file on demand (`vault::read_body`).
 - Cross-reload identity is `app::Viewer::ident` (ghosts namespaced as
   `[[target]]` because their "path" is raw target text).
+- View state persists to `<vault>/.text-graph/view` (state.rs). The dot-dir
+  is hidden, so the walker and the reload watcher are blind to it — saves
+  can never cause reload loops; keep it that way. Card arrangements are
+  keyed by SESSION NAME and parked in `restore_offsets` when a session is
+  absent (pane ids change across tmux restarts) — never hard-drop an
+  arrangement. Saves are debounced (3s heartbeat repaint keeps them running
+  once the sim settles) and the file is sorted for determinism.
 
 ## egui 0.36 gotchas (cost us compile time already)
 
@@ -72,5 +79,7 @@
 - `Painter::rect_stroke` needs a `StrokeKind` argument; `Painter::layout_job`
   exists (use it — `ctx().fonts()` gives a read-only view that can't layout).
 - `gen` is a reserved keyword in edition 2024 — don't name variables that.
+- egui quits on Ctrl+Q by default (`Options::quit_shortcuts`); `run()`
+  clears it because Ctrl+Q releases terminal focus. Don't reintroduce it.
 - Debugging the mirror: `examples/tmux_debug.rs` dumps raw control-client
   events against any socket/session (`cargo run --example tmux_debug S t`).

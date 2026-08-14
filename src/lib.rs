@@ -17,6 +17,7 @@ pub mod layout;
 pub mod mirror;
 pub mod resolve;
 pub mod sim;
+pub mod state;
 pub mod stats;
 pub mod tmux;
 pub mod vault;
