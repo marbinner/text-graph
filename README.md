@@ -58,6 +58,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | click | select (opens the detail pane with rendered markdown) |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **New terminal** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
+| right-click a terminal card | additionally: **Attach in terminal…** (a real terminal window on the same session) and **Kill terminal** (confirm submenu) |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, and paths; matches stay lit, `Enter` jumps to the ringed best hit, `Esc` closes |
 | `f` | frame the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
@@ -92,6 +93,11 @@ you clicked:
   any terminal.
 - **New terminal** — the same thing with a plain shell (`tg_term`): a
   terminal card at that folder you can type into right in the graph.
+
+And the reverse, on a card: **Attach in terminal…** opens a real terminal
+window on that session, landed on that pane (mirror and external client
+coexist — it's all tmux), and **Kill terminal** ends the pane (and, if it
+was the last one, the session — the card follows).
 
 ## Agent terminals in the graph
 

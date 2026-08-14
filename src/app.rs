@@ -307,6 +307,8 @@ struct Viewer {
     // ---- creation (right-click menu) ----
     /// Node captured at right-click time — the context menu's subject.
     ctx_node: Option<NodeId>,
+    /// Card captured at right-click time (its lifecycle actions lead the menu).
+    ctx_card: Option<(String, String)>,
     /// Open "new note/folder" dialog, if any.
     create: Option<CreateDialog>,
     /// Transient status-bar message and its birth time.
@@ -403,6 +405,7 @@ impl Viewer {
             drag_card: None,
             zoom_to_card: None,
             ctx_node: None,
+            ctx_card: None,
             create: None,
             flash: None,
             pending_select: None,
@@ -943,9 +946,27 @@ impl Viewer {
         (dir, label)
     }
 
-    /// Right-click menu: creation anchored at the clicked node's directory.
+    /// Right-click menu: card lifecycle first (when a card was clicked),
+    /// then creation anchored at the clicked node's directory.
     fn context_menu_ui(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(170.0);
+        if let Some((s, p)) = self.ctx_card.clone()
+            // only while the pane is still alive
+            && self.agent_panes.iter().any(|a| a.session == s && a.pane == p)
+        {
+            if ui.button("Attach in terminal…").clicked() {
+                self.attach_external(&s, &p);
+            }
+            ui.menu_button("Kill terminal", |ui| {
+                ui.label(
+                    egui::RichText::new("ends whatever is running there").weak().small(),
+                );
+                if ui.button(format!("Kill {s} {p}")).clicked() {
+                    self.kill_pane(&s, &p);
+                }
+            });
+            ui.separator();
+        }
         // a ghost is a referenced-but-unwritten note: offer to make it real
         if let Some(id) = self.ctx_node
             && self.g.node(id).kind == NodeKind::Ghost
@@ -996,6 +1017,40 @@ impl Viewer {
     /// Absolute path for a vault-relative dir ("" = root).
     fn ctx_path(&self, dir: &str) -> PathBuf {
         if dir.is_empty() { self.root.clone() } else { self.root.join(dir) }
+    }
+
+    /// Open a real terminal window attached to the card's session, landed on
+    /// its pane. `;` is tmux's command separator — it goes through argv
+    /// unshelled, so no quoting games.
+    fn attach_external(&mut self, session: &str, pane: &str) {
+        let Some(mut cmd) = new_terminal_window() else {
+            self.set_flash("no terminal emulator found — set $TERMINAL".into());
+            return;
+        };
+        cmd.args(["tmux", "attach-session", "-t", &format!("={session}")]);
+        cmd.args([";", "select-window", "-t", pane, ";", "select-pane", "-t", pane]);
+        match detached(&mut cmd) {
+            Ok(()) => self.set_flash(format!("attaching {session} in a new terminal")),
+            Err(e) => self.set_flash(format!("attach failed: {e}")),
+        }
+    }
+
+    /// Kill just this pane (pane ids are server-global). tmux ends the
+    /// session with its last pane, which removes the card via discovery.
+    fn kill_pane(&mut self, session: &str, pane: &str) {
+        let ok = std::process::Command::new("tmux")
+            .args(["kill-pane", "-t", pane])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            if self.focused_term.as_ref().is_some_and(|(fs, fp)| fs == session && fp == pane) {
+                self.focused_term = None;
+            }
+            self.set_flash(format!("killed {session} {pane}"));
+        } else {
+            self.set_flash(format!("kill failed for {session} {pane}"));
+        }
     }
 
     fn open_create(&mut self, folder: bool, dir: String, label: String) {
@@ -1393,6 +1448,7 @@ impl Viewer {
         if response.secondary_clicked() {
             // right-click on a card targets its anchor dir; on a node, that
             // node; on empty space, the vault root (ctx_node = None)
+            self.ctx_card = over_card.clone();
             self.ctx_node = if let Some(t) = &over_card {
                 self.agent_panes
                     .iter()
