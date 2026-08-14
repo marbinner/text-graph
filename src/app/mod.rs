@@ -1075,9 +1075,11 @@ impl Viewer {
                 self.terms.cursor = Some(t.clone());
                 self.terms.focused = Some(t);
                 self.close_search();
-            } else if self.terms.focused.is_some() {
-                self.terms.focused = None; // click-away releases; click again to select
             } else {
+                // click-away releases terminal focus AND lands as a normal
+                // graph click in the same gesture — selecting a node (or
+                // deselecting on empty space) must never cost a second click
+                self.terms.focused = None;
                 self.terms.cursor = None;
                 self.selected = self.hover;
             }
