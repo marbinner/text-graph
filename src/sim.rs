@@ -112,6 +112,13 @@ impl Sim {
         self.alpha = self.alpha.max(ALPHA_REHEAT);
     }
 
+    /// Cap the starting energy — used after a live-reload rebuild where most
+    /// positions were carried over, so the graph ripples instead of
+    /// re-settling from scratch.
+    pub fn calm(&mut self) {
+        self.alpha = self.alpha.min(ALPHA_REHEAT);
+    }
+
     /// Pin a node to a world position (user drag). Reheats the simulation so
     /// the rest of the graph responds.
     pub fn pin(&mut self, id: u32, px: f32, py: f32) {

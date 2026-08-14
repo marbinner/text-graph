@@ -6,9 +6,11 @@
 //! and paint call goes through it. Zoom is toward the cursor. Dragging a node
 //! pins it and reheats the simulation; dragging empty space pans.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -49,7 +51,12 @@ pub fn run(path: &Path) -> ExitCode {
             .with_title(&title),
         ..Default::default()
     };
-    match eframe::run_native(&title, options, Box::new(move |_cc| Ok(Box::new(viewer)))) {
+    let app = Box::new(move |cc: &eframe::CreationContext<'_>| {
+        let mut viewer = viewer;
+        viewer.start_watcher(cc.egui_ctx.clone());
+        Ok(Box::new(viewer) as Box<dyn eframe::App>)
+    });
+    match eframe::run_native(&title, options, app) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -88,11 +95,17 @@ struct Viewer {
     md_cache: CommonMarkCache,
     /// Body of the selected file, read on demand and cached per selection.
     detail: Option<(NodeId, String)>,
+    // ---- live reload ----
+    /// Kept alive for the watcher thread; None if watching failed.
+    _watcher: Option<notify::RecommendedWatcher>,
+    /// Timestamp of the last relevant filesystem event (debounce state).
+    reload_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Viewer {
-    fn new(g: Graph, root: PathBuf) -> Self {
-        let sim = Sim::new(&g);
+    /// Everything derivable from the graph alone — shared by `new` and the
+    /// live-reload `rebuild`.
+    fn derived(g: &Graph) -> (Vec<f32>, Vec<String>, usize, usize) {
         let mut degree = vec![0usize; g.nodes.len()];
         for (i, node) in g.nodes.iter().enumerate() {
             degree[i] += node.children.len();
@@ -117,13 +130,19 @@ impl Viewer {
                 (base + (*d as f32).sqrt() * 1.3f32).min(18.0)
             })
             .collect();
-        let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
-        let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
         let haystacks: Vec<String> = g
             .nodes
             .iter()
             .map(|n| format!("{} {} {}", n.display_name(), n.aliases.join(" "), n.path))
             .collect();
+        let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
+        let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
+        (radius, haystacks, n_files, n_dirs)
+    }
+
+    fn new(g: Graph, root: PathBuf) -> Self {
+        let sim = Sim::new(&g);
+        let (radius, haystacks, n_files, n_dirs) = Self::derived(&g);
         let n = haystacks.len();
         Self {
             g,
@@ -148,7 +167,92 @@ impl Viewer {
             root,
             md_cache: CommonMarkCache::default(),
             detail: None,
+            _watcher: None,
+            reload_at: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Watch the vault; on a relevant event, stamp the debounce clock and
+    /// wake the UI thread. Failure to watch just means no live reload.
+    fn start_watcher(&mut self, ctx: egui::Context) {
+        use notify::Watcher as _;
+        let state = self.reload_at.clone();
+        let root = self.root.clone();
+        let handler = move |res: Result<notify::Event, notify::Error>| {
+            let Ok(event) = res else { return };
+            let relevant = event.paths.iter().any(|p| {
+                let rel = p.strip_prefix(&root).unwrap_or(p);
+                let hidden = rel
+                    .components()
+                    .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')));
+                if hidden {
+                    return false; // .obsidian/.git churn must not trigger reloads
+                }
+                match rel.extension().and_then(|e| e.to_str()) {
+                    Some(ext) => ext.eq_ignore_ascii_case("md"),
+                    None => true, // directory events (creates, renames)
+                }
+            });
+            if relevant {
+                *state.lock().unwrap() = Some(Instant::now());
+                ctx.request_repaint();
+            }
+        };
+        if let Ok(mut w) = notify::recommended_watcher(handler)
+            && w.watch(&self.root, notify::RecursiveMode::Recursive).is_ok()
+        {
+            self._watcher = Some(w);
+        }
+    }
+
+    /// Re-scan the vault and swap the graph in, carrying over sim positions,
+    /// selection, and search identity by path so an edit ripples the layout
+    /// instead of re-settling it.
+    fn rebuild(&mut self) {
+        let Ok(scan) = vault::scan(&self.root) else {
+            return; // vault temporarily unreadable — keep showing the old graph
+        };
+        let g = graph::build(scan);
+
+        let old_pos: HashMap<String, (f32, f32)> = self
+            .g
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.path.clone(), (self.sim.x[i], self.sim.y[i])))
+            .collect();
+        let mut sim = Sim::new(&g);
+        for (i, node) in g.nodes.iter().enumerate() {
+            if let Some(&(x, y)) = old_pos.get(&node.path) {
+                sim.x[i] = x;
+                sim.y[i] = y;
+            }
+        }
+        sim.calm();
+
+        let by_path: HashMap<&str, NodeId> = g
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.path.as_str(), NodeId(i as u32)))
+            .collect();
+        self.selected = self
+            .selected
+            .and_then(|id| by_path.get(self.g.node(id).path.as_str()).copied());
+        self.hover = None;
+        self.drag_node = None;
+        self.best = None;
+
+        let (radius, haystacks, n_files, n_dirs) = Self::derived(&g);
+        self.radius = radius;
+        self.haystacks = haystacks;
+        self.n_files = n_files;
+        self.n_dirs = n_dirs;
+        self.scores = vec![None; g.nodes.len()];
+        self.last_query.clear(); // force a re-score against the new nodes
+        self.detail = None; // re-read the body — the pane shows fresh edits
+        self.g = g;
+        self.sim = sim;
     }
 
     fn frame_node(&mut self, id: NodeId) {
@@ -622,6 +726,24 @@ impl Viewer {
 
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // debounced live reload: rebuild once the vault has been quiet
+        let due = {
+            let mut at = self.reload_at.lock().unwrap();
+            match *at {
+                Some(t) if t.elapsed() >= Duration::from_millis(300) => {
+                    *at = None;
+                    true
+                }
+                Some(_) => {
+                    ui.ctx().request_repaint_after(Duration::from_millis(120));
+                    false
+                }
+                None => false,
+            }
+        };
+        if due {
+            self.rebuild();
+        }
         self.handle_keys(ui);
         self.update_search();
         if self.search_open {
