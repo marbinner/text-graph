@@ -2,6 +2,7 @@
 //! forwarding, gestures (fly-to, native resize), and session lifecycle
 //! (launch / kill / external attach).
 
+use super::actions::{detached, new_terminal_window};
 use super::*;
 
 /// Zoom level a double-clicked card flies to — full styled screen, readable.
