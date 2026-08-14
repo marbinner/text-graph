@@ -194,8 +194,11 @@ answers every terminal query the TUI makes; we only ever render display streams.
 
 Status: E1–E3 ✓ done (fidelity decision point passed — a live claude TUI mirrors
 faithfully on vt100; capture-replay cursor restore was the one real bug found).
-Card drag-to-arrange (an E4 item) landed early. Remaining E4: launch-from-node
-buttons, kill, external attach, procfs fallback for non-tmux agents.
+Card drag-to-arrange and agent launch (right-click a node → Launch agent →
+`agents::launch` spawns a sized `tg_*` session) are done; note/folder creation and
+ghost materialization landed alongside (right-click menu, `create.rs`). Remaining
+E4: kill button, external attach in a new terminal window, procfs fallback for
+non-tmux agents.
 
 1. **E1 — control-mode client + screen mirror** (lib, egui-free). Protocol parsing
    (`%begin/%end/%error` reply blocks FIFO-correlated, `%output` octal-unescaped,

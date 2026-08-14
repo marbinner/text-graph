@@ -12,8 +12,9 @@ cargo run --release -- stats ~/notes    # headless statistics
 
 The vault is the database: nodes are your `.md` files and directories, edges
 come from the directory structure and `[[wikilinks]]`. text-graph never
-writes to your notes — editing happens in your own editor, and the graph
-live-reloads when you save.
+edits your notes — the only thing it ever writes is the empty file or folder
+you explicitly create from the right-click menu. Editing happens in your own
+editor, and the graph live-reloads when you save.
 
 ## The graph model
 
@@ -56,6 +57,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | hover | highlight the node's neighborhood, dim everything else |
 | click | select (opens the detail pane with rendered markdown) |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
+| right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, and paths; matches stay lit, `Enter` jumps to the ringed best hit, `Esc` closes |
 | `f` | frame the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
@@ -69,11 +71,31 @@ Edit any file in the vault and the graph updates ~300ms after you save — new
 links, files, and ghosts appear in place, and existing nodes keep their
 positions (the layout ripples instead of re-settling).
 
+## Creating from the graph
+
+Right-click is the creation surface; everything lands relative to the node
+you clicked:
+
+- **New note…** — type a name (`.md` is implied); `sub/path/name` creates
+  the intermediate folders too. The note is created empty, then selected and
+  framed as soon as the reload picks it up. Writing content stays in your
+  editor.
+- **New folder…** — created on disk immediately; it shows up in the graph
+  once it holds a note (empty dirs are deliberately pruned).
+- **Write a ghost** — right-click a hollow node: the referenced-but-missing
+  note is created at the linked path, and every link that pointed at the
+  ghost snaps to the real file.
+- **Launch agent** — pick claude / codex / pi / … (the same list that drives
+  discovery) and it starts in a detached `tg_*` tmux session cwd'd at that
+  folder; its live card fades in within a couple of seconds. The session is
+  plain tmux and outlives the viewer — `tmux attach -t tg_claude` works from
+  any terminal.
+
 ## Agent terminals in the graph
 
-Run any terminal agent (claude, codex, pi, aider, goose, opencode, gemini —
-extend with `TEXT_GRAPH_AGENTS=name,name`) inside tmux with its cwd in the
-vault:
+Right-click a folder node → **Launch agent**, or run any terminal agent
+(claude, codex, pi, aider, goose, opencode, gemini — extend with
+`TEXT_GRAPH_AGENTS=name,name`) inside tmux with its cwd in the vault:
 
 ```
 tmux new-session -s work -c ~/notes claude
@@ -100,10 +122,10 @@ How it works, and why it's safe:
   approach). tmux stays the real terminal: sessions persist when the viewer
   closes, `tmux attach` from any terminal keeps working, and tmux answers all
   the TUI's terminal queries — the viewer only renders display streams.
-- Sessions named `tg_*` (graph-launched, milestone E4) always show; other
-  tmux panes show while their cwd is in the vault and their foreground
-  command matches the agent list (with a grace period covering the moments a
-  tool call puts `bash` in the foreground).
+- Sessions named `tg_*` (launched from the graph) always show; other tmux
+  panes show while their cwd is in the vault and their foreground command
+  matches the agent list (with a grace period covering the moments a tool
+  call puts `bash` in the foreground).
 - The viewer never sends size hints to sessions it didn't create, so it can
   never reflow a session you're viewing in a real terminal.
 - No tmux installed → the feature is simply absent; everything else works.
@@ -132,13 +154,14 @@ or too spread for your vault, those are the dials.
 src/
   vault.rs    walk + frontmatter/wikilink extraction (per-file, no global state)
   resolve.rs  Obsidian-style link resolution (stems → aliases → ghosts)
+  create.rs   new note/folder: path validation + create-only fs writes
   graph.rs    arena: typed nodes, Contains tree, overlay links
   layout.rs   pure radial layout — the simulation's deterministic seed
   sim.rs      force simulation (springs, repulsion, gravity, cooling)
   stats.rs    headless statistics (`stats` subcommand)
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
-  agents.rs   which tmux panes count as agents (allowlist, tg_*, grace)
+  agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
   keys.rs     keyboard → send-keys commands (tmux names + raw hex)
   app.rs      egui shell: transform, input, painting, search, detail pane,
               reload, terminal cards + focus

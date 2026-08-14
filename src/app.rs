@@ -21,7 +21,7 @@ use text_graph::graph::{Graph, Node, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
-use text_graph::{graph, vault};
+use text_graph::{create, graph, vault};
 
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);
@@ -235,6 +235,18 @@ pub fn run(path: &Path) -> ExitCode {
     }
 }
 
+/// State of the "New note / New folder" dialog (opened via right-click).
+struct CreateDialog {
+    folder: bool,
+    /// Vault-relative target directory ("" = root) and its display label.
+    dir: String,
+    label: String,
+    buf: String,
+    /// Focus the text field on the next frame (open / after an error).
+    focus: bool,
+    err: Option<String>,
+}
+
 struct Viewer {
     g: Graph,
     sim: Sim,
@@ -292,6 +304,17 @@ struct Viewer {
     drag_card: Option<(String, String)>,
     /// Set on double-click: next paint recenters the view on this card.
     zoom_to_card: Option<(String, String)>,
+    // ---- creation (right-click menu) ----
+    /// Node captured at right-click time — the context menu's subject.
+    ctx_node: Option<NodeId>,
+    /// Open "new note/folder" dialog, if any.
+    create: Option<CreateDialog>,
+    /// Transient status-bar message and its birth time.
+    flash: Option<(String, Instant)>,
+    /// Select and frame this rel path once a reload turns it into a node.
+    pending_select: Option<String>,
+    /// tmux presence, probed once at startup — gates "Launch agent".
+    tmux_ok: bool,
 }
 
 impl Viewer {
@@ -379,6 +402,15 @@ impl Viewer {
             term_offsets: HashMap::new(),
             drag_card: None,
             zoom_to_card: None,
+            ctx_node: None,
+            create: None,
+            flash: None,
+            pending_select: None,
+            tmux_ok: std::process::Command::new("tmux")
+                .arg("-V")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
         }
     }
 
@@ -790,6 +822,9 @@ impl Viewer {
         self.drag_node = self
             .drag_node
             .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
+        self.ctx_node = self
+            .ctx_node
+            .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
         self.hover = None;
         self.best = None;
 
@@ -804,6 +839,19 @@ impl Viewer {
         self.detail = None; // re-read the body — the pane shows fresh edits
         self.g = g;
         self.sim = sim;
+
+        // a note we just created: select and frame it the moment it lands
+        if let Some(p) = self.pending_select.clone()
+            && let Some(i) = self
+                .g
+                .nodes
+                .iter()
+                .position(|n| n.kind != NodeKind::Ghost && n.path == p)
+        {
+            self.pending_select = None;
+            self.selected = Some(NodeId(i as u32));
+            self.frame_node(NodeId(i as u32));
+        }
     }
 
     fn frame_node(&mut self, id: NodeId) {
@@ -822,6 +870,9 @@ impl Viewer {
     }
 
     fn handle_keys(&mut self, ui: &egui::Ui) {
+        if self.create.is_some() {
+            return; // the create dialog owns the keyboard
+        }
         let (open_key, esc, enter, frame_key, reset) = ui.input(|i| {
             (
                 i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
@@ -860,6 +911,155 @@ impl Viewer {
             self.frame_node(sel);
         } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
+        }
+    }
+
+    fn set_flash(&mut self, msg: String) {
+        self.flash = Some((msg, Instant::now()));
+    }
+
+    /// The directory the context menu's actions apply to (vault-relative,
+    /// "" = root) and a human label for it.
+    fn ctx_dir(&self) -> (String, String) {
+        let dir = self
+            .ctx_node
+            .map(|id| {
+                let n = self.g.node(id);
+                match n.kind {
+                    NodeKind::Dir => n.path.clone(),
+                    _ => n.parent.map(|p| self.g.node(p).path.clone()).unwrap_or_default(),
+                }
+            })
+            .unwrap_or_default();
+        let label = if dir.is_empty() {
+            self.root
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("vault")
+                .to_string()
+        } else {
+            dir.clone()
+        };
+        (dir, label)
+    }
+
+    /// Right-click menu: creation anchored at the clicked node's directory.
+    fn context_menu_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(170.0);
+        // a ghost is a referenced-but-unwritten note: offer to make it real
+        if let Some(id) = self.ctx_node
+            && self.g.node(id).kind == NodeKind::Ghost
+        {
+            let target = self.g.node(id).path.clone();
+            if ui.button(format!("Write \"{target}\"")).clicked() {
+                let res = create::note_rel_path("", &target)
+                    .and_then(|rel| create::write_note(&self.root, &rel).map(|_| rel));
+                match res {
+                    Ok(rel) => {
+                        self.pending_select = Some(rel.clone());
+                        self.set_flash(format!("created {rel}"));
+                        *self.reload_at.lock().unwrap() = Some(Instant::now());
+                    }
+                    Err(e) => self.set_flash(format!("can't create: {e}")),
+                }
+            }
+            return;
+        }
+
+        let (dir, label) = self.ctx_dir();
+        ui.label(egui::RichText::new(format!("in {label}/")).weak().small());
+        if ui.button("New note…").clicked() {
+            self.open_create(false, dir.clone(), label.clone());
+        }
+        if ui.button("New folder…").clicked() {
+            self.open_create(true, dir.clone(), label.clone());
+        }
+        if self.tmux_ok {
+            ui.separator();
+            ui.menu_button("Launch agent", |ui| {
+                for agent in agents::default_allowlist() {
+                    if ui.button(&agent).clicked() {
+                        self.launch_agent(&dir, &agent);
+                    }
+                }
+            });
+        }
+    }
+
+    fn open_create(&mut self, folder: bool, dir: String, label: String) {
+        self.focused_term = None; // the dialog owns the keyboard now
+        self.close_search();
+        self.create =
+            Some(CreateDialog { folder, dir, label, buf: String::new(), focus: true, err: None });
+    }
+
+    fn launch_agent(&mut self, dir: &str, agent: &str) {
+        let path = if dir.is_empty() { self.root.clone() } else { self.root.join(dir) };
+        match agents::launch(None, &path, agent) {
+            Ok(name) => self.set_flash(format!("launched {agent} — session {name}")),
+            Err(e) => self.set_flash(format!("launch failed: {e}")),
+        }
+    }
+
+    /// The centered "New note / New folder" window, while `self.create` is on.
+    fn create_dialog_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut dlg) = self.create.take() else { return };
+        let mut submit = false;
+        let mut cancel = false;
+        egui::Window::new(if dlg.folder { "New folder" } else { "New note" })
+            .id(egui::Id::new("tg-create"))
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new(format!("in {}/", dlg.label)).weak());
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut dlg.buf)
+                        .hint_text(if dlg.folder { "folder or sub/folder" } else { "name or sub/name" })
+                        .desired_width(260.0),
+                );
+                if dlg.focus {
+                    resp.request_focus();
+                    dlg.focus = false;
+                }
+                if let Some(e) = &dlg.err {
+                    ui.colored_label(SELECT, e);
+                }
+                submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                ui.horizontal(|ui| {
+                    submit |= ui.button("Create").clicked();
+                    cancel = ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(Key::Escape));
+                });
+            });
+        if submit {
+            let res = if dlg.folder {
+                create::folder_rel_path(&dlg.dir, &dlg.buf)
+                    .and_then(|rel| create::make_folder(&self.root, &rel).map(|_| rel))
+            } else {
+                create::note_rel_path(&dlg.dir, &dlg.buf)
+                    .and_then(|rel| create::write_note(&self.root, &rel).map(|_| rel))
+            };
+            match res {
+                Ok(rel) if dlg.folder => {
+                    // empty dirs are pruned from the graph, deliberately
+                    self.set_flash(format!(
+                        "created {rel}/ — appears once it holds a note (\"sub/name\" in New note also creates folders)"
+                    ));
+                }
+                Ok(rel) => {
+                    self.pending_select = Some(rel.clone());
+                    self.set_flash(format!("created {rel}"));
+                    *self.reload_at.lock().unwrap() = Some(Instant::now());
+                }
+                Err(e) => {
+                    dlg.err = Some(e.to_string());
+                    dlg.focus = true;
+                    self.create = Some(dlg); // stay open for a correction
+                }
+            }
+        } else if !cancel {
+            self.create = Some(dlg);
         }
     }
 
@@ -1178,6 +1378,19 @@ impl Viewer {
                 self.open_in_editor(h);
             }
         }
+        if response.secondary_clicked() {
+            // right-click on a card targets its anchor dir; on a node, that
+            // node; on empty space, the vault root (ctx_node = None)
+            self.ctx_node = if let Some(t) = &over_card {
+                self.agent_panes
+                    .iter()
+                    .find(|a| a.session == t.0 && a.pane == t.1)
+                    .map(|a| self.anchor_for(&a.cwd))
+            } else {
+                self.hover
+            };
+        }
+        response.context_menu(|ui| self.context_menu_ui(ui));
         let active = self.hover.or(self.selected);
 
         // Neighborhood of the active node: tree parent + children + wikilink
@@ -1317,7 +1530,12 @@ impl Viewer {
         self.paint_terminals(&painter, rect, view);
 
         // status line
-        let status = if let Some((s, p)) = &self.focused_term {
+        if self.flash.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(6)) {
+            self.flash = None;
+        }
+        let status = if let Some((msg, _)) = &self.flash {
+            msg.clone()
+        } else if let Some((s, p)) = &self.focused_term {
             format!("typing into {s} {p} — click empty space to release")
         } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
@@ -1482,5 +1700,7 @@ impl eframe::App for Viewer {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))
             .show(ui, |ui| self.canvas(ui));
+        let ctx = ui.ctx().clone();
+        self.create_dialog_ui(&ctx);
     }
 }
