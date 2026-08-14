@@ -92,10 +92,11 @@ impl Viewer {
         self.scores = vec![None; g.nodes.len()];
         self.last_query.clear(); // force a re-score against the new nodes
         self.detail = None; // re-read the body — the pane shows fresh edits
-        // evict only thumbnails whose file actually changed — reloads are
-        // frequent (agents writing notes) and a full clear made every image
-        // flicker through its placeholder
+        // evict only thumbnails/excerpts whose file actually changed —
+        // reloads are frequent (agents writing notes) and a full clear made
+        // every image flicker through its placeholder
         self.thumbs.retain_fresh(&self.root);
+        self.previews.retain_fresh(&self.root);
         self.g = g;
         self.sim = sim;
 

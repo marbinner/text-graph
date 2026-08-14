@@ -19,17 +19,18 @@ use text_graph::thumb;
 /// this; the detail pane's preview column fits within it too.
 const THUMB_PX: u32 = 256;
 
-/// Identity of the bytes a thumbnail was decoded from.
-type Stamp = (SystemTime, u64);
+/// Identity of the bytes a cache entry was built from. Shared with the
+/// text-preview cache (previews.rs), which evicts the same way.
+pub(super) type Stamp = (SystemTime, u64);
 
-fn file_stamp(p: &Path) -> Option<Stamp> {
+pub(super) fn file_stamp(p: &Path) -> Option<Stamp> {
     let m = std::fs::metadata(p).ok()?;
     Some((m.modified().ok()?, m.len()))
 }
 
 /// Is a cached entry still the file on disk? Unknown stamps never count as
 /// fresh — better one spurious re-decode than a stale picture.
-fn fresh(stored: &Option<Stamp>, current: Option<Stamp>) -> bool {
+pub(super) fn fresh(stored: &Option<Stamp>, current: Option<Stamp>) -> bool {
     stored.is_some() && *stored == current
 }
 

@@ -47,8 +47,12 @@
   menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
   worker pump + apply + persistence glue; `diag.rs` = health badge;
   `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
-  does the pixel work, headless). New GUI code goes into the matching
-  child module, not into mod.rs.
+  does the pixel work, headless); `previews.rs` = zoom-in text-excerpt
+  cache. File-backed canvas caches (thumbs, previews) evict by (mtime,
+  len) stamp on reload, never wholesale — a full clear makes every card
+  flicker through its placeholder (reloads are constant when agents
+  write). New GUI code goes into the matching child module, not into
+  mod.rs.
 - Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
   never send size hints (`set_size`) or `resize-window` to sessions we
   didn't create (it would reflow the user's real terminal view). The corner
@@ -85,8 +89,9 @@
   moves and reloads clear it (stale indexes point into the old graph).
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
-- Node bodies are never held in memory; the detail pane reads the selected
-  file on demand (`vault::read_body`).
+- Node bodies are never held whole in memory; the detail pane reads the
+  selected file on demand (`vault::read_body`), and the canvas zoom
+  previews cache only small stamped excerpts (`previews.rs`).
 - Cross-reload identity is `graph::Node::ident` (ghosts namespaced as
   `[[target]]` because their "path" is raw target text).
 - View state persists to `<vault>/.text-graph/view` (state.rs). The dot-dir

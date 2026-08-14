@@ -10,6 +10,7 @@ mod actions;
 mod diag;
 mod images;
 mod navigator;
+mod previews;
 mod reload;
 mod terminals;
 
@@ -241,6 +242,8 @@ struct Viewer {
     terms: terminals::Terminals,
     /// Thumbnail decode worker + texture cache for Image nodes.
     thumbs: images::Thumbs,
+    /// Excerpt cache for zoomed-in File previews.
+    previews: previews::Previews,
     // ---- view-state persistence ----
     /// View state as last written to `.text-graph/view` (skip no-op saves).
     saved_state: Option<state::ViewState>,
@@ -380,6 +383,7 @@ impl Viewer {
             dir_by_path,
             terms: terminals::Terminals::new(restore_offsets),
             thumbs: images::Thumbs::new(),
+            previews: previews::Previews::default(),
             saved_state: None,
             last_save: Instant::now(),
             save_warned: false,
@@ -779,6 +783,31 @@ impl Viewer {
         Rect::from_center_size(s, Vec2::new(aspect * half_h, half_h) * 2.0)
     }
 
+    /// UNCLAMPED screen radius above which a File node shows its text
+    /// preview card. (The clamped radius caps at 16, so zoom depth would be
+    /// invisible through it.)
+    const PREVIEW_MIN_R: f32 = 26.0;
+
+    /// The card rect a File node's text preview occupies at this zoom.
+    fn preview_box(&self, id: NodeId, s: Pos2) -> Rect {
+        let ur = self.radius[id.0 as usize] * self.zoom;
+        let size = Vec2::new((ur * 5.2).min(280.0), (ur * 6.0).min(320.0));
+        Rect::from_center_size(s, size)
+    }
+
+    /// The rect a node's expanded form occupies — image thumbnail or text
+    /// preview card — if it is expanded at the current zoom. Hover targets,
+    /// selection rings, and label anchors all follow this shape.
+    fn node_box(&self, id: NodeId, s: Pos2, r: f32) -> Option<Rect> {
+        match self.g.node(id).kind {
+            NodeKind::Image if r >= Self::IMG_BOX_MIN_R => Some(self.image_box(id, s, r)),
+            NodeKind::File if self.radius[id.0 as usize] * self.zoom >= Self::PREVIEW_MIN_R => {
+                Some(self.preview_box(id, s))
+            }
+            _ => None,
+        }
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if !self.fitted {
@@ -993,13 +1022,12 @@ impl Viewer {
                 let mut best = f32::INFINITY;
                 for &(id, s, r) in &visible {
                     let d = s.distance(cursor);
-                    // a thumbnail box is wider than its nominal radius —
-                    // hover anywhere on the picture, not a circle around
-                    // its center (the mismatch made hover flicker at the
-                    // corners of wide images)
-                    let hit = if self.g.node(id).kind == NodeKind::Image && r >= Self::IMG_BOX_MIN_R
-                    {
-                        self.image_box(id, s, r).expand(4.0).contains(cursor)
+                    // an expanded node (thumbnail / preview card) is wider
+                    // than its nominal radius — hover anywhere on it, not a
+                    // circle around its center (the mismatch made hover
+                    // flicker at the corners of wide boxes)
+                    let hit = if let Some(bx) = self.node_box(id, s, r) {
+                        bx.expand(4.0).contains(cursor)
                     } else {
                         d < r + 4.0
                     };
@@ -1164,9 +1192,54 @@ impl Viewer {
                     }
                 }
                 NodeKind::File => {
-                    painter.circle_filled(s, r, dimmed(FILE));
-                    if glyph {
-                        paint_doc_icon(&painter, s, r, Some(punch), None);
+                    // zoomed in far enough, the note opens into a text
+                    // preview card (the canvas sibling of the detail pane);
+                    // presence fades so the disc↔card flip never pops
+                    let ur = self.radius[id.0 as usize] * self.zoom;
+                    let presence = ui.ctx().animate_value_with_time(
+                        egui::Id::new(("preview", &node.path)),
+                        if ur >= Self::PREVIEW_MIN_R { 1.0 } else { 0.0 },
+                        0.12,
+                    );
+                    if presence < 0.95 {
+                        painter.circle_filled(s, r, dimmed(FILE));
+                        if glyph && presence < 0.05 {
+                            paint_doc_icon(&painter, s, r, Some(punch), None);
+                        }
+                    }
+                    if presence >= 0.05 {
+                        // dim fades like image tint — a big card snapping
+                        // between bright and near-black reads as flicker
+                        let dim_a = ui.ctx().animate_value_with_time(
+                            egui::Id::new(("preview-dim", &node.path)),
+                            if on { 1.0 } else { DIM },
+                            0.15,
+                        );
+                        let a = presence * dim_a;
+                        let bx = self.preview_box(id, s);
+                        painter.rect_filled(bx, 3.0, TERM_BG.gamma_multiply(a));
+                        painter.rect_stroke(
+                            bx,
+                            3.0,
+                            Stroke::new(1.0, EDGE.gamma_multiply(a)),
+                            egui::StrokeKind::Outside,
+                        );
+                        let fs = (ur * 0.22).clamp(6.5, 12.0);
+                        let text = self
+                            .previews
+                            .get_or_load(&self.root, &node.path)
+                            .to_string();
+                        let galley = painter.layout(
+                            text,
+                            FontId::proportional(fs),
+                            TEXT.gamma_multiply(a),
+                            bx.width() - 12.0,
+                        );
+                        painter.with_clip_rect(bx.shrink(2.0)).galley(
+                            bx.min + Vec2::new(6.0, 5.0),
+                            galley,
+                            TEXT,
+                        );
                     }
                 }
                 NodeKind::Image => {
@@ -1217,13 +1290,13 @@ impl Viewer {
                     }
                 }
             }
-            // rings follow the painted shape: thumbnail boxes get a rect
-            // ring, everything else the classic circle
-            let boxed = node.kind == NodeKind::Image && r >= Self::IMG_BOX_MIN_R;
+            // rings follow the painted shape: expanded boxes (thumbnails,
+            // preview cards) get a rect ring, everything else the circle
+            let boxed = self.node_box(id, s, r);
             let ring = |color: Color32, width: f32| {
-                if boxed {
+                if let Some(b) = boxed {
                     painter.rect_stroke(
-                        self.image_box(id, s, r).expand(3.0),
+                        b.expand(3.0),
                         2.0,
                         Stroke::new(width, color),
                         egui::StrokeKind::Outside,
@@ -1276,10 +1349,10 @@ impl Viewer {
             } else {
                 TEXT.gamma_multiply(0.35 + 0.65 * fade.unwrap_or(0.0))
             };
-            // a thumbnail box can be wider than r — hang the label off its
+            // an expanded box is wider than r — hang the label off its
             // right edge, not the nominal radius
-            let anchor = if node.kind == NodeKind::Image && r >= Self::IMG_BOX_MIN_R {
-                Pos2::new(self.image_box(id, s, r).max.x + 5.0, s.y)
+            let anchor = if let Some(b) = self.node_box(id, s, r) {
+                Pos2::new(b.max.x + 5.0, s.y)
             } else {
                 s + Vec2::new(r + 5.0, 0.0)
             };
