@@ -90,9 +90,12 @@ impl SessionMirror {
     }
 
     fn list_panes(&mut self) {
+        // -s: every pane in the SESSION. Bare list-panes covers only the
+        // current window, which dropped background-window agents and blanked
+        // parsers whenever the user switched windows.
         self.send(
             Pending::ListPanes,
-            "list-panes -F '#{pane_id},#{pane_width},#{pane_height}'",
+            "list-panes -s -F '#{pane_id},#{pane_width},#{pane_height}'",
         );
     }
 
@@ -124,8 +127,23 @@ impl SessionMirror {
                                 let (Ok(w), Ok(h)) = (w.parse::<u16>(), h.parse::<u16>()) else {
                                     continue;
                                 };
-                                if !self.panes.contains_key(id) {
+                                let is_new = !self.panes.contains_key(id);
+                                if is_new {
                                     self.panes.insert(id.to_string(), vt100::Parser::new(h, w, 0));
+                                }
+                                // Existing panes: apply resizes — tmux formats
+                                // subsequent %output for the new geometry, so
+                                // a stale parser garbles the screen forever.
+                                let resized = !is_new
+                                    && self.panes.get_mut(id).is_some_and(|p| {
+                                        if p.screen().size() != (h, w) {
+                                            p.screen_mut().set_size(h, w);
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                if is_new || resized {
                                     let cmd = format!("capture-pane -peq -t {id}");
                                     self.send(Pending::Capture(id.to_string()), &cmd);
                                     let cmd = format!(
