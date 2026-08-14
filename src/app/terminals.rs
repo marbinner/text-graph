@@ -39,6 +39,13 @@ pub(super) struct Terminals {
     pub(super) cycle: usize,
     /// The card the terminal cursor is on: highlighted, Enter focuses it.
     pub(super) cursor: Option<(String, String)>,
+    /// Cards pinned open by Ctrl+click: expanded at any zoom, independent
+    /// of focus/cursor — several agents watchable at once. Value-less map
+    /// (not a set) so state.rs park/claim shepherd pins across tmux
+    /// restarts exactly like arrangements.
+    pub(super) pinned: HashMap<(String, String), ()>,
+    /// Parked pins, keyed by session name (see `parked`).
+    pub(super) parked_pins: HashMap<String, Vec<(String, ())>>,
     /// Fuzzy-search scores for panes (aligned with `panes`).
     pub(super) scores: Vec<Option<u32>>,
     /// Best terminal hit: index at scoring time plus its key.
@@ -48,7 +55,10 @@ pub(super) struct Terminals {
 }
 
 impl Terminals {
-    pub(super) fn new(parked: HashMap<String, Vec<(String, Vec2)>>) -> Self {
+    pub(super) fn new(
+        parked: HashMap<String, Vec<(String, Vec2)>>,
+        parked_pins: HashMap<String, Vec<(String, ())>>,
+    ) -> Self {
         Terminals {
             seen: Arc::new(Mutex::new(Vec::new())),
             panes: Vec::new(),
@@ -66,6 +76,8 @@ impl Terminals {
             fly_to: None,
             cycle: 0,
             cursor: None,
+            pinned: HashMap::new(),
+            parked_pins,
             scores: Vec::new(),
             best: None,
             tmux_ok: std::process::Command::new("tmux")
@@ -74,6 +86,14 @@ impl Terminals {
                 .map(|o| o.status.success())
                 .unwrap_or(false),
         }
+    }
+
+    /// Cards that render their full screen at a readable size regardless of
+    /// zoom: focused, cursor-selected, or pinned open.
+    pub(super) fn is_expanded(&self, key: &(String, String)) -> bool {
+        self.focused.as_ref() == Some(key)
+            || self.cursor.as_ref() == Some(key)
+            || self.pinned.contains_key(key)
     }
 }
 
@@ -493,6 +513,11 @@ impl Viewer {
         // first, then any spot) — including across viewer restarts via
         // .text-graph/view. Logic lives in state.rs, where it's unit-tested.
         state::park_absent(&mut self.terms.offsets, &mut self.terms.parked, &sessions);
+        state::park_absent(
+            &mut self.terms.pinned,
+            &mut self.terms.parked_pins,
+            &sessions,
+        );
         let pane_keys: Vec<(String, String)> = self
             .terms
             .panes
@@ -500,6 +525,11 @@ impl Viewer {
             .map(|a| (a.session.clone(), a.pane.clone()))
             .collect();
         state::claim(&mut self.terms.offsets, &mut self.terms.parked, &pane_keys);
+        state::claim(
+            &mut self.terms.pinned,
+            &mut self.terms.parked_pins,
+            &pane_keys,
+        );
         let focus_dead = self
             .terms
             .focused
@@ -583,10 +613,11 @@ impl Viewer {
             };
             let focused = self.terms.focused.as_ref() == Some(&key);
             let cursor = self.terms.cursor.as_ref() == Some(&key);
-            // The cursor-selected (or focused) card always shows its full
-            // screen at a readable size, however far out the camera is —
-            // click through the cards while zoomed out to inspect agents.
-            let expanded = focused || cursor;
+            // The cursor-selected, focused, or pinned card always shows its
+            // full screen at a readable size, however far out the camera is
+            // — click through the cards while zoomed out to inspect agents,
+            // Ctrl+click to keep several open at once.
+            let expanded = self.terms.is_expanded(&key);
             let (font, adv, line_h) = if expanded && f_base < EXPAND_FONT {
                 let font = FontId::monospace(EXPAND_FONT);
                 let p = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
@@ -688,10 +719,17 @@ impl Viewer {
             }
             // everything inside the card is clipped to it — no overflow, ever
             let cp = painter.with_clip_rect(card);
-            let title = if focused {
-                format!("⌨ {} · {} {}", a.agent, a.session, a.pane)
+            // 📌 marks a Ctrl+click pin — the reader must be able to tell
+            // WHY a card is expanded, and that Ctrl+click undoes it
+            let pin = if self.terms.pinned.contains_key(&key) {
+                "📌 "
             } else {
-                format!("{} · {} {}", a.agent, a.session, a.pane)
+                ""
+            };
+            let title = if focused {
+                format!("⌨ {pin}{} · {} {}", a.agent, a.session, a.pane)
+            } else {
+                format!("{pin}{} · {} {}", a.agent, a.session, a.pane)
             };
             cp.text(
                 card.left_top() + Vec2::new(pad, 2.0),
@@ -854,5 +892,25 @@ impl Viewer {
             Ok(name) => self.set_flash(format!("launched {agent} — session {name}")),
             Err(e) => self.set_flash(format!("launch failed: {e}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pinned_cards_count_as_expanded() {
+        let mut t = Terminals::new(HashMap::new(), HashMap::new());
+        let key = ("tg_a".to_string(), "%1".to_string());
+        assert!(!t.is_expanded(&key));
+        t.pinned.insert(key.clone(), ());
+        assert!(t.is_expanded(&key), "pin expands without focus/cursor");
+        t.pinned.remove(&key);
+        t.cursor = Some(key.clone());
+        assert!(t.is_expanded(&key));
+        t.cursor = None;
+        t.focused = Some(key.clone());
+        assert!(t.is_expanded(&key));
     }
 }

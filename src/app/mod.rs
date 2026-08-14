@@ -353,6 +353,10 @@ impl Viewer {
                 .or_default()
                 .push((c.pane, Vec2::new(c.dx, c.dy)));
         }
+        let mut restore_pins: HashMap<String, Vec<(String, ())>> = HashMap::new();
+        for (session, pane) in vs.pins {
+            restore_pins.entry(session).or_default().push((pane, ()));
+        }
         Self {
             g,
             sim,
@@ -388,7 +392,7 @@ impl Viewer {
             reload_error: None,
             diag_open: false,
             dir_by_path,
-            terms: terminals::Terminals::new(restore_offsets),
+            terms: terminals::Terminals::new(restore_offsets, restore_pins),
             thumbs: images::Thumbs::new(),
             previews: previews::Previews::default(),
             saved_state: None,
@@ -873,8 +877,7 @@ impl Viewer {
                 // feedback and its ~1.5px cell advance makes a twitch reflow
                 // the real session by dozens of columns. Cursor/focused cards
                 // render expanded at any zoom, so they're never compact.
-                let expanded = self.terms.focused.as_ref() == Some(&t)
-                    || self.terms.cursor.as_ref() == Some(&t);
+                let expanded = self.terms.is_expanded(&t);
                 let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0 && !expanded;
                 if on_handle
                     && ours
@@ -1062,19 +1065,28 @@ impl Viewer {
         }
         if response.clicked() {
             if let Some(t) = over_card.clone() {
-                // clicking also parks the t-cursor here, so cycling resumes
-                // from this card
-                if let Some(i) = self
-                    .terms
-                    .panes
-                    .iter()
-                    .position(|a| a.session == t.0 && a.pane == t.1)
-                {
-                    self.terms.cycle = i + 1;
+                if ui.input(|i| i.modifiers.command) {
+                    // Ctrl+click pins the card open (expanded at any zoom,
+                    // several at once) without touching keyboard focus;
+                    // Ctrl+click again unpins
+                    if self.terms.pinned.remove(&t).is_none() {
+                        self.terms.pinned.insert(t, ());
+                    }
+                } else {
+                    // clicking also parks the t-cursor here, so cycling
+                    // resumes from this card
+                    if let Some(i) = self
+                        .terms
+                        .panes
+                        .iter()
+                        .position(|a| a.session == t.0 && a.pane == t.1)
+                    {
+                        self.terms.cycle = i + 1;
+                    }
+                    self.terms.cursor = Some(t.clone());
+                    self.terms.focused = Some(t);
+                    self.close_search();
                 }
-                self.terms.cursor = Some(t.clone());
-                self.terms.focused = Some(t);
-                self.close_search();
             } else {
                 // click-away releases terminal focus AND lands as a normal
                 // graph click in the same gesture — selecting a node must
@@ -1426,7 +1438,7 @@ impl Viewer {
         } else if active.is_none()
             && let Some((s, p)) = &self.terms.cursor
         {
-            format!("{s} {p} — Enter types into it · t next · Esc dismisses")
+            format!("{s} {p} — Enter types into it · t next · Ctrl+click pins open · Esc dismisses")
         } else {
             match active.map(|id| self.g.node(id)) {
                 Some(n) => {

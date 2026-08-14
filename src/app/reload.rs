@@ -141,9 +141,17 @@ impl Viewer {
             }
         }
         cards.sort_by(|a, b| (&a.session, &a.pane).cmp(&(&b.session, &b.pane)));
+        let mut pins: Vec<(String, String)> = self.terms.pinned.keys().cloned().collect();
+        for (s, list) in &self.terms.parked_pins {
+            for (p, ()) in list {
+                pins.push((s.clone(), p.clone()));
+            }
+        }
+        pins.sort();
         state::ViewState {
             camera: Some((self.center.x, self.center.y, self.zoom)),
             cards,
+            pins,
         }
     }
 

@@ -76,7 +76,9 @@
   format change must be verified against a real server, e.g. with
   `cargo run --example discovery_probe <vault>`.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
-  suspend), drag = arrange (world-space offset from anchor in
+  suspend), Ctrl+click = toggle pin (📌 expanded at any zoom, several at
+  once, never touches focus; persisted and parked/claimed by session like
+  arrangements), drag = arrange (world-space offset from anchor in
   `terms.offsets`), Ctrl+Q or click-away = release. A click-away onto a
   node also selects it in the same gesture (release must never cost a
   second click), but a release-click on empty space ONLY releases — it

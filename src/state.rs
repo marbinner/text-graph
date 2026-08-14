@@ -15,6 +15,8 @@ pub struct ViewState {
     /// (center_x, center_y, zoom)
     pub camera: Option<(f32, f32, f32)>,
     pub cards: Vec<CardPos>,
+    /// (session, pane) cards pinned open — expanded at any zoom.
+    pub pins: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +38,9 @@ pub fn to_text(s: &ViewState) -> String {
             "card\t{}\t{}\t{}\t{}\n",
             c.dx, c.dy, c.pane, c.session
         ));
+    }
+    for (session, pane) in &s.pins {
+        out.push_str(&format!("pin\t{pane}\t{session}\n"));
     }
     out
 }
@@ -63,6 +68,12 @@ pub fn from_text(text: &str) -> ViewState {
                         dx,
                         dy,
                     });
+                }
+            }
+            Some("pin") => {
+                let fields: Vec<&str> = line.splitn(3, '\t').collect();
+                if let [_, pane, session] = fields[..] {
+                    s.pins.push((session.to_string(), pane.to_string()));
                 }
             }
             _ => {} // header / unknown line kinds
@@ -163,12 +174,16 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_camera_and_cards() {
+    fn round_trips_camera_cards_and_pins() {
         let s = ViewState {
             camera: Some((12.5, -3.0, 2.2)),
             cards: vec![
                 card("tg_claude", "%4", -80.0, 12.0),
                 card("work", "%0", 5.5, 0.0),
+            ],
+            pins: vec![
+                ("tg_claude".to_string(), "%4".to_string()),
+                ("work".to_string(), "%0".to_string()),
             ],
         };
         assert_eq!(from_text(&to_text(&s)), s);
@@ -179,6 +194,7 @@ mod tests {
         let s = ViewState {
             camera: None,
             cards: vec![card("weird\tname", "%1", 1.0, 2.0)],
+            pins: vec![("weird\tname".to_string(), "%1".to_string())],
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }
@@ -186,13 +202,19 @@ mod tests {
     #[test]
     fn garbage_and_unknown_lines_are_ignored() {
         let text = "text-graph view v99\nnonsense\ncamera\tx\ty\tz\ncamera\t1\t2\t0\n\
-                    card\tnan\t2\t%1\ts\ncard\t1\t2\t%1\tok\nfuture-thing\tdata\n";
+                    card\tnan\t2\t%1\ts\ncard\t1\t2\t%1\tok\npin\t%9\npin\t%2\ts\n\
+                    future-thing\tdata\n";
         let s = from_text(text);
         assert_eq!(
             s.camera, None,
             "non-numeric / non-positive-zoom cameras dropped"
         );
         assert_eq!(s.cards, vec![card("ok", "%1", 1.0, 2.0)]);
+        assert_eq!(
+            s.pins,
+            vec![("s".to_string(), "%2".to_string())],
+            "truncated pin line dropped, valid one kept"
+        );
     }
 
     #[test]
