@@ -70,6 +70,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | click a terminal card | focus it — the keyboard now types into that agent |
 | double-click a terminal card | fly the view into that terminal: zooms to a readable size and centers it |
 | drag a terminal card | arrange it (it stays put, following its anchor node) |
+| drag a card's corner grip (`tg_` cards) | **natively resize the terminal** — the tmux session itself changes size and the card follows; foreign sessions resize from their own terminal |
 | `Ctrl+Q` / click empty space | release terminal focus |
 
 Edit any file in the vault and the graph updates ~300ms after you save — new
@@ -127,7 +128,12 @@ suspend; `Ctrl+Q` or clicking empty space gives you the graph back.
 **Double-click a card** to fly the view into it: the graph zooms to a level
 where the terminal is full-size and readable, centered on that card — pan
 or zoom back out whenever you like. A card stays up for the pane's whole
-lifetime, including while the agent runs long tool calls. Drag cards to
+lifetime, including while the agent runs long tool calls. Graph-launched
+(`tg_`) cards have a grip in the corner: dragging it resizes the **actual
+tmux session** (`resize-window`), the TUI reflows natively, and the card
+follows — the same thing that happens if you resize it from an attached
+terminal. Foreign sessions deliberately have no grip: resizing them would
+reflow the real terminal you're viewing them in. Drag cards to
 arrange your workspace — the arrangement and your camera survive restarts
 (saved to `.text-graph/view` in the vault), and arrangements are remembered
 **by session name**: relaunch `tg_claude` tomorrow and its card lands back

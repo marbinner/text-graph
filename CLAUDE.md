@@ -36,8 +36,9 @@
   must stay egui-free (headless-testable). `app.rs` is the only module
   allowed to touch egui.
 - Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
-  never send size hints (`set_size`) to sessions we didn't create (it would
-  reflow the user's real terminal view). Special keys go as tmux key NAMES
+  never send size hints (`set_size`) or `resize-window` to sessions we
+  didn't create (it would reflow the user's real terminal view). The corner
+  resize grip exists only on `ours` (tg_) cards for exactly this reason. Special keys go as tmux key NAMES
   (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
   (quoting-proof); Ctrl+C/X arrive from egui as Copy/Cut events, not Key
   events. While a terminal is focused, keyboard events are DRAINED from

@@ -40,6 +40,39 @@ const DIM: f32 = 0.18;
 /// Zoom level a double-clicked card flies to — full styled screen, readable.
 const CARD_ZOOM: f32 = 2.2;
 
+/// Bottom-right corner zone of a card that resizes instead of moving.
+fn resize_handle(card: Rect) -> Rect {
+    Rect::from_min_max(card.max - Vec2::splat(16.0), card.max)
+}
+
+/// Two diagonal grip lines marking the resize corner.
+fn paint_resize_grip(p: &egui::Painter, card: Rect, color: Color32) {
+    let m = card.max;
+    p.line_segment(
+        [Pos2::new(m.x - 11.0, m.y - 3.0), Pos2::new(m.x - 3.0, m.y - 11.0)],
+        Stroke::new(1.5, color),
+    );
+    p.line_segment(
+        [Pos2::new(m.x - 6.0, m.y - 3.0), Pos2::new(m.x - 3.0, m.y - 6.0)],
+        Stroke::new(1.5, color),
+    );
+}
+
+/// In-flight native resize of a graph-launched session via its corner grip:
+/// the drag maps to `resize-window` on the real tmux pane (debounced), and
+/// the card follows through the normal mirror resize path.
+struct ResizeDrag {
+    key: (String, String),
+    cols0: f32,
+    rows0: f32,
+    start: Pos2,
+    adv: f32,
+    line_h: f32,
+    want: (u16, u16),
+    sent: (u16, u16),
+    last_sent: Instant,
+}
+
 // ---- terminal cards ----
 const AGENT: Color32 = Color32::from_rgb(0x4e, 0xc9, 0x8b);
 const TERM_BG: Color32 = Color32::from_rgb(0x10, 0x13, 0x19);
@@ -61,6 +94,8 @@ struct Run {
 /// A pane's screen, converted once per mirror generation.
 struct CachedPane {
     cols: u16,
+    /// Real pane height (rows) — the resize gesture's baseline.
+    total_rows: u16,
     rows: Vec<Vec<Run>>, // trailing blank rows trimmed
     cursor: Option<(u16, u16)>,
 }
@@ -130,7 +165,7 @@ fn build_cached(grid: &TermGrid) -> CachedPane {
         }
         rows.push(runs);
     }
-    CachedPane { cols: grid.cols, rows, cursor: grid.cursor }
+    CachedPane { cols: grid.cols, total_rows: grid.rows, rows, cursor: grid.cursor }
 }
 
 fn hash_angle(session: &str, pane: &str, index: usize) -> f32 {
@@ -312,6 +347,8 @@ struct Viewer {
     save_warned: bool,
     /// Card currently being dragged.
     drag_card: Option<(String, String)>,
+    /// Corner-grip resize in progress (tg_ sessions only — native resize).
+    resize_term: Option<ResizeDrag>,
     /// Set on double-click: next paint recenters the view on this card.
     zoom_to_card: Option<(String, String)>,
     /// Position of the `t` (cycle terminals) key, modulo the pane count.
@@ -435,6 +472,7 @@ impl Viewer {
             last_save: Instant::now(),
             save_warned: false,
             drag_card: None,
+            resize_term: None,
             zoom_to_card: None,
             term_cycle: 0,
             term_selected: None,
@@ -794,6 +832,9 @@ impl Viewer {
                     FontId::proportional(10.5),
                     Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
                 );
+                if a.ours {
+                    paint_resize_grip(&cp, card, border);
+                }
                 continue;
             }
 
@@ -830,6 +871,9 @@ impl Viewer {
                     0.0,
                     HOVER.gamma_multiply(0.55),
                 );
+            }
+            if a.ours {
+                paint_resize_grip(&cp, card, border);
             }
         }
     }
@@ -1571,31 +1615,93 @@ impl Viewer {
         });
         if response.drag_started() {
             if let Some(t) = over_card.clone() {
-                // seed the override from where the card currently is, so the
-                // first dragged frame doesn't jump
-                let cur_min = self
-                    .term_rects
-                    .iter()
-                    .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
-                    .map(|(_, _, r)| r.min);
-                let anchor_s = self
+                // corner grip on our own (tg_) sessions = native resize; the
+                // rest of the card moves it. Foreign sessions never get
+                // resized from here — that would reflow someone's real
+                // terminal view.
+                let on_handle = response
+                    .hover_pos()
+                    .zip(
+                        self.term_rects
+                            .iter()
+                            .rev()
+                            .find(|(s, p, _)| (s, p) == (&t.0, &t.1)),
+                    )
+                    .is_some_and(|(pos, (_, _, r))| resize_handle(*r).contains(pos));
+                let ours = self
                     .agent_panes
                     .iter()
                     .find(|a| a.session == t.0 && a.pane == t.1)
-                    .map(|a| {
-                        let id = self.anchor_for(&a.cwd);
-                        self.to_screen(rect, self.world_pos(id.0 as usize))
+                    .is_some_and(|a| a.ours);
+                if on_handle
+                    && ours
+                    && let Some(c) = self.term_cache.get(&t)
+                    && let Some(pos) = response.hover_pos()
+                {
+                    let f = (6.0 * self.zoom).clamp(2.5, 16.0);
+                    let probe = ui.painter().layout_no_wrap(
+                        "M".into(),
+                        FontId::monospace(f),
+                        Color32::WHITE,
+                    );
+                    let cur = (c.cols, c.total_rows);
+                    self.resize_term = Some(ResizeDrag {
+                        key: t,
+                        cols0: cur.0 as f32,
+                        rows0: cur.1 as f32,
+                        start: pos,
+                        adv: probe.size().x.max(1.0),
+                        line_h: probe.size().y.max(1.0),
+                        want: cur,
+                        sent: cur,
+                        last_sent: Instant::now(),
                     });
-                if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
-                    self.term_offsets.insert(t.clone(), (min - anchor_s) / self.zoom);
+                } else {
+                    // seed the override from where the card currently is, so
+                    // the first dragged frame doesn't jump
+                    let cur_min = self
+                        .term_rects
+                        .iter()
+                        .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
+                        .map(|(_, _, r)| r.min);
+                    let anchor_s = self
+                        .agent_panes
+                        .iter()
+                        .find(|a| a.session == t.0 && a.pane == t.1)
+                        .map(|a| {
+                            let id = self.anchor_for(&a.cwd);
+                            self.to_screen(rect, self.world_pos(id.0 as usize))
+                        });
+                    if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
+                        self.term_offsets.insert(t.clone(), (min - anchor_s) / self.zoom);
+                    }
+                    self.drag_card = Some(t);
                 }
-                self.drag_card = Some(t);
             } else {
                 self.drag_node = self.hover;
             }
         }
         if response.dragged() {
-            if let Some(t) = self.drag_card.clone() {
+            if self.resize_term.is_some() {
+                if let (Some(rz), Some(cur)) =
+                    (self.resize_term.as_mut(), response.interact_pointer_pos())
+                {
+                    let cols = (rz.cols0 + (cur.x - rz.start.x) / rz.adv).round();
+                    let rows = (rz.rows0 + (cur.y - rz.start.y) / rz.line_h).round();
+                    rz.want = (cols.clamp(20.0, 220.0) as u16, rows.clamp(5.0, 80.0) as u16);
+                    if rz.want != rz.sent && rz.last_sent.elapsed() > Duration::from_millis(90) {
+                        let (cols, rows) = rz.want;
+                        let cmd = format!("resize-window -t {} -x {cols} -y {rows}", rz.key.1);
+                        let sess = rz.key.0.clone();
+                        rz.sent = rz.want;
+                        rz.last_sent = Instant::now();
+                        if let Some(m) = self.mirrors.get_mut(&sess) {
+                            m.command(&cmd);
+                        }
+                    }
+                }
+                ui.ctx().request_repaint();
+            } else if let Some(t) = self.drag_card.clone() {
                 if let Some(off) = self.term_offsets.get_mut(&t) {
                     *off += response.drag_delta() / self.zoom;
                 }
@@ -1613,6 +1719,16 @@ impl Viewer {
             self.sim.unpin();
             self.drag_node = None;
             self.drag_card = None;
+            if let Some(rz) = self.resize_term.take()
+                && rz.want != rz.sent
+                && let Some(m) = self.mirrors.get_mut(&rz.key.0)
+            {
+                // flush the debounced tail so the final size always lands
+                m.command(&format!(
+                    "resize-window -t {} -x {} -y {}",
+                    rz.key.1, rz.want.0, rz.want.1
+                ));
+            }
         }
         let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
         let factor = pinch * (scroll * 0.0025).exp();

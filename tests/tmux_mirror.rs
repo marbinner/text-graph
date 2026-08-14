@@ -82,6 +82,51 @@ fn mirrors_a_scripted_session() {
     assert!(success, "expected styled 'plain RED text'; row 0 was {last_row:?}");
 }
 
+/// The native-resize path the corner grip uses: `resize-window` sent over
+/// the control client must flow back (%layout-change) into a resized grid.
+#[test]
+fn resize_window_updates_mirror_grid() {
+    let have_tmux = Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !have_tmux {
+        eprintln!("tmux not installed — skipping");
+        return;
+    }
+
+    let socket = format!("tg-test-rz-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
+    assert!(
+        tmux(&socket, &["new-session", "-d", "-s", "t3", "-x", "80", "-y", "24", "cat"]),
+        "failed to create session"
+    );
+
+    let mut m = SessionMirror::attach("t3", Some(&socket), None, || {}).expect("attach");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut pane = None;
+    while Instant::now() < deadline && pane.is_none() {
+        m.pump();
+        pane = m.grids().first().map(|(p, _)| p.clone());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let pane = pane.expect("pane never discovered");
+
+    m.command(&format!("resize-window -t {pane} -x 100 -y 30"));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut size = (0, 0);
+    while Instant::now() < deadline && size != (100, 30) {
+        m.pump();
+        if let Some((_, g)) = m.grids().first() {
+            size = (g.cols, g.rows);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(size, (100, 30), "grid never took the new size");
+}
+
 /// Launching agents from the graph: unique tg_ names, correct cwd.
 #[test]
 fn launch_creates_uniquely_named_tg_sessions() {
