@@ -8,6 +8,9 @@
 - `cargo run --release -- <vault>` opens the GUI; `-- stats <vault>` is headless.
 - GUI smoke test without interaction: `timeout 6 cargo run --release -- fixtures/vault`
   → exit 124 means it launched and ran fine.
+- tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
+  (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
+  tmux is absent. Never point tests at the user's default tmux server.
 
 ## House rules
 
