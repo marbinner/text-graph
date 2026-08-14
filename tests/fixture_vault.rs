@@ -246,6 +246,60 @@ warnings (1):
     );
 }
 
+/// The query layer: adjacency indexes, path lookup, preserved offsets.
+#[test]
+fn query_layer_backlinks_outlinks_paths_offsets() {
+    let g = build_fixture();
+    // languages/rust.md is linked from rust-app ([[rust]] ambiguous winner),
+    // 2026-08-13 (alias [[rustlang]]), and topics/rust ([[languages/rust]])
+    let rust = g.by_path("languages/rust.md").expect("by_path");
+    let mut sources: Vec<&str> = g
+        .backlinks(rust)
+        .map(|l| g.node(l.from).path.as_str())
+        .collect();
+    sources.sort_unstable();
+    assert_eq!(
+        sources,
+        [
+            "notes/daily/2026-08-13.md",
+            "projects/rust-app.md",
+            "topics/rust.md"
+        ]
+    );
+    // index.md links out to 3 files + 1 ghost, in body order
+    let index = g.by_path("index.md").unwrap();
+    let outs: Vec<&str> = g
+        .outlinks(index)
+        .map(|l| g.node(l.to).path.as_str())
+        .collect();
+    assert_eq!(
+        outs,
+        [
+            "projects/rust-app.md",
+            "notes/readme.md",
+            "notes/daily/2026-08-14.md",
+            "missing-note"
+        ]
+    );
+    // offsets index into the BODY (read_body strips BOM + frontmatter),
+    // which is exactly what the preview pane renders
+    let body = vault::read_body(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault/index.md"),
+    )
+    .unwrap();
+    for l in g.outlinks(index) {
+        assert_eq!(
+            &body[l.offset..l.offset + 2],
+            "[[",
+            "offset {} is not a link",
+            l.offset
+        );
+    }
+    // ghosts are reachable by ident, not by bare path
+    assert!(g.by_ident("[[missing-note]]").is_some());
+    assert_eq!(g.by_path(""), Some(g.root));
+}
+
 #[test]
 fn frontmatter_titles_load() {
     let g = build_fixture();

@@ -69,6 +69,11 @@ pub struct Link {
     pub from: NodeId,
     pub to: NodeId,
     pub kind: LinkKind,
+    /// Byte offset of the first `[[` occurrence of this edge in the source
+    /// file's BODY — the text `vault::read_body` returns (BOM and
+    /// frontmatter stripped), not the raw file. Duplicate occurrences are
+    /// deduplicated; the first wins.
+    pub offset: usize,
 }
 
 /// A basename link that matched several files; resolution picked the first
@@ -92,9 +97,32 @@ pub struct Graph {
     pub errors: Vec<(String, String)>,
     pub ambiguities: Vec<Ambiguity>,
     pub self_links_dropped: usize,
+    /// Per-node indices into `links`: outgoing / incoming, in link order
+    /// (deterministic). Built by `finish_indexes` after resolution.
+    links_out: Vec<Vec<u32>>,
+    links_in: Vec<Vec<u32>>,
+    /// `Node::ident()` → id. Idents are unique (ghosts are namespaced).
+    ident_index: HashMap<String, NodeId>,
 }
 
 impl Graph {
+    /// An empty shell (tests, synthetic builders). Populate nodes/links,
+    /// then call `finish_indexes` if the query layer will be used.
+    pub fn empty() -> Self {
+        Graph {
+            nodes: Vec::new(),
+            links: Vec::new(),
+            root: NodeId(0),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            ambiguities: Vec::new(),
+            self_links_dropped: 0,
+            links_out: Vec::new(),
+            links_in: Vec::new(),
+            ident_index: HashMap::new(),
+        }
+    }
+
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id.0 as usize]
     }
@@ -154,6 +182,52 @@ impl Graph {
     pub fn nav_enter(&self, id: NodeId) -> Option<NodeId> {
         self.node(id).children.first().copied()
     }
+
+    // ---- query layer: link adjacency and stable lookups ----
+
+    /// Wikilinks FROM this node, in body order.
+    pub fn outlinks(&self, id: NodeId) -> impl Iterator<Item = &Link> {
+        self.links_out[id.0 as usize]
+            .iter()
+            .map(|i| &self.links[*i as usize])
+    }
+
+    /// Wikilinks TO this node, in source (NodeId) order.
+    pub fn backlinks(&self, id: NodeId) -> impl Iterator<Item = &Link> {
+        self.links_in[id.0 as usize]
+            .iter()
+            .map(|i| &self.links[*i as usize])
+    }
+
+    /// Look a node up by vault-relative path (files/dirs; "" = root).
+    /// Reload-stable where NodeIds are not.
+    pub fn by_path(&self, path: &str) -> Option<NodeId> {
+        // ghost idents are namespaced "[[...]]", so plain paths only ever
+        // hit real nodes here
+        self.ident_index.get(path).copied()
+    }
+
+    /// Look a node up by its `Node::ident()` (includes ghosts).
+    pub fn by_ident(&self, ident: &str) -> Option<NodeId> {
+        self.ident_index.get(ident).copied()
+    }
+
+    /// Build the adjacency and ident indexes. Called once at the end of
+    /// `build`, after resolution has added ghosts and links.
+    pub(crate) fn finish_indexes(&mut self) {
+        self.links_out = vec![Vec::new(); self.nodes.len()];
+        self.links_in = vec![Vec::new(); self.nodes.len()];
+        for (i, l) in self.links.iter().enumerate() {
+            self.links_out[l.from.0 as usize].push(i as u32);
+            self.links_in[l.to.0 as usize].push(i as u32);
+        }
+        self.ident_index = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.ident(), NodeId(i as u32)))
+            .collect();
+    }
 }
 
 /// Build the full graph from a scan: Contains tree, then link resolution.
@@ -164,19 +238,12 @@ pub fn build(scan: VaultScan) -> Graph {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".to_string());
 
-    let mut g = Graph {
-        nodes: Vec::new(),
-        links: Vec::new(),
-        root: NodeId(0),
-        warnings: Vec::new(),
-        errors: scan
-            .errors
-            .into_iter()
-            .map(|e| (e.rel_path, e.message))
-            .collect(),
-        ambiguities: Vec::new(),
-        self_links_dropped: 0,
-    };
+    let mut g = Graph::empty();
+    g.errors = scan
+        .errors
+        .into_iter()
+        .map(|e| (e.rel_path, e.message))
+        .collect();
     g.push_node(Node {
         kind: NodeKind::Dir,
         path: String::new(),
@@ -213,6 +280,7 @@ pub fn build(scan: VaultScan) -> Graph {
 
     sort_children(&mut g);
     resolve::resolve(&mut g, &file_links);
+    g.finish_indexes();
     g
 }
 
@@ -291,15 +359,7 @@ mod tests {
 
     /// A tiny hand-wired tree: root -> [a/, z.md], a/ -> [b.md, c.md].
     fn tree() -> Graph {
-        let mut g = Graph {
-            nodes: Vec::new(),
-            links: Vec::new(),
-            root: NodeId(0),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            ambiguities: Vec::new(),
-            self_links_dropped: 0,
-        };
+        let mut g = Graph::empty();
         g.push_node(node(NodeKind::Dir, "")); // 0 root
         g.push_node(node(NodeKind::Dir, "a")); // 1
         g.push_node(node(NodeKind::File, "z.md")); // 2

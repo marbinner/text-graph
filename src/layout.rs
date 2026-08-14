@@ -84,15 +84,7 @@ mod tests {
 
     /// Root with two file children.
     fn tiny() -> Graph {
-        let mut g = Graph {
-            nodes: Vec::new(),
-            links: Vec::new(),
-            root: NodeId(0),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            ambiguities: Vec::new(),
-            self_links_dropped: 0,
-        };
+        let mut g = Graph::empty();
         g.nodes.push(Node {
             kind: NodeKind::Dir,
             path: String::new(),
@@ -137,15 +129,7 @@ mod tests {
 
     #[test]
     fn empty_graph_yields_no_positions() {
-        let g = Graph {
-            nodes: Vec::new(),
-            links: Vec::new(),
-            root: NodeId(0),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            ambiguities: Vec::new(),
-            self_links_dropped: 0,
-        };
+        let g = Graph::empty();
         assert!(radial(&g).is_empty());
     }
 }

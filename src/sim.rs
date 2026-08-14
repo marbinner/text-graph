@@ -212,15 +212,7 @@ mod tests {
 
     /// root dir with two files; file a wikilinks a ghost.
     fn synth() -> Graph {
-        let mut g = Graph {
-            nodes: Vec::new(),
-            links: Vec::new(),
-            root: NodeId(0),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            ambiguities: Vec::new(),
-            self_links_dropped: 0,
-        };
+        let mut g = Graph::empty();
         let mk = |kind, path: &str, name: &str, parent, children: Vec<NodeId>| Node {
             kind,
             path: path.into(),
@@ -241,6 +233,7 @@ mod tests {
             from: NodeId(1),
             to: NodeId(3),
             kind: LinkKind::WikiLink,
+            offset: 0,
         });
         g
     }

@@ -133,6 +133,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                     from: *src,
                     to,
                     kind: LinkKind::WikiLink,
+                    offset: link.offset,
                 });
             }
         }
@@ -220,19 +221,12 @@ mod tests {
             parent,
             children: Vec::new(),
         };
-        let mut g = Graph {
-            nodes: vec![
-                node(NodeKind::Dir, "", "r", None),
-                node(NodeKind::File, "pic.png.md", "pic.png", Some(NodeId(0))),
-                node(NodeKind::File, "b.md", "b", Some(NodeId(0))),
-            ],
-            links: Vec::new(),
-            root: NodeId(0),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            ambiguities: Vec::new(),
-            self_links_dropped: 0,
-        };
+        let mut g = Graph::empty();
+        g.nodes = vec![
+            node(NodeKind::Dir, "", "r", None),
+            node(NodeKind::File, "pic.png.md", "pic.png", Some(NodeId(0))),
+            node(NodeKind::File, "b.md", "b", Some(NodeId(0))),
+        ];
         let links = vec![(
             NodeId(2),
             vec![
@@ -273,25 +267,18 @@ mod tests {
             parent,
             children: Vec::new(),
         };
-        let mut g = Graph {
-            nodes: vec![
-                node(NodeKind::Dir, "", "r", vec![], None),
-                node(
-                    NodeKind::File,
-                    "a.md",
-                    "a",
-                    vec!["Same".into(), "same".into()],
-                    Some(NodeId(0)),
-                ),
-                node(NodeKind::File, "b.md", "b", vec![], Some(NodeId(0))),
-            ],
-            links: Vec::new(),
-            root: NodeId(0),
-            warnings: Vec::new(),
-            errors: Vec::new(),
-            ambiguities: Vec::new(),
-            self_links_dropped: 0,
-        };
+        let mut g = Graph::empty();
+        g.nodes = vec![
+            node(NodeKind::Dir, "", "r", vec![], None),
+            node(
+                NodeKind::File,
+                "a.md",
+                "a",
+                vec!["Same".into(), "same".into()],
+                Some(NodeId(0)),
+            ),
+            node(NodeKind::File, "b.md", "b", vec![], Some(NodeId(0))),
+        ];
         let links = vec![(
             NodeId(2),
             vec![RawLink {
