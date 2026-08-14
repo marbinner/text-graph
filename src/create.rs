@@ -69,9 +69,26 @@ fn clean_rel(dir: &str, input: &str) -> Result<String> {
     Ok(if dir.is_empty() { rel } else { format!("{dir}/{rel}") })
 }
 
+/// Refuse to create through a symlinked path component: a linked dir (or
+/// leaf) inside the vault could redirect the write outside it. The walker
+/// doesn't follow links, so nothing behind one is part of the graph anyway.
+fn reject_symlink_components(root: &Path, rel: &str) -> Result<()> {
+    let mut cur = root.to_path_buf();
+    for part in rel.split('/') {
+        cur.push(part);
+        if let Ok(m) = std::fs::symlink_metadata(&cur)
+            && m.file_type().is_symlink()
+        {
+            bail!("{rel}: refusing to create through a symlink");
+        }
+    }
+    Ok(())
+}
+
 /// Create an empty note at `rel` (creating parent folders), refusing to
 /// overwrite anything. Returns the absolute path.
 pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
+    reject_symlink_components(root, rel)?;
     let abs = root.join(rel);
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)?;
@@ -90,6 +107,7 @@ pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Create a folder at `rel` (and parents). Idempotent.
 pub fn make_folder(root: &Path, rel: &str) -> Result<PathBuf> {
+    reject_symlink_components(root, rel)?;
     let abs = root.join(rel);
     if abs.is_file() {
         bail!("{rel} exists and is a file");
@@ -177,6 +195,19 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("link.md")).unwrap();
         assert!(write_note(&root, "link.md").is_err(), "dangling symlink must not be followed");
         assert!(!outside.exists(), "nothing may be created at the symlink target");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creation_refuses_symlinked_directories() {
+        let root = scratch();
+        let elsewhere = root.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("sub")).unwrap();
+        assert!(write_note(&root, "sub/x.md").is_err(), "symlinked dir must be rejected");
+        assert!(!elsewhere.join("x.md").exists());
+        assert!(make_folder(&root, "sub/deeper").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
