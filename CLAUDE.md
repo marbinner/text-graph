@@ -12,6 +12,11 @@
 - tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
   (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
   tmux is absent. Never point tests at the user's default tmux server.
+- Keyboard state machine: `src/app/kb_tests.rs` drives handle_keys through
+  egui_kittest (headless, no renderer). Its harness deliberately does NOT
+  run canvas — sync_terminals would attach mirrors against the user's
+  default tmux server (see rule above). New keybind behavior gets a test
+  there.
 
 ## House rules
 

@@ -12,6 +12,9 @@ mod navigator;
 mod reload;
 mod terminals;
 
+#[cfg(test)]
+mod kb_tests;
+
 use actions::CreateDialog;
 use reload::ReloadMsg;
 use terminals::{ResizeDrag, TERM_BG, resize_handle};

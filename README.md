@@ -280,7 +280,9 @@ A suite of integration tests runs against a real tmux on a private socket
 (skipped without tmux): scripted styled-screen mirroring, the exact typing
 path end-to-end, native resize propagation, and agent launching. The
 mirror's protocol layer (reply correlation, capture replay, cursor
-restore) is additionally unit-tested without tmux.
+restore) is additionally unit-tested without tmux, and the keyboard state
+machine (modal hjkl, Esc ordering, link walking, search-Enter) is driven
+through a headless egui harness (`egui_kittest`).
 
 House rules: if you touch `fixtures/vault/`, re-count `fixtures/EXPECTED.md`
 and update the tests in the same commit — the numbers are asserted exactly.
