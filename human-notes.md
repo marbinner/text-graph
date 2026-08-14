@@ -1,7 +1,7 @@
 # notes made by human, don't take seriously
 
 ## todo
-- I should be able to navigate the graph using a ranger like setup.
+- In the ranger navigation make it so we can also go to files linked to and from a file. (they should appear at the bottom in various colors to indicate whether it's a child file/folder ingoing link or outgoing link.)
 - sub-agents and agent-to-agent communication
 - external web links
 - images/pdf/audio and other files.
