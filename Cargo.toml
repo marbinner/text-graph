@@ -1,0 +1,10 @@
+[package]
+name = "text-graph"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+ignore = "0.4"
+pulldown-cmark = { version = "0.13", default-features = false }
+serde_yaml_ng = "0.10"

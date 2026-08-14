@@ -1,0 +1,328 @@
+//! Vault scanning: walk a directory of markdown files, parse frontmatter,
+//! and extract wikilink targets (still unresolved strings).
+//!
+//! No global state — every file is parsed independently. Resolution of the
+//! extracted targets happens in [`crate::resolve`].
+
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use pulldown_cmark::{Event, Parser, Tag};
+
+/// One markdown file, parsed but with link targets still unresolved.
+#[derive(Debug)]
+pub struct RawFile {
+    /// Path relative to the vault root, forward-slash separated, with extension.
+    pub rel_path: String,
+    /// `title:` from frontmatter, if present.
+    pub title: Option<String>,
+    /// Extracted wikilink targets, in document order.
+    pub links: Vec<RawLink>,
+    /// Non-fatal parse problem (e.g. invalid frontmatter YAML).
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawLink {
+    /// Target with alias / heading / block suffixes stripped, e.g. `topics/rust`.
+    pub target: String,
+    /// Byte offset of `[[` in the body (kept for future use: previews, jumps).
+    pub offset: usize,
+}
+
+#[derive(Debug)]
+pub struct ScanError {
+    pub rel_path: String,
+    pub message: String,
+}
+
+#[derive(Debug)]
+pub struct VaultScan {
+    /// Canonicalized vault root.
+    pub root: PathBuf,
+    /// Parsed files, sorted by `rel_path` — determinism depends on this,
+    /// because NodeIds are assigned in this order.
+    pub files: Vec<RawFile>,
+    /// Files that could not be read; the scan continues past them.
+    pub errors: Vec<ScanError>,
+}
+
+/// Directories skipped regardless of hidden-file handling (belt and
+/// suspenders — the walker's hidden filter already covers dotdirs).
+const SKIPPED_DIRS: &[&str] = &[".obsidian", ".trash"];
+
+pub fn scan(root: &Path) -> Result<VaultScan> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("cannot open vault root {}", root.display()))?;
+    if !root.is_dir() {
+        bail!("vault root {} is not a directory", root.display());
+    }
+
+    // Collect .md paths. Hidden files/dirs are skipped (.obsidian, .trash,
+    // .git); git-ignore semantics are deliberately disabled — a notes viewer
+    // should show what's on disk, not what git tracks.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let walker = ignore::WalkBuilder::new(&root)
+        .hidden(true)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .follow_links(false)
+        .build();
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        let path = entry.into_path();
+        let is_md = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+        if is_md && !in_skipped_dir(&root, &path) {
+            paths.push(path);
+        }
+    }
+
+    // The walker's yield order is not guaranteed; sorting here is what makes
+    // runs deterministic.
+    paths.sort();
+
+    let mut files = Vec::with_capacity(paths.len());
+    let mut errors = Vec::new();
+    for path in &paths {
+        let rel = rel_str(&root, path);
+        match std::fs::read(path) {
+            Ok(bytes) => files.push(parse_file(rel, &bytes)),
+            Err(e) => errors.push(ScanError { rel_path: rel, message: e.to_string() }),
+        }
+    }
+
+    Ok(VaultScan { root, files, errors })
+}
+
+fn rel_str(root: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let s = rel.to_string_lossy();
+    if std::path::MAIN_SEPARATOR == '/' {
+        s.into_owned()
+    } else {
+        s.replace(std::path::MAIN_SEPARATOR, "/")
+    }
+}
+
+fn in_skipped_dir(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .any(|c| SKIPPED_DIRS.iter().any(|s| c.as_os_str().to_str() == Some(s)))
+}
+
+fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
+    let cow = String::from_utf8_lossy(bytes);
+    // A UTF-8 BOM must not confuse frontmatter detection or the first link.
+    let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
+
+    let (title, body, warning) = split_frontmatter(text);
+    let links = extract_links(body);
+    RawFile { rel_path, title, links, warning }
+}
+
+/// Split off `--- ... ---` frontmatter. Returns (title, body, warning).
+///
+/// No opener or no closing delimiter → the whole text is the body. Delimiters
+/// present but YAML invalid → warning, body still parsed (links in the body
+/// of a file with broken frontmatter must survive).
+fn split_frontmatter(text: &str) -> (Option<String>, &str, Option<String>) {
+    let Some((yaml, body)) = frontmatter_span(text) else {
+        return (None, text, None);
+    };
+    if yaml.trim().is_empty() {
+        return (None, body, None);
+    }
+    // Deserialize into a generic Value rather than a struct: real vaults have
+    // numeric/date titles and arbitrary extra fields, none of which should
+    // produce warnings.
+    match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml) {
+        Ok(v) => {
+            let title = v.get("title").and_then(|t| match t {
+                serde_yaml_ng::Value::String(s) => Some(s.clone()),
+                serde_yaml_ng::Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            });
+            (title, body, None)
+        }
+        Err(e) => (None, body, Some(format!("invalid frontmatter: {e}"))),
+    }
+}
+
+/// If `text` opens with a `---` line, find the closing `---` line and return
+/// (yaml, body). Tolerates CRLF.
+fn frontmatter_span(text: &str) -> Option<(&str, &str)> {
+    let rest = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))?;
+    let yaml_start = text.len() - rest.len();
+    let mut pos = yaml_start;
+    for line in text[yaml_start..].split_inclusive('\n') {
+        if line.trim_end_matches(['\n', '\r']) == "---" {
+            let yaml = &text[yaml_start..pos];
+            let body_start = pos + line.len();
+            return Some((yaml, &text[body_start..]));
+        }
+        pos += line.len();
+    }
+    None
+}
+
+/// Byte ranges of the body where wikilinks must not be recognized: fenced and
+/// indented code blocks, inline code spans, and raw HTML.
+///
+/// Scanning the raw body and *excluding* these ranges avoids the alternative
+/// of reassembling fragmented `Text` events (pulldown-cmark splits text at
+/// `[` boundaries).
+fn excluded_ranges(body: &str) -> Vec<Range<usize>> {
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    for (event, range) in Parser::new(body).into_offset_iter() {
+        match event {
+            // The range of a Start event covers the entire element.
+            Event::Start(Tag::CodeBlock(_)) => ranges.push(range),
+            Event::Code(_) | Event::Html(_) | Event::InlineHtml(_) => ranges.push(range),
+            _ => {}
+        }
+    }
+    ranges
+}
+
+/// Scan `body` for `[[...]]` wikilinks. `![[embeds]]` and links inside
+/// excluded ranges are dropped. Alias (`|`) and heading/block (`#`) suffixes
+/// are stripped from the returned target.
+pub fn extract_links(body: &str) -> Vec<RawLink> {
+    let excluded = excluded_ranges(body);
+    let bytes = body.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(found) = body[i..].find("[[") {
+        let start = i + found;
+        let inner_start = start + 2;
+        let Some(close) = body[inner_start..].find("]]") else { break };
+        let inner_end = inner_start + close;
+        let inner = &body[inner_start..inner_end];
+
+        // "[[a[[b]]" — treat the second `[[` as the real opener.
+        if let Some(nested) = inner.find("[[") {
+            i = inner_start + nested;
+            continue;
+        }
+        i = inner_end + 2;
+
+        if excluded.iter().any(|r| r.contains(&start)) {
+            continue;
+        }
+        if start > 0 && bytes[start - 1] == b'!' {
+            continue; // ![[embed]] — out of scope for v1
+        }
+        if inner.contains('\n') {
+            continue; // wikilinks don't span lines
+        }
+        let target = inner
+            .split('|')
+            .next()
+            .unwrap_or("") // strip alias
+            .split('#')
+            .next()
+            .unwrap_or("") // strip heading / ^block
+            .trim();
+        if target.is_empty() {
+            continue; // [[]] or [[#heading]] — empty / same-file reference
+        }
+        out.push(RawLink { target: target.to_string(), offset: start });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets(body: &str) -> Vec<String> {
+        extract_links(body).into_iter().map(|l| l.target).collect()
+    }
+
+    #[test]
+    fn plain_alias_heading_block_path() {
+        assert_eq!(
+            targets("[[a]] [[b|alias]] [[c#h]] [[d#^blk]] [[dir/e]]"),
+            ["a", "b", "c", "d", "dir/e"]
+        );
+    }
+
+    #[test]
+    fn fenced_code_is_not_a_link() {
+        let body = "before\n\n```text\n[[trap]]\n```\n\nafter [[real]]\n";
+        assert_eq!(targets(body), ["real"]);
+    }
+
+    #[test]
+    fn indented_code_is_not_a_link() {
+        let body = "para\n\n    [[trap]]\n\n[[real]]\n";
+        assert_eq!(targets(body), ["real"]);
+    }
+
+    #[test]
+    fn inline_code_is_not_a_link() {
+        assert_eq!(targets("`[[trap]]` and [[real]]"), ["real"]);
+    }
+
+    #[test]
+    fn embeds_are_skipped() {
+        assert_eq!(targets("![[img.png]] and [[real]]"), ["real"]);
+    }
+
+    #[test]
+    fn empty_and_heading_only_are_skipped() {
+        assert_eq!(targets("[[]] [[#heading]] [[  ]]"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn frontmatter_valid() {
+        let (t, body, w) = split_frontmatter("---\ntitle: Hi\n---\nbody");
+        assert_eq!(t.as_deref(), Some("Hi"));
+        assert_eq!(body, "body");
+        assert!(w.is_none());
+    }
+
+    #[test]
+    fn frontmatter_crlf() {
+        let (t, body, w) = split_frontmatter("---\r\ntitle: Hi\r\n---\r\nbody");
+        assert_eq!(t.as_deref(), Some("Hi"));
+        assert_eq!(body, "body");
+        assert!(w.is_none());
+    }
+
+    #[test]
+    fn frontmatter_numeric_title_is_fine() {
+        let (t, _, w) = split_frontmatter("---\ntitle: 42\n---\n");
+        assert_eq!(t.as_deref(), Some("42"));
+        assert!(w.is_none());
+    }
+
+    #[test]
+    fn frontmatter_garbage_warns_but_body_survives() {
+        let (t, body, w) = split_frontmatter("---\ntitle: [broken\n---\n[[x]]");
+        assert!(t.is_none());
+        assert!(w.is_some());
+        assert_eq!(extract_links(body).len(), 1);
+    }
+
+    #[test]
+    fn no_closing_delimiter_means_no_frontmatter() {
+        let (t, body, w) = split_frontmatter("---\ntitle: Hi\nno close");
+        assert!(t.is_none() && w.is_none());
+        assert!(body.starts_with("---"));
+    }
+}
