@@ -10,7 +10,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::ExitCode;
 
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Vec2};
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 use text_graph::graph::{Graph, NodeId, NodeKind};
 use text_graph::sim::Sim;
 use text_graph::{graph, vault};
@@ -69,6 +71,16 @@ struct Viewer {
     fitted: bool,
     n_files: usize,
     n_dirs: usize,
+    // ---- search ----
+    matcher: Matcher,
+    /// Per-node "name aliases path" string the fuzzy pattern scores against.
+    haystacks: Vec<String>,
+    search_open: bool,
+    search_focus_pending: bool,
+    query: String,
+    last_query: String,
+    scores: Vec<Option<u32>>,
+    best: Option<NodeId>,
 }
 
 impl Viewer {
@@ -100,6 +112,12 @@ impl Viewer {
             .collect();
         let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
         let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
+        let haystacks: Vec<String> = g
+            .nodes
+            .iter()
+            .map(|n| format!("{} {} {}", n.display_name(), n.aliases.join(" "), n.path))
+            .collect();
+        let n = haystacks.len();
         Self {
             g,
             sim,
@@ -112,7 +130,101 @@ impl Viewer {
             fitted: false,
             n_files,
             n_dirs,
+            matcher: Matcher::new(Config::DEFAULT),
+            haystacks,
+            search_open: false,
+            search_focus_pending: false,
+            query: String::new(),
+            last_query: String::new(),
+            scores: vec![None; n],
+            best: None,
         }
+    }
+
+    fn frame_node(&mut self, id: NodeId) {
+        self.center = self.world_pos(id.0 as usize);
+        if self.zoom < 0.9 {
+            self.zoom = 0.9;
+        }
+    }
+
+    fn close_search(&mut self) {
+        self.search_open = false;
+        self.query.clear();
+        self.last_query.clear();
+        self.scores.fill(None);
+        self.best = None;
+    }
+
+    fn handle_keys(&mut self, ui: &egui::Ui) {
+        let (open_key, esc, enter) = ui.input(|i| {
+            (
+                i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
+                i.key_pressed(Key::Escape),
+                i.key_pressed(Key::Enter),
+            )
+        });
+        if self.search_open {
+            if esc {
+                self.close_search();
+            } else if enter {
+                if let Some(best) = self.best {
+                    self.selected = Some(best);
+                    self.frame_node(best);
+                }
+                self.close_search();
+            }
+        } else if open_key {
+            self.search_open = true;
+            self.search_focus_pending = true;
+        } else if esc {
+            self.selected = None;
+        }
+    }
+
+    /// Re-score all nodes when the query changed (cheap: one fuzzy match per
+    /// node per keystroke).
+    fn update_search(&mut self) {
+        if !self.search_open || self.query.is_empty() {
+            if !self.last_query.is_empty() || self.best.is_some() {
+                self.last_query.clear();
+                self.scores.fill(None);
+                self.best = None;
+            }
+            return;
+        }
+        if self.query == self.last_query {
+            return;
+        }
+        self.last_query = self.query.clone();
+        let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
+        let mut buf = Vec::new();
+        let mut best: Option<(u32, NodeId)> = None;
+        for (i, hay) in self.haystacks.iter().enumerate() {
+            let score = pattern.score(Utf32Str::new(hay, &mut buf), &mut self.matcher);
+            self.scores[i] = score;
+            if let Some(s) = score
+                && best.is_none_or(|(bs, _)| s > bs)
+            {
+                best = Some((s, NodeId(i as u32)));
+            }
+        }
+        self.best = best.map(|(_, id)| id);
+    }
+
+    fn search_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("search:");
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .hint_text("name, alias, or path — Enter jumps to best, Esc closes")
+                    .desired_width(f32::INFINITY),
+            );
+            if self.search_focus_pending {
+                resp.request_focus();
+                self.search_focus_pending = false;
+            }
+        });
     }
 
     fn world_pos(&self, i: usize) -> Pos2 {
@@ -245,6 +357,19 @@ impl Viewer {
             }
         }
 
+        // ---- lit mask: search matches win; else the active neighborhood ----
+        let searching = self.search_open && !self.query.is_empty();
+        let n_nodes = self.g.nodes.len();
+        let lit: Vec<bool> = if searching {
+            self.scores.iter().map(Option::is_some).collect()
+        } else if active.is_some() {
+            (0..n_nodes)
+                .map(|i| neighbors.contains(&NodeId(i as u32)))
+                .collect()
+        } else {
+            vec![true; n_nodes]
+        };
+
         // ---- paint ----
         let painter = ui.painter_at(rect);
 
@@ -256,9 +381,8 @@ impl Viewer {
             if !view.contains(sa) && !view.contains(sb) {
                 continue;
             }
-            let id = NodeId(i as u32);
-            let lit = active.is_none() || active == Some(id) || active == Some(parent);
-            let color = if lit { EDGE } else { EDGE.gamma_multiply(DIM) };
+            let on = lit[i] && lit[parent.0 as usize];
+            let color = if on { EDGE } else { EDGE.gamma_multiply(DIM) };
             painter.line_segment([sa, sb], Stroke::new(1.0, color));
         }
 
@@ -270,13 +394,14 @@ impl Viewer {
             if !view.contains(sa) && !view.contains(sb) {
                 continue;
             }
-            let lit = active == Some(l.from) || active == Some(l.to);
-            let (color, width) = if lit {
+            let bright = active == Some(l.from) || active == Some(l.to);
+            let on = lit[l.from.0 as usize] && lit[l.to.0 as usize];
+            let (color, width) = if bright {
                 (WIKI, 1.8)
-            } else if active.is_some() {
-                (WIKI.gamma_multiply(DIM), 1.0)
-            } else {
+            } else if on {
                 (WIKI.gamma_multiply(0.35), 1.0)
+            } else {
+                (WIKI.gamma_multiply(DIM), 1.0)
             };
             let mid = sa.lerp(sb, 0.5);
             let d = sb - sa;
@@ -292,8 +417,8 @@ impl Viewer {
         // nodes
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
-            let lit = active.is_none() || neighbors.contains(&id);
-            let dimmed = |c: Color32| if lit { c } else { c.gamma_multiply(DIM) };
+            let on = lit[id.0 as usize];
+            let dimmed = |c: Color32| if on { c } else { c.gamma_multiply(DIM) };
             match node.kind {
                 NodeKind::Ghost => {
                     painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(GHOST)));
@@ -308,6 +433,8 @@ impl Viewer {
             if active == Some(id) {
                 let color = if self.selected == Some(id) { SELECT } else { HOVER };
                 painter.circle_stroke(s, r + 3.0, Stroke::new(2.0, color));
+            } else if searching && self.best == Some(id) {
+                painter.circle_stroke(s, r + 3.0, Stroke::new(2.0, HOVER));
             } else if partners.contains(&id) {
                 painter.circle_stroke(s, r + 3.0, Stroke::new(1.5, WIKI));
             }
@@ -316,11 +443,14 @@ impl Viewer {
         // labels — LOD by screen radius; always for the active neighborhood
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
-            let lit = active.is_none() || neighbors.contains(&id);
-            let show = active == Some(id)
-                || partners.contains(&id)
-                || (lit
-                    && ((node.kind == NodeKind::Dir && r >= 3.0) || r >= 5.0));
+            let show = if searching {
+                lit[id.0 as usize] && (r >= 3.0 || self.best == Some(id))
+            } else {
+                active == Some(id)
+                    || partners.contains(&id)
+                    || (lit[id.0 as usize]
+                        && ((node.kind == NodeKind::Dir && r >= 3.0) || r >= 5.0))
+            };
             if !show {
                 continue;
             }
@@ -335,8 +465,15 @@ impl Viewer {
         }
 
         // status line
-        let status = match active.map(|id| self.g.node(id)) {
-            Some(n) => {
+        let status = if searching {
+            let count = self.scores.iter().filter(|s| s.is_some()).count();
+            format!(
+                "{count} match{} — Enter jumps to best · Esc closes",
+                if count == 1 { "" } else { "es" }
+            )
+        } else {
+            match active.map(|id| self.g.node(id)) {
+                Some(n) => {
                 let what = if n.path.is_empty() { &n.name } else { &n.path };
                 if n.kind == NodeKind::Ghost {
                     format!("[[{what}]] — not written yet")
@@ -344,13 +481,14 @@ impl Viewer {
                     what.clone()
                 }
             }
-            None => format!(
-                "{} files · {} dirs · {} links{}   |   drag node: move · drag space: pan · wheel: zoom",
-                self.n_files,
-                self.n_dirs,
-                self.g.links.len(),
-                if self.sim.active() { " · settling…" } else { "" },
-            ),
+                None => format!(
+                    "{} files · {} dirs · {} links{}   |   drag node: move · drag space: pan · wheel: zoom · / search",
+                    self.n_files,
+                    self.n_dirs,
+                    self.g.links.len(),
+                    if self.sim.active() { " · settling…" } else { "" },
+                ),
+            }
         };
         painter.text(
             rect.left_top() + Vec2::new(10.0, 8.0),
@@ -364,6 +502,11 @@ impl Viewer {
 
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.handle_keys(ui);
+        self.update_search();
+        if self.search_open {
+            egui::Panel::top("search_bar").show(ui, |ui| self.search_bar(ui));
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))
             .show(ui, |ui| self.canvas(ui));
