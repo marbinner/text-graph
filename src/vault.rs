@@ -248,9 +248,12 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
         let inner_end = inner_start + close;
         let inner = &body[inner_start..inner_end];
 
-        // "[[a[[b]]" — treat the second `[[` as the real opener.
-        if let Some(nested) = inner.find("[[") {
-            i = inner_start + nested;
+        // "[[a[[b]]" or "[[[note]]]" — treat the last `[[` before the close
+        // as the real opener. Searching from start+1 (not inner_start)
+        // catches openers that OVERLAP the first one (the "[[[" run), which
+        // a search inside `inner` misses.
+        if let Some(nested) = body[start + 1..inner_end].find("[[") {
+            i = start + 1 + nested;
             continue;
         }
         i = inner_end + 2;
@@ -321,6 +324,15 @@ mod tests {
     #[test]
     fn empty_and_heading_only_are_skipped() {
         assert_eq!(targets("[[]] [[#heading]] [[  ]]"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn bracket_runs_take_innermost_opener() {
+        // regression: "[[[note]]]" used to extract the garbage target "[note"
+        assert_eq!(targets("[[[note]]]"), ["note"]);
+        assert_eq!(targets("[[[[x]]"), ["x"]);
+        assert_eq!(targets("a [[[b]] c"), ["b"]);
+        assert_eq!(targets("[[a[[b]]"), ["b"]);
     }
 
     #[test]

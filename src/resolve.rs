@@ -114,10 +114,14 @@ fn casefold(s: &str) -> String {
 }
 
 fn strip_md(path: &str) -> &str {
-    if path.len() > 3 && path[path.len() - 3..].eq_ignore_ascii_case(".md") {
-        &path[..path.len() - 3]
-    } else {
-        path
+    // Byte-boundary-safe: get() returns None when len-3 would split a
+    // multibyte char (targets like `мир`, `éé`, or an emoji), where direct
+    // slicing panics — and this runs on every link target in the vault.
+    match path.len().checked_sub(3).and_then(|i| path.get(i..)) {
+        Some(tail) if path.len() > 3 && tail.eq_ignore_ascii_case(".md") => {
+            &path[..path.len() - 3]
+        }
+        _ => path,
     }
 }
 
@@ -145,6 +149,17 @@ mod tests {
         assert_eq!(normalize(" Note.md "), "Note");
         assert_eq!(normalize("dir\\sub\\note"), "dir/sub/note");
         assert_eq!(normalize("/notes/x/"), "notes/x");
+    }
+
+    #[test]
+    fn normalize_survives_multibyte_targets() {
+        // regression: these used to panic on a byte-slice off a char boundary
+        assert_eq!(normalize("мир"), "мир");
+        assert_eq!(normalize("éé"), "éé");
+        assert_eq!(normalize("💥"), "💥");
+        assert_eq!(normalize("日a"), "日a");
+        assert_eq!(normalize("тест.md"), "тест");
+        assert_eq!(normalize("ab"), "ab");
     }
 
     #[test]
