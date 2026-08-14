@@ -316,6 +316,13 @@ struct Viewer {
     zoom_to_card: Option<(String, String)>,
     /// Position of the `t` (cycle terminals) key, modulo the pane count.
     term_cycle: usize,
+    /// The card the terminal cursor is on: highlighted, Enter focuses it.
+    /// Unlike `focused_term`, the keyboard still belongs to the graph.
+    term_selected: Option<(String, String)>,
+    /// Fuzzy-search scores for agent panes (aligned with `agent_panes`,
+    /// re-scored every frame while searching — the pane list is live).
+    term_scores: Vec<Option<u32>>,
+    term_best: Option<usize>,
     // ---- creation (right-click menu) ----
     /// Node captured at right-click time — the context menu's subject.
     ctx_node: Option<NodeId>,
@@ -430,6 +437,9 @@ impl Viewer {
             drag_card: None,
             zoom_to_card: None,
             term_cycle: 0,
+            term_selected: None,
+            term_scores: Vec::new(),
+            term_best: None,
             ctx_node: None,
             ctx_card: None,
             create: None,
@@ -588,6 +598,13 @@ impl Viewer {
         if focus_dead {
             self.focused_term = None;
         }
+        if self
+            .term_selected
+            .as_ref()
+            .is_some_and(|(s, p)| !self.agent_panes.iter().any(|a| &a.session == s && &a.pane == p))
+        {
+            self.term_selected = None;
+        }
 
         for (s, m) in &mut self.mirrors {
             if m.pump() {
@@ -710,8 +727,18 @@ impl Viewer {
                 .term_activity
                 .get(&a.session)
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+            let searching = self.search_open && !self.query.is_empty();
+            let smatch = searching && self.term_scores.get(i).copied().flatten().is_some();
+            let sbest = searching && self.term_best == Some(i);
+            let cursor = self.term_selected.as_ref() == Some(&key);
             let (border, bw) = if focused {
                 (SELECT, 2.5)
+            } else if sbest {
+                (HOVER, 2.5)
+            } else if smatch {
+                (WIKI, 2.0)
+            } else if cursor {
+                (SELECT, 2.0)
             } else if hot {
                 (AGENT, 1.5)
             } else {
@@ -719,6 +746,15 @@ impl Viewer {
             };
             painter.rect_filled(card, 4.0, TERM_BG);
             painter.rect_stroke(card, 4.0, Stroke::new(bw, border), egui::StrokeKind::Inside);
+            if sbest {
+                // same ring the best node hit gets — Enter jumps here
+                painter.rect_stroke(
+                    card.expand(3.0),
+                    6.0,
+                    Stroke::new(1.5, HOVER),
+                    egui::StrokeKind::Outside,
+                );
+            }
             // everything inside the card is clipped to it — no overflow, ever
             let cp = painter.with_clip_rect(card);
             let title = format!("{} · {} {}", a.agent, a.session, a.pane);
@@ -945,7 +981,20 @@ impl Viewer {
             if esc {
                 self.close_search();
             } else if enter {
-                if let Some(best) = self.best {
+                // a terminal hit that outscores every node wins the jump —
+                // and lands focused, ready to type
+                let node_score = self.best.and_then(|id| self.scores[id.0 as usize]);
+                let term_score =
+                    self.term_best.and_then(|i| self.term_scores.get(i).copied().flatten());
+                if term_score > node_score
+                    && let Some(a) = self.term_best.and_then(|i| self.agent_panes.get(i))
+                {
+                    let key = (a.session.clone(), a.pane.clone());
+                    self.term_cycle = self.term_best.unwrap_or(0) + 1;
+                    self.term_selected = Some(key.clone());
+                    self.focused_term = Some(key.clone());
+                    self.fly_to_card(key);
+                } else if let Some(best) = self.best {
                     self.selected = Some(best);
                     self.frame_node(best);
                 }
@@ -955,7 +1004,16 @@ impl Viewer {
             self.search_open = true;
             self.search_focus_pending = true;
         } else if esc {
-            self.selected = None;
+            // the terminal cursor dismisses first, then node selection
+            if self.term_selected.take().is_none() {
+                self.selected = None;
+            }
+        } else if enter
+            && ui.memory(|m| m.focused().is_none())
+            && let Some(k) = self.term_selected.clone()
+        {
+            // Enter on the terminal cursor = start typing into it
+            self.focused_term = Some(k);
         } else if enter
             // if an egui widget (e.g. the detail pane's button, tab-focused)
             // has focus, Enter already activates it — don't also fire here,
@@ -974,12 +1032,13 @@ impl Viewer {
             && ui.memory(|m| m.focused().is_none())
             && !self.agent_panes.is_empty()
         {
-            // cycle through the terminal cards, flying to and focusing each
+            // hop the terminal cursor to the next card — keyboard stays on
+            // the graph so repeated t keeps hopping; Enter dives in
             let i = self.term_cycle % self.agent_panes.len();
             self.term_cycle += 1;
             let a = &self.agent_panes[i];
             let key = (a.session.clone(), a.pane.clone());
-            self.focused_term = Some(key.clone());
+            self.term_selected = Some(key.clone());
             self.fly_to_card(key);
         }
 
@@ -1314,8 +1373,32 @@ impl Viewer {
                 self.scores.fill(None);
                 self.best = None;
             }
+            self.term_scores.clear();
+            self.term_best = None;
             return;
         }
+        // Terminals re-score every frame (cheap: a handful of panes) — the
+        // pane list changes underneath the node-score cache.
+        let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
+        let mut buf = Vec::new();
+        let mut tbest: Option<(u32, usize)> = None;
+        self.term_scores = self
+            .agent_panes
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let dir = a.cwd.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                let hay = format!("{} {} {} {}", a.agent, a.session, a.pane, dir);
+                let score = pattern.score(Utf32Str::new(&hay, &mut buf), &mut self.matcher);
+                if let Some(s) = score
+                    && tbest.is_none_or(|(bs, _)| s > bs)
+                {
+                    tbest = Some((s, i));
+                }
+                score
+            })
+            .collect();
+        self.term_best = tbest.map(|(_, i)| i);
         if self.query == self.last_query {
             return;
         }
@@ -1574,11 +1657,22 @@ impl Viewer {
         }
         if response.clicked() {
             if let Some(t) = over_card.clone() {
+                // clicking also parks the t-cursor here, so cycling resumes
+                // from this card
+                if let Some(i) = self
+                    .agent_panes
+                    .iter()
+                    .position(|a| a.session == t.0 && a.pane == t.1)
+                {
+                    self.term_cycle = i + 1;
+                }
+                self.term_selected = Some(t.clone());
                 self.focused_term = Some(t);
                 self.close_search();
             } else if self.focused_term.is_some() {
                 self.focused_term = None; // click-away releases; click again to select
             } else {
+                self.term_selected = None;
                 self.selected = self.hover;
             }
         }
@@ -1751,10 +1845,16 @@ impl Viewer {
             format!("typing into {s} {p} — Ctrl+Q or click away releases")
         } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
+            let tcount = self.term_scores.iter().flatten().count();
+            let terms = if tcount > 0 { format!(" + {tcount} terminals") } else { String::new() };
             format!(
-                "{count} match{} — Enter jumps to best · Esc closes",
+                "{count} match{}{terms} — Enter jumps to best · Esc closes",
                 if count == 1 { "" } else { "es" }
             )
+        } else if active.is_none()
+            && let Some((s, p)) = &self.term_selected
+        {
+            format!("{s} {p} — Enter types into it · t next · Esc dismisses")
         } else {
             match active.map(|id| self.g.node(id)) {
                 Some(n) => {

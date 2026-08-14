@@ -60,12 +60,12 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **New terminal** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
 | right-click a terminal card | additionally: **Attach in terminal…** (a real terminal window on the same session) and **Kill terminal** (confirm submenu) |
-| `/` or `Ctrl+F` | fuzzy search over names, aliases, and paths; matches stay lit, `Enter` jumps to the ringed best hit, `Esc` closes |
+| `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals (agent name, session, folder); matches stay lit, `Enter` jumps to the ringed best hit — a winning terminal lands focused, ready to type |
 | `f` | frame the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
 | `h` `j` `k` `l` | pan left/down/up/right (vim-style; hold to glide) |
 | `u` / `d` | zoom in / out |
-| `t` | cycle through terminal cards — flies to and focuses each in turn |
+| `t` | hop the terminal cursor from card to card (flies to each); `Enter` starts typing into the highlighted one, `Esc` dismisses |
 | `Esc` | close search, else deselect |
 | click a terminal card | focus it — the keyboard now types into that agent |
 | double-click a terminal card | fly the view into that terminal: zooms to a readable size and centers it |
@@ -118,10 +118,12 @@ of the folder the agent runs in. Zoomed out it's a summary (`claude · work %0`,
 `in notes/ · active|idle 3m`); zoom in and it becomes the full styled screen —
 colors, cursor, everything, mirrored in real time.
 
-**Click the card and type** (or press `t` to hop from card to card). Every
-key goes to the agent — Enter, Esc, arrows, Shift+Tab, Ctrl chords
-including Ctrl+C to interrupt — while graph keybinds suspend; `Ctrl+Q` or
-clicking empty space gives you the graph back.
+**Click the card and type** — or drive it all from the keyboard: `t` hops
+a highlight from card to card, `Enter` dives into the highlighted one, and
+`/` finds an agent by name, session, or folder (`Enter` lands focused).
+While focused, every key goes to the agent — Enter, Esc, arrows,
+Shift+Tab, Ctrl chords including Ctrl+C to interrupt — and graph keybinds
+suspend; `Ctrl+Q` or clicking empty space gives you the graph back.
 **Double-click a card** to fly the view into it: the graph zooms to a level
 where the terminal is full-size and readable, centered on that card — pan
 or zoom back out whenever you like. A card stays up for the pane's whole
