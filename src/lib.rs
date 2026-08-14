@@ -11,6 +11,7 @@
 
 pub mod agents;
 pub mod graph;
+pub mod keys;
 pub mod layout;
 pub mod mirror;
 pub mod resolve;

@@ -37,6 +37,11 @@ enum Pending {
     Ignore,
     ListPanes,
     Capture(PaneId),
+    /// Restore the true cursor after a capture replay — the replay itself
+    /// leaves the parser's cursor at the bottom of the fed content, while
+    /// the real pane's cursor may be anywhere (found via the failing
+    /// `typed_input_round_trips` test: echo landed on the last row).
+    Cursor(PaneId),
 }
 
 pub struct SessionMirror {
@@ -123,6 +128,10 @@ impl SessionMirror {
                                     self.panes.insert(id.to_string(), vt100::Parser::new(h, w, 0));
                                     let cmd = format!("capture-pane -peq -t {id}");
                                     self.send(Pending::Capture(id.to_string()), &cmd);
+                                    let cmd = format!(
+                                        "display-message -p -t {id} '#{{cursor_y}},#{{cursor_x}}'"
+                                    );
+                                    self.send(Pending::Cursor(id.to_string()), &cmd);
                                 }
                             }
                             let keep: Vec<&str> =
@@ -140,6 +149,17 @@ impl SessionMirror {
                                 let mut fresh = vt100::Parser::new(h, w, 0);
                                 fresh.process(lines.join("\r\n").as_bytes());
                                 *p = fresh;
+                                changed = true;
+                            }
+                        }
+                        Some(Pending::Cursor(id)) if !error => {
+                            if let (Some(p), Some(line)) =
+                                (self.panes.get_mut(&id), lines.first())
+                                && let Some((y, x)) = line.split_once(',')
+                                && let (Ok(y), Ok(x)) = (y.parse::<u16>(), x.parse::<u16>())
+                            {
+                                let cup = format!("\x1b[{};{}H", y + 1, x + 1);
+                                p.process(cup.as_bytes());
                                 changed = true;
                             }
                         }

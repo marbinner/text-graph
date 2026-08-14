@@ -18,6 +18,7 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use text_graph::agents::{self, AgentPane};
 use text_graph::graph::{Graph, Node, NodeId, NodeKind};
+use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
 use text_graph::{graph, vault};
@@ -141,6 +142,58 @@ fn hash_angle(session: &str, pane: &str, index: usize) -> f32 {
     (h % 628) as f32 / 100.0
 }
 
+fn map_key(key: Key) -> Option<Special> {
+    Some(match key {
+        Key::Enter => Special::Enter,
+        Key::Tab => Special::Tab,
+        Key::Backspace => Special::Backspace,
+        Key::Escape => Special::Escape,
+        Key::ArrowUp => Special::Up,
+        Key::ArrowDown => Special::Down,
+        Key::ArrowLeft => Special::Left,
+        Key::ArrowRight => Special::Right,
+        Key::Home => Special::Home,
+        Key::End => Special::End,
+        Key::PageUp => Special::PageUp,
+        Key::PageDown => Special::PageDown,
+        Key::Delete => Special::Delete,
+        Key::Insert => Special::Insert,
+        Key::F1 => Special::F(1),
+        Key::F2 => Special::F(2),
+        Key::F3 => Special::F(3),
+        Key::F4 => Special::F(4),
+        Key::F5 => Special::F(5),
+        Key::F6 => Special::F(6),
+        Key::F7 => Special::F(7),
+        Key::F8 => Special::F(8),
+        Key::F9 => Special::F(9),
+        Key::F10 => Special::F(10),
+        Key::F11 => Special::F(11),
+        Key::F12 => Special::F(12),
+        _ => return None,
+    })
+}
+
+/// Characters reachable for Ctrl chords (plain characters arrive as text).
+fn key_char(key: Key) -> Option<char> {
+    use Key::*;
+    Some(match key {
+        A => 'a', B => 'b', C => 'c', D => 'd', E => 'e', F => 'f', G => 'g',
+        H => 'h', I => 'i', J => 'j', K => 'k', L => 'l', M => 'm', N => 'n',
+        O => 'o', P => 'p', Q => 'q', R => 'r', S => 's', T => 't', U => 'u',
+        V => 'v', W => 'w', X => 'x', Y => 'y', Z => 'z',
+        Num0 => '0', Num1 => '1', Num2 => '2', Num3 => '3', Num4 => '4',
+        Num5 => '5', Num6 => '6', Num7 => '7', Num8 => '8', Num9 => '9',
+        Space => ' ',
+        OpenBracket => '[',
+        CloseBracket => ']',
+        Backslash => '\\',
+        Slash => '/',
+        Minus => '-',
+        _ => return None,
+    })
+}
+
 /// Everything `derived()` recomputes from a fresh graph.
 struct Derived {
     radius: Vec<f32>,
@@ -228,6 +281,10 @@ struct Viewer {
     term_cache: HashMap<(String, String), CachedPane>,
     term_gen: HashMap<String, u64>,
     term_activity: HashMap<String, Instant>,
+    /// Keyboard goes to this pane instead of the graph.
+    focused_term: Option<(String, String)>,
+    /// Card hit-boxes from the last paint (screen space).
+    term_rects: Vec<(String, String, Rect)>,
 }
 
 impl Viewer {
@@ -310,6 +367,59 @@ impl Viewer {
             term_cache: HashMap::new(),
             term_gen: HashMap::new(),
             term_activity: HashMap::new(),
+            focused_term: None,
+            term_rects: Vec::new(),
+        }
+    }
+
+    /// Forward this frame's keyboard input to the focused pane. Text and
+    /// Ctrl-chords go as raw hex; special keys go as tmux key names so tmux
+    /// applies the pane's terminal modes.
+    fn forward_input(&mut self, ui: &egui::Ui) {
+        let Some((session, pane)) = self.focused_term.clone() else { return };
+        if !self.mirrors.contains_key(&session) {
+            self.focused_term = None;
+            return;
+        }
+        let events = ui.input(|i| i.events.clone());
+        let mut cmds: Vec<String> = Vec::new();
+        for ev in &events {
+            match ev {
+                egui::Event::Text(t) if !t.is_empty() => {
+                    cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
+                }
+                egui::Event::Paste(t) if !t.is_empty() => {
+                    cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
+                }
+                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                    if modifiers.ctrl && modifiers.shift && *key == Key::Q {
+                        continue; // the release chord, handled in ui()
+                    }
+                    let mods = Mods {
+                        ctrl: modifiers.ctrl,
+                        alt: modifiers.alt,
+                        shift: modifiers.shift,
+                    };
+                    if let Some(sp) = map_key(*key) {
+                        cmds.push(keys::special_cmd(&pane, sp, mods));
+                    } else if mods.ctrl
+                        && let Some(c) = key_char(*key)
+                        && let Some(cmd) = keys::chord_cmd(&pane, c, mods)
+                    {
+                        // ctrl suppresses the text event, so no double-send;
+                        // alt-only letters arrive as plain text (v1 limit)
+                        cmds.push(cmd);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !cmds.is_empty()
+            && let Some(m) = self.mirrors.get_mut(&session)
+        {
+            for c in &cmds {
+                m.command(c);
+            }
         }
     }
 
@@ -356,6 +466,13 @@ impl Viewer {
         self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));
+        let focus_dead = self
+            .focused_term
+            .as_ref()
+            .is_some_and(|(s, _)| !self.mirrors.contains_key(s));
+        if focus_dead {
+            self.focused_term = None;
+        }
 
         for (s, m) in &mut self.mirrors {
             if m.pump() {
@@ -399,7 +516,8 @@ impl Viewer {
         }
     }
 
-    fn paint_terminals(&self, painter: &egui::Painter, rect: Rect, view: Rect) {
+    fn paint_terminals(&mut self, painter: &egui::Painter, rect: Rect, view: Rect) {
+        self.term_rects.clear();
         if self.agent_panes.is_empty() {
             return;
         }
@@ -430,6 +548,7 @@ impl Viewer {
             if !view.intersects(card) {
                 continue;
             }
+            self.term_rects.push((a.session.clone(), a.pane.clone(), card));
 
             painter.extend(egui::Shape::dashed_line(
                 &[anchor_s, card.left_center()],
@@ -438,20 +557,42 @@ impl Viewer {
                 4.0,
             ));
 
+            let focused = self
+                .focused_term
+                .as_ref()
+                .is_some_and(|(fs, fp)| fs == &a.session && fp == &a.pane);
             let hot = self
                 .term_activity
                 .get(&a.session)
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
-            let border = if hot { AGENT } else { TERM_BORDER };
+            let (border, bw) = if focused {
+                (SELECT, 2.5)
+            } else if hot {
+                (AGENT, 1.5)
+            } else {
+                (TERM_BORDER, 1.5)
+            };
             painter.rect_filled(card, 4.0, TERM_BG);
-            painter.rect_stroke(card, 4.0, Stroke::new(1.5, border), egui::StrokeKind::Inside);
-            let title = format!("{} · {} {}", a.agent, a.session, a.pane);
+            painter.rect_stroke(card, 4.0, Stroke::new(bw, border), egui::StrokeKind::Inside);
+            let title = format!(
+                "{} · {} {}{}",
+                a.agent,
+                a.session,
+                a.pane,
+                if focused { "  · typing — Ctrl+Shift+Q releases" } else { "" }
+            );
             painter.text(
                 card.left_top() + Vec2::new(pad, 2.0),
                 Align2::LEFT_TOP,
                 title,
                 FontId::proportional(11.0),
-                if hot { AGENT } else { TEXT },
+                if focused {
+                    SELECT
+                } else if hot {
+                    AGENT
+                } else {
+                    TEXT
+                },
             );
 
             if compact {
@@ -877,12 +1018,20 @@ impl Viewer {
             visible.push((NodeId(i as u32), s, r));
         }
 
-        // ---- hover / select ----
+        // ---- hover / select (terminal cards sit on top and win) ----
+        let over_card: Option<(String, String)> = response.hover_pos().and_then(|c| {
+            self.term_rects
+                .iter()
+                .find(|(_, _, r)| r.contains(c))
+                .map(|(s, p, _)| (s.clone(), p.clone()))
+        });
         if let Some(id) = self.drag_node {
             self.hover = Some(id);
         } else {
             self.hover = None;
-            if let Some(cursor) = response.hover_pos() {
+            if over_card.is_none()
+                && let Some(cursor) = response.hover_pos()
+            {
                 let mut best = f32::INFINITY;
                 for &(id, s, r) in &visible {
                     let d = s.distance(cursor);
@@ -894,9 +1043,17 @@ impl Viewer {
             }
         }
         if response.clicked() {
-            self.selected = self.hover;
+            if let Some(t) = over_card.clone() {
+                self.focused_term = Some(t);
+                self.close_search();
+            } else if self.focused_term.is_some() {
+                self.focused_term = None; // click-away releases; click again to select
+            } else {
+                self.selected = self.hover;
+            }
         }
         if response.double_clicked()
+            && over_card.is_none()
             && let Some(h) = self.hover
         {
             self.open_in_editor(h);
@@ -1038,7 +1195,9 @@ impl Viewer {
         self.paint_terminals(&painter, rect, view);
 
         // status line
-        let status = if searching {
+        let status = if let Some((s, p)) = &self.focused_term {
+            format!("typing into {s} {p} — Ctrl+Shift+Q or click away releases")
+        } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
             format!(
                 "{count} match{} — Enter jumps to best · Esc closes",
@@ -1179,7 +1338,16 @@ impl eframe::App for Viewer {
         if due {
             self.rebuild();
         }
-        self.handle_keys(ui);
+        let release = ui.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::Q));
+        if release {
+            self.focused_term = None;
+        }
+        if self.focused_term.is_some() {
+            // keyboard belongs to the terminal; graph keybinds are suspended
+            self.forward_input(ui);
+        } else {
+            self.handle_keys(ui);
+        }
         self.update_search();
         if self.search_open {
             egui::Panel::top("search_bar").show(ui, |ui| self.search_bar(ui));
