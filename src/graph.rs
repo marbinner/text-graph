@@ -27,10 +27,24 @@ pub struct Node {
     pub name: String,
     /// `title:` from frontmatter, files only.
     pub title: Option<String>,
+    /// `aliases:` from frontmatter, files only — alternate link names.
+    pub aliases: Vec<String>,
     /// Contains-parent. None for the root and for ghosts.
     pub parent: Option<NodeId>,
     /// Sorted: dirs first, then by name.
     pub children: Vec<NodeId>,
+}
+
+impl Node {
+    /// Human-facing label: explicit title, else first alias, else stem/name.
+    /// (Vaults with timestamped filenames typically carry the human name in
+    /// `aliases:` — labels must not show raw stems there.)
+    pub fn display_name(&self) -> &str {
+        self.title
+            .as_deref()
+            .or_else(|| self.aliases.first().map(String::as_str))
+            .unwrap_or(&self.name)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -117,6 +131,7 @@ pub fn build(scan: VaultScan) -> Graph {
         path: String::new(),
         name: root_name,
         title: None,
+        aliases: Vec::new(),
         parent: None,
         children: Vec::new(),
     });
@@ -134,6 +149,7 @@ pub fn build(scan: VaultScan) -> Graph {
             path: file.rel_path.clone(),
             name,
             title: file.title,
+            aliases: file.aliases,
             parent: Some(parent),
             children: Vec::new(),
         });
@@ -170,6 +186,7 @@ fn ensure_dirs(g: &mut Graph, dir_ids: &mut HashMap<String, NodeId>, rel_path: &
                     path: acc.clone(),
                     name: comp.to_string(),
                     title: None,
+                    aliases: Vec::new(),
                     parent: Some(parent),
                     children: Vec::new(),
                 });

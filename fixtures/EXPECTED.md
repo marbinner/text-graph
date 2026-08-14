@@ -24,6 +24,8 @@ commit.
 | Block suffix stripped for resolution | `[[scratch#^abc123]]` → scratch.md |
 | Unresolved target → Ghost node + edge | `[[missing-note]]`, `[[nonexistent/deep/ghost]]` |
 | Self-links resolve but are dropped (no self-loop edge) | `[[readme]]` inside `notes/readme.md` |
+| Alias resolution (frontmatter `aliases:`) | `[[rustlang]]` in 2026-08-13.md → `languages/rust.md` |
+| Stem beats alias, silently | alias `empty` on languages/rust.md must not capture `[[empty]]`, no ambiguity flagged |
 | Garbage frontmatter → warning, body still parsed | `notes/scratch.md` (its `[[index]]` link must still be extracted) |
 | Missing frontmatter is fine | `projects/ideas.md`, daily notes |
 | Frontmatter-only file, empty file | `frontmatter-only.md`, `empty.md` |
@@ -45,7 +47,7 @@ commit.
 | Kind | Count | Notes |
 |---|---|---|
 | Contains | 18 | 13 files + 5 non-root dirs, one parent each |
-| WikiLink | 17 | 15 resolved to Files + 2 to Ghosts |
+| WikiLink | 18 | 16 resolved to Files + 2 to Ghosts |
 
 ### WikiLink edges by source
 
@@ -56,19 +58,20 @@ commit.
 | projects/ideas.md | | nonexistent/deep/ghost |
 | notes/readme.md | topics/grafér | |
 | notes/scratch.md | index | |
+| notes/daily/2026-08-13.md | languages/rust (via alias `rustlang`) | |
 | notes/daily/2026-08-14.md | notes/daily/2026-08-13, projects/rust-app | |
 | topics/rust.md | languages/rust | |
 | topics/grafér.md | index | |
 | bom.md | empty | |
 | (all others) | — | — |
 
-Per-source totals: 3+5+1+1+2+1+1+1 = 15 file edges; 2 ghost edges.
+Per-source totals: 3+5+1+1+1+2+1+1+1 = 16 file edges; 2 ghost edges.
 
 ## Other expected stats
 
 - Parse warnings: **1** (scratch.md frontmatter)
 - Ambiguous resolutions: **1** (`[[rust]]`)
-- Raw `[[` occurrences in countable files: **21** = 17 edges + 2 code traps
+- Raw `[[` occurrences in countable files: **22** = 18 edges + 2 code traps
   + 1 embed + 1 dropped self-link (useful cross-check when editing the vault)
 - Depth histogram — dirs: d0×1 (root), d1×4, d2×1 (daily);
   files: d1×4, d2×7, d3×2

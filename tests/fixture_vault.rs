@@ -36,7 +36,7 @@ fn expected_counts() {
     assert_eq!(s.dirs, 6, "dir nodes (assets pruned)");
     assert_eq!(s.ghosts, 2, "ghost nodes");
     assert_eq!(s.contains_edges, 18);
-    assert_eq!(s.wiki_to_files, 15);
+    assert_eq!(s.wiki_to_files, 16);
     assert_eq!(s.wiki_to_ghosts, 2);
     assert_eq!(s.warnings, 1, "scratch.md frontmatter");
     assert_eq!(s.errors, 0);
@@ -98,6 +98,17 @@ fn garbage_frontmatter_warns_but_body_links_survive() {
 }
 
 #[test]
+fn alias_resolution_works_and_stem_beats_alias() {
+    let g = build_fixture();
+    // [[rustlang]] resolves via frontmatter aliases, not by filename
+    assert!(has_link(&g, "notes/daily/2026-08-13.md", "languages/rust.md"));
+    // languages/rust.md also carries alias "empty", but the stem empty.md
+    // wins — silently, with no ambiguity recorded
+    assert!(has_link(&g, "bom.md", "empty.md"));
+    assert_eq!(g.ambiguities.len(), 1, "only [[rust]] is ambiguous");
+}
+
+#[test]
 fn traps_embeds_and_skip_dirs_leave_no_trace() {
     let g = build_fixture();
     // code-fence / inline-code links would surface as ghost nodes if extracted
@@ -135,6 +146,45 @@ fn deterministic_across_builds() {
     assert_eq!(paths(&a), paths(&b));
     assert_eq!(links(&a), links(&b));
     assert_eq!(children(&a), children(&b));
+}
+
+#[test]
+fn radial_layout_places_every_tree_node_and_no_ghosts() {
+    let g = build_fixture();
+    let pos = text_graph::layout::radial(&g);
+    for (i, node) in g.nodes.iter().enumerate() {
+        match node.kind {
+            NodeKind::Ghost => assert!(pos[i].is_none(), "ghost placed: {}", node.path),
+            _ => {
+                let p = pos[i].unwrap_or_else(|| panic!("unplaced node: {}", node.path));
+                assert!(p.x.is_finite() && p.y.is_finite(), "non-finite: {}", node.path);
+            }
+        }
+    }
+    let r = pos[g.root.0 as usize].unwrap();
+    assert_eq!((r.x, r.y), (0.0, 0.0), "root at origin");
+}
+
+#[test]
+fn radial_layout_is_deterministic_and_siblings_are_distinct() {
+    let g = build_fixture();
+    let a = text_graph::layout::radial(&g);
+    let b = text_graph::layout::radial(&g);
+    assert_eq!(a, b);
+    for node in &g.nodes {
+        for (i, &c1) in node.children.iter().enumerate() {
+            for &c2 in &node.children[i + 1..] {
+                let (p1, p2) = (a[c1.0 as usize].unwrap(), a[c2.0 as usize].unwrap());
+                let d = ((p1.x - p2.x).powi(2) + (p1.y - p2.y).powi(2)).sqrt();
+                assert!(
+                    d > 1.0,
+                    "siblings overlap: {} vs {}",
+                    g.node(c1).path,
+                    g.node(c2).path
+                );
+            }
+        }
+    }
 }
 
 #[test]

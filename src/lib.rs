@@ -8,6 +8,7 @@
 //! → [`stats`] reports on the result.
 
 pub mod graph;
+pub mod layout;
 pub mod resolve;
 pub mod stats;
 pub mod vault;

@@ -1,8 +1,9 @@
 //! Obsidian-style wikilink resolution.
 //!
-//! Rules: casefolded matching; a bare name matches any file with that stem; a
-//! target containing `/` matches by path-component suffix (so any unambiguous
-//! suffix of a path works). Ambiguity resolves to the lexicographically
+//! Rules: casefolded matching; a bare name matches files by stem first, then
+//! by frontmatter `aliases:`; a target containing `/` matches by
+//! path-component suffix (so any unambiguous suffix of a path works).
+//! Ambiguity resolves to the lexicographically
 //! smallest path and is flagged. Unresolved targets become Ghost nodes.
 //! Self-links resolve and are then dropped. Duplicate (from, to) edges are
 //! deduplicated.
@@ -25,6 +26,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
     // sorted-path order, so the first candidate in any bucket is the
     // lexicographically smallest path — the deterministic ambiguity winner.
     let mut by_stem: HashMap<String, Vec<NodeId>> = HashMap::new();
+    let mut by_alias: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut comp_paths: Vec<(NodeId, Vec<String>)> = Vec::new();
     for (idx, node) in g.nodes.iter().enumerate() {
         if node.kind != NodeKind::File {
@@ -32,6 +34,9 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
         }
         let id = NodeId(idx as u32);
         by_stem.entry(casefold(&node.name)).or_default().push(id);
+        for alias in &node.aliases {
+            by_alias.entry(casefold(alias)).or_default().push(id);
+        }
         comp_paths.push((id, strip_md(&node.path).split('/').map(casefold).collect()));
     }
 
@@ -55,7 +60,12 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                     .map(|(id, _)| *id)
                     .collect()
             } else {
-                by_stem.get(&casefold(&target)).cloned().unwrap_or_default()
+                let key = casefold(&target);
+                // filename (stem) matches take precedence over alias matches
+                match by_stem.get(&key) {
+                    Some(v) => v.clone(),
+                    None => by_alias.get(&key).cloned().unwrap_or_default(),
+                }
             };
 
             let to = match candidates.len() {
@@ -65,6 +75,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                         path: target.clone(),
                         name: target.clone(),
                         title: None,
+                        aliases: Vec::new(),
                         parent: None,
                         children: Vec::new(),
                     })

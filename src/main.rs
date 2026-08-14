@@ -3,33 +3,31 @@ use std::process::ExitCode;
 
 use text_graph::{graph, stats, vault};
 
+mod app;
+
 const USAGE: &str = "\
 text-graph — markdown vault graph viewer
 
 usage:
+  text-graph <vault-path>         open the graph window
   text-graph stats <vault-path>   headless vault statistics
-  text-graph <vault-path>         (GUI arrives in milestone B; runs stats)
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let strs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let path = match strs[..] {
-        ["stats", p] => p,
-        [p] if !p.starts_with('-') => {
-            eprintln!("(GUI arrives in milestone B — showing stats)\n");
-            p
-        }
+    match strs[..] {
+        ["stats", p] => match run_stats(Path::new(p)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::FAILURE
+            }
+        },
+        [p] if !p.starts_with('-') => app::run(Path::new(p)),
         _ => {
             eprint!("{USAGE}");
-            return ExitCode::from(2);
-        }
-    };
-    match run_stats(Path::new(path)) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e:#}");
-            ExitCode::FAILURE
+            ExitCode::from(2)
         }
     }
 }

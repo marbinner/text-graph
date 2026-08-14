@@ -17,6 +17,8 @@ pub struct RawFile {
     pub rel_path: String,
     /// `title:` from frontmatter, if present.
     pub title: Option<String>,
+    /// `aliases:` (or singular `alias:`) from frontmatter — alternate link names.
+    pub aliases: Vec<String>,
     /// Extracted wikilink targets, in document order.
     pub links: Vec<RawLink>,
     /// Non-fatal parse problem (e.g. invalid frontmatter YAML).
@@ -127,36 +129,57 @@ fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
     // A UTF-8 BOM must not confuse frontmatter detection or the first link.
     let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
 
-    let (title, body, warning) = split_frontmatter(text);
+    let (fm, body, warning) = split_frontmatter(text);
     let links = extract_links(body);
-    RawFile { rel_path, title, links, warning }
+    RawFile { rel_path, title: fm.title, aliases: fm.aliases, links, warning }
 }
 
-/// Split off `--- ... ---` frontmatter. Returns (title, body, warning).
+#[derive(Debug, Default)]
+struct FmData {
+    title: Option<String>,
+    aliases: Vec<String>,
+}
+
+/// Split off `--- ... ---` frontmatter. Returns (data, body, warning).
 ///
 /// No opener or no closing delimiter → the whole text is the body. Delimiters
 /// present but YAML invalid → warning, body still parsed (links in the body
 /// of a file with broken frontmatter must survive).
-fn split_frontmatter(text: &str) -> (Option<String>, &str, Option<String>) {
+fn split_frontmatter(text: &str) -> (FmData, &str, Option<String>) {
     let Some((yaml, body)) = frontmatter_span(text) else {
-        return (None, text, None);
+        return (FmData::default(), text, None);
     };
     if yaml.trim().is_empty() {
-        return (None, body, None);
+        return (FmData::default(), body, None);
     }
     // Deserialize into a generic Value rather than a struct: real vaults have
     // numeric/date titles and arbitrary extra fields, none of which should
     // produce warnings.
     match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml) {
         Ok(v) => {
-            let title = v.get("title").and_then(|t| match t {
-                serde_yaml_ng::Value::String(s) => Some(s.clone()),
-                serde_yaml_ng::Value::Number(n) => Some(n.to_string()),
-                _ => None,
-            });
-            (title, body, None)
+            let title = v.get("title").and_then(yaml_str);
+            let mut aliases = Vec::new();
+            for key in ["aliases", "alias"] {
+                match v.get(key) {
+                    Some(serde_yaml_ng::Value::Sequence(items)) => {
+                        aliases.extend(items.iter().filter_map(yaml_str));
+                    }
+                    Some(other) => aliases.extend(yaml_str(other)),
+                    None => {}
+                }
+            }
+            (FmData { title, aliases }, body, None)
         }
-        Err(e) => (None, body, Some(format!("invalid frontmatter: {e}"))),
+        Err(e) => (FmData::default(), body, Some(format!("invalid frontmatter: {e}"))),
+    }
+}
+
+/// Scalars usable as names: strings and numbers.
+fn yaml_str(v: &serde_yaml_ng::Value) -> Option<String> {
+    match v {
+        serde_yaml_ng::Value::String(s) => Some(s.clone()),
+        serde_yaml_ng::Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 
@@ -290,39 +313,48 @@ mod tests {
 
     #[test]
     fn frontmatter_valid() {
-        let (t, body, w) = split_frontmatter("---\ntitle: Hi\n---\nbody");
-        assert_eq!(t.as_deref(), Some("Hi"));
+        let (fm, body, w) = split_frontmatter("---\ntitle: Hi\n---\nbody");
+        assert_eq!(fm.title.as_deref(), Some("Hi"));
         assert_eq!(body, "body");
         assert!(w.is_none());
     }
 
     #[test]
     fn frontmatter_crlf() {
-        let (t, body, w) = split_frontmatter("---\r\ntitle: Hi\r\n---\r\nbody");
-        assert_eq!(t.as_deref(), Some("Hi"));
+        let (fm, body, w) = split_frontmatter("---\r\ntitle: Hi\r\n---\r\nbody");
+        assert_eq!(fm.title.as_deref(), Some("Hi"));
         assert_eq!(body, "body");
         assert!(w.is_none());
     }
 
     #[test]
     fn frontmatter_numeric_title_is_fine() {
-        let (t, _, w) = split_frontmatter("---\ntitle: 42\n---\n");
-        assert_eq!(t.as_deref(), Some("42"));
+        let (fm, _, w) = split_frontmatter("---\ntitle: 42\n---\n");
+        assert_eq!(fm.title.as_deref(), Some("42"));
         assert!(w.is_none());
     }
 
     #[test]
+    fn frontmatter_aliases_list_and_singular() {
+        let (fm, _, w) = split_frontmatter("---\naliases: [SAE, Sparse Autoencoder]\n---\n");
+        assert!(w.is_none());
+        assert_eq!(fm.aliases, ["SAE", "Sparse Autoencoder"]);
+        let (fm, _, _) = split_frontmatter("---\nalias: One\n---\n");
+        assert_eq!(fm.aliases, ["One"]);
+    }
+
+    #[test]
     fn frontmatter_garbage_warns_but_body_survives() {
-        let (t, body, w) = split_frontmatter("---\ntitle: [broken\n---\n[[x]]");
-        assert!(t.is_none());
+        let (fm, body, w) = split_frontmatter("---\ntitle: [broken\n---\n[[x]]");
+        assert!(fm.title.is_none());
         assert!(w.is_some());
         assert_eq!(extract_links(body).len(), 1);
     }
 
     #[test]
     fn no_closing_delimiter_means_no_frontmatter() {
-        let (t, body, w) = split_frontmatter("---\ntitle: Hi\nno close");
-        assert!(t.is_none() && w.is_none());
+        let (fm, body, w) = split_frontmatter("---\ntitle: Hi\nno close");
+        assert!(fm.title.is_none() && w.is_none());
         assert!(body.starts_with("---"));
     }
 }
