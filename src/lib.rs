@@ -10,5 +10,6 @@
 pub mod graph;
 pub mod layout;
 pub mod resolve;
+pub mod sim;
 pub mod stats;
 pub mod vault;

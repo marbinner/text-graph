@@ -79,17 +79,23 @@ commit one:
 
 ## Layout
 
-Radial tree over the `Contains` spine: root at center, rings by depth, each subtree's
-angular sector proportional to its leaf count. Two DFS passes, O(n), microseconds at 5k
-nodes. Deterministic positions are the feature — they're what let spatial memory build
-up, which force-directed hairballs (Obsidian's approach) never allow.
+**Force-directed (Obsidian-style), seeded by the deterministic radial layout.** The
+radial tree (root at center, sector per subtree ∝ leaf count — pure function in
+`layout/`, O(n), tested without a window) provides initial positions; `sim/` then runs
+a d3-style force simulation: springs on Contains + WikiLink edges, pairwise repulsion,
+weak gravity, alpha cooling. No randomness anywhere, so the same vault still settles
+into the same picture every run — the seed is what buys reproducibility back from a
+force layout.
 
-- `layout/` is a **pure function**: graph in, `Vec<Pos>` out, zero egui types. Snapshot-
-  testable without a window.
-- Cross-links draw as curved chords, hovered/selected node only.
-- Known stress case: the 800-sibling folder (`daily/`). Fix is collapse-by-default above
-  N children (milestone D); the fixture for it exists from A.
-- Force relaxation, if ever, is a later toggle seeded from deterministic positions.
+- Animated settling; sim stops at alpha-min, after which egui idles at ~0% CPU.
+- Dragging a node pins it and reheats the sim (the graph responds live).
+- Hover dims everything outside the active node's neighborhood; node radius scales
+  with degree; ghosts participate, seeded next to their first referencer.
+- Wikilinks always visible as faint curves, bright when touching the active node.
+- Repulsion is O(n²) — fine into the low thousands; Barnes–Hut quadtree is the
+  milestone-D upgrade if profiling demands it.
+- Known stress case: the 800-sibling folder becomes a large disc around its dir hub.
+  Collapse-by-default above N children remains the milestone-D fix.
 
 ---
 
