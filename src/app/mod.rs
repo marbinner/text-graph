@@ -43,6 +43,8 @@ const HOVER: Color32 = Color32::from_rgb(0xff, 0xb4, 0x54);
 const SELECT: Color32 = Color32::from_rgb(0xff, 0x8a, 0x3d);
 const WIKI: Color32 = Color32::from_rgb(0xe0, 0xaf, 0x68);
 const TEXT: Color32 = Color32::from_rgb(0x9a, 0xa0, 0xac);
+/// Incoming links in the navigator's connections strip.
+const LINK_IN: Color32 = Color32::from_rgb(0xbb, 0x9a, 0xf7);
 
 /// Dim factor applied to everything outside the active node's neighborhood.
 const DIM: f32 = 0.18;
@@ -721,15 +723,22 @@ impl Viewer {
                     .is_some_and(|a| a.ours);
                 // no resize from compact LOD: the fixed summary box gives no
                 // feedback and its ~1.5px cell advance makes a twitch reflow
-                // the real session by dozens of columns
-                let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0;
+                // the real session by dozens of columns. Cursor/focused cards
+                // render expanded at any zoom, so they're never compact.
+                let expanded = self.terms.focused.as_ref() == Some(&t)
+                    || self.terms.cursor.as_ref() == Some(&t);
+                let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0 && !expanded;
                 if on_handle
                     && ours
                     && !compact
                     && let Some(c) = self.terms.cache.get(&t)
                     && let Some(pos) = response.hover_pos()
                 {
-                    let f = (6.0 * self.zoom).clamp(2.5, 16.0);
+                    // cell metrics must match what the card is rendered at
+                    let mut f = (6.0 * self.zoom).clamp(2.5, 16.0);
+                    if expanded {
+                        f = f.max(terminals::EXPAND_FONT);
+                    }
                     let probe = ui.painter().layout_no_wrap(
                         "M".into(),
                         FontId::monospace(f),

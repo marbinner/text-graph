@@ -3,6 +3,7 @@
 //! (launch / kill / external attach).
 
 use super::actions::{detached, new_terminal_window};
+use super::*;
 
 /// All terminal-card state, grouped: discovery, mirrors, screen caches,
 /// focus/cursor, arrangement, gestures, and search scores.
@@ -75,10 +76,15 @@ impl Terminals {
         }
     }
 }
-use super::*;
 
 /// Zoom level a double-clicked card flies to — full styled screen, readable.
 pub(super) const CARD_ZOOM: f32 = 2.2;
+
+/// Font a cursor-selected/focused card expands to regardless of zoom.
+pub(super) const EXPAND_FONT: f32 = 13.0;
+
+/// Border/title color for the card that owns the keyboard.
+const TERM_FOCUS: Color32 = Color32::from_rgb(0x56, 0xd4, 0xdd);
 
 /// Bottom-right corner zone of a card that resizes instead of moving.
 pub(super) fn resize_handle(card: Rect) -> Rect {
@@ -150,6 +156,9 @@ pub(super) struct CachedPane {
     pub(super) cursor: Option<(u16, u16)>,
     /// Pane app requested bracketed paste — pastes get ESC[200~ markers.
     pub(super) bracketed_paste: bool,
+    /// The last screen line with real content — a TUI's status line, a
+    /// shell's last output. Shown on compact cards as "what it's doing".
+    pub(super) summary: Option<String>,
 }
 
 pub(super) fn brighten(c: Color32) -> Color32 {
@@ -217,12 +226,27 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
         }
         rows.push(runs);
     }
+    // Bottom-most line with real (alphanumeric) content, box-drawing
+    // stripped: for a TUI that's its status line ("✳ Deliberating…"),
+    // for a shell the last output line — an honest "what is it doing".
+    let summary = (0..shown).rev().find_map(|r| {
+        let text: String = grid.cells[r * cols..(r + 1) * cols]
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        let t = text
+            .trim()
+            .trim_matches(|ch: char| "│┃┆┇╎╏╰╯╭╮─━┄┈┐└┘┌├┤".contains(ch))
+            .trim();
+        t.chars().any(char::is_alphanumeric).then(|| t.to_string())
+    });
     CachedPane {
         cols: grid.cols,
         total_rows: grid.rows,
         rows,
         cursor: grid.cursor,
         bracketed_paste: grid.bracketed_paste,
+        summary,
     }
 }
 
@@ -556,12 +580,12 @@ impl Viewer {
         if self.terms.panes.is_empty() {
             return;
         }
-        let f = (6.0 * self.zoom).clamp(2.5, 16.0);
-        let compact = f < 5.0;
-        let font = FontId::monospace(f);
+        let f_base = (6.0 * self.zoom).clamp(2.5, 16.0);
+        let compact_base = f_base < 5.0;
+        let font_base = FontId::monospace(f_base);
         // measured monospace advance keeps columns honest at any zoom
-        let probe = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
-        let (adv, line_h) = (probe.size().x, probe.size().y);
+        let probe = painter.layout_no_wrap("M".into(), font_base.clone(), Color32::WHITE);
+        let (adv_base, line_h_base) = (probe.size().x, probe.size().y);
         let title_h = 16.0;
         let pad = 6.0;
 
@@ -571,11 +595,24 @@ impl Viewer {
                 continue;
             };
             let focused = self.terms.focused.as_ref() == Some(&key);
+            let cursor = self.terms.cursor.as_ref() == Some(&key);
+            // The cursor-selected (or focused) card always shows its full
+            // screen at a readable size, however far out the camera is —
+            // click through the cards while zoomed out to inspect agents.
+            let expanded = focused || cursor;
+            let (font, adv, line_h) = if expanded && f_base < EXPAND_FONT {
+                let font = FontId::monospace(EXPAND_FONT);
+                let p = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
+                (font, p.size().x, p.size().y)
+            } else {
+                (font_base.clone(), adv_base, line_h_base)
+            };
+            let compact = compact_base && !expanded;
             let anchor = self.anchor_for(&a.cwd);
             let anchor_w = self.world_pos(anchor.0 as usize);
             let anchor_s = self.to_screen(rect, anchor_w);
             let size = if compact {
-                Vec2::new(230.0, 40.0)
+                Vec2::new(230.0, 54.0)
             } else {
                 Vec2::new(
                     c.cols as f32 * adv + pad * 2.0,
@@ -636,15 +673,16 @@ impl Viewer {
             let searching = self.search_open && !self.query.is_empty();
             let smatch = searching && self.terms.scores.get(i).copied().flatten().is_some();
             let sbest = searching && self.terms.best.as_ref().is_some_and(|(_, bk)| bk == &key);
-            let cursor = self.terms.cursor.as_ref() == Some(&key);
+            // typing focus = thick cyan (unmistakable); the t-cursor =
+            // orange like node selection; streaming = green
             let (border, bw) = if focused {
-                (SELECT, 2.5)
+                (TERM_FOCUS, 3.0)
             } else if sbest {
                 (HOVER, 2.5)
             } else if smatch {
                 (WIKI, 2.0)
             } else if cursor {
-                (SELECT, 2.0)
+                (SELECT, 2.2)
             } else if hot {
                 (AGENT, 1.5)
             } else {
@@ -663,13 +701,19 @@ impl Viewer {
             }
             // everything inside the card is clipped to it — no overflow, ever
             let cp = painter.with_clip_rect(card);
-            let title = format!("{} · {} {}", a.agent, a.session, a.pane);
+            let title = if focused {
+                format!("⌨ {} · {} {}", a.agent, a.session, a.pane)
+            } else {
+                format!("{} · {} {}", a.agent, a.session, a.pane)
+            };
             cp.text(
                 card.left_top() + Vec2::new(pad, 2.0),
                 Align2::LEFT_TOP,
                 title,
                 FontId::proportional(11.0),
                 if focused {
+                    TERM_FOCUS
+                } else if cursor {
                     SELECT
                 } else if hot {
                     AGENT
@@ -694,12 +738,22 @@ impl Viewer {
                 };
                 let meta = format!("in {}/ · {}", self.g.node(anchor).display_name(), state);
                 cp.text(
-                    card.left_top() + Vec2::new(pad, 21.0),
+                    card.left_top() + Vec2::new(pad, 20.0),
                     Align2::LEFT_TOP,
                     meta,
                     FontId::proportional(10.5),
                     Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
                 );
+                // the pane's own last status/output line: what it's doing
+                if let Some(s) = &c.summary {
+                    cp.text(
+                        card.left_top() + Vec2::new(pad, 35.0),
+                        Align2::LEFT_TOP,
+                        s,
+                        FontId::monospace(9.5),
+                        WIKI,
+                    );
+                }
                 continue; // compact cards: no grip — resize is gated off too
             }
 

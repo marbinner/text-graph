@@ -37,7 +37,10 @@ clickable breadcrumb, the selection's siblings in a cursor column (dirs
 colored, `/`-suffixed), and a preview — rendered markdown for notes, the
 child listing for folders. Walk it with vim keys (`hjkl`, `gg`, `G`, `f`
 to find within the directory); the graph camera follows the walk, so the
-neighborhood you're reading is always the neighborhood you're seeing.
+neighborhood you're reading is always the neighborhood you're seeing. A
+**connections strip** along the bottom lists everything the node touches,
+color-coded and clickable: blue `▸ folder/` and gray `▸ file` children,
+amber `→` outgoing links, purple `←` incoming links.
 
 ### Link resolution
 
@@ -78,7 +81,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `0` / `Home` | reset the view — fit the whole graph |
 | `h` `j` `k` `l` | **selection is the mode**: with a node selected, walk the tree ranger-style — `j`/`k` step siblings, `h` goes to the parent, `l` enters a dir / opens a file — and the camera follows; with nothing selected, pan (hold to glide). `Esc` gets you back to panning |
 | `gg` / `G` | first / last sibling (while a node is selected) |
-| `]` / `[` | follow the note's first outgoing wikilink / jump to the first note linking here — the full clickable lists sit in the preview (`→` / `←`) |
+| `]` / `[` | follow the note's first outgoing wikilink / jump to the first note linking here — the full clickable lists live in the connections strip at the pane's bottom |
 | `u` / `d` | zoom in / out (both modes) |
 | `t` | hop the terminal cursor from card to card (flies to each); `Enter` starts typing into the highlighted one, `Esc` dismisses |
 | `Esc` | close search, else deselect |
@@ -136,9 +139,15 @@ tmux new-session -s work -c ~/notes claude
 ```
 
 Within ~1.5s a live terminal card appears in the graph, tethered to the node
-of the folder the agent runs in. Zoomed out it's a summary (`claude · work %0`,
-`in notes/ · active|idle 3m`); zoom in and it becomes the full styled screen —
-colors, cursor, everything, mirrored in real time.
+of the folder the agent runs in. Zoomed out it's a summary — name, folder,
+active/idle age, and the pane's own last status line (`✳ Deliberating…`,
+the last shell output), so you can see what each agent is doing at a
+glance; zoom in and it becomes the full styled screen — colors, cursor,
+everything, mirrored in real time. The card under the terminal cursor (or
+focused for typing) always renders full-size, whatever the zoom: stand
+back and click through your agents to inspect them. Border colors state
+the mode — **cyan + ⌨ = your keyboard is in it, orange = selected**,
+green = streaming.
 
 **Click the card and type** — or drive it all from the keyboard: `t` hops
 a highlight from card to card, `Enter` dives into the highlighted one, and

@@ -106,132 +106,170 @@ impl Viewer {
             Some(p) => self.g.node(p).children.clone(),
             None => vec![sel], // root (and ghosts): a list of one
         };
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-            ui.vertical(|ui| {
-                ui.set_width(150.0);
-                // find-in-directory prompt (f): lives while it has focus
-                let mut close_find = false;
-                if let Some(q) = &mut self.nav_find {
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(q)
-                            .hint_text("find…")
-                            .desired_width(140.0),
-                    );
-                    if self.nav_find_focus {
-                        resp.request_focus();
-                        self.nav_find_focus = false;
-                    } else if resp.lost_focus() {
-                        close_find = true; // Enter, Esc, or a click elsewhere
+        // connections computed up front: the columns must leave the strip
+        // its room, or their greedy scroll areas push it off-panel
+        let kids: Vec<NodeId> = self.g.node(sel).children.clone();
+        let outs: Vec<NodeId> = self.g.outlinks(sel).map(|l| l.to).collect();
+        let backs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
+        let has_conn = !(kids.is_empty() && outs.is_empty() && backs.is_empty());
+        let strip_h = if has_conn { 122.0 } else { 0.0 };
+        let col_h = (ui.available_height() - strip_h).max(120.0);
+        ui.allocate_ui(egui::vec2(ui.available_width(), col_h), |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(150.0);
+                    // find-in-directory prompt (f): lives while it has focus
+                    let mut close_find = false;
+                    if let Some(q) = &mut self.nav_find {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(q)
+                                .hint_text("find…")
+                                .desired_width(140.0),
+                        );
+                        if self.nav_find_focus {
+                            resp.request_focus();
+                            self.nav_find_focus = false;
+                        } else if resp.lost_focus() {
+                            close_find = true; // Enter, Esc, or a click elsewhere
+                        }
                     }
-                }
-                if close_find {
-                    self.nav_find = None;
-                    self.nav_find_last.clear();
-                }
-                egui::ScrollArea::vertical()
-                    .id_salt("nav-sibs")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for c in &sibs {
-                            let n = self.g.node(*c);
-                            let is_dir = n.kind == NodeKind::Dir;
-                            let label = if is_dir {
-                                format!("{}/", n.display_name())
-                            } else {
-                                n.display_name().to_string()
-                            };
-                            let mut text = egui::RichText::new(label);
-                            if is_dir {
-                                text = text.color(DIR);
-                            }
-                            let resp = ui.selectable_label(*c == sel, text);
-                            if *c == sel && self.nav_scroll {
-                                resp.scroll_to_me(Some(egui::Align::Center));
-                            }
-                            if resp.clicked() {
-                                jump = Some(*c);
-                            }
-                        }
-                    });
-            });
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.set_width(ui.available_width());
-                match kind {
-                    NodeKind::File => {
-                        if ui.button("open in editor  (Enter / l)").clicked() {
-                            self.open_in_editor(sel);
-                        }
-                        // wikilink neighborhood: ] follows, [ backtracks
-                        let outs: Vec<NodeId> = self.g.outlinks(sel).map(|l| l.to).collect();
-                        let backs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
-                        for (arrow, ids) in [("→", outs), ("←", backs)] {
-                            if ids.is_empty() {
-                                continue;
-                            }
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-                                ui.label(egui::RichText::new(arrow).color(WIKI));
-                                for id in ids {
-                                    let name = self.g.node(id).display_name().to_string();
-                                    if ui
-                                        .link(egui::RichText::new(name).color(WIKI).small())
-                                        .clicked()
-                                    {
-                                        jump = Some(id);
-                                    }
+                    if close_find {
+                        self.nav_find = None;
+                        self.nav_find_last.clear();
+                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt("nav-sibs")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for c in &sibs {
+                                let n = self.g.node(*c);
+                                let is_dir = n.kind == NodeKind::Dir;
+                                let label = if is_dir {
+                                    format!("{}/", n.display_name())
+                                } else {
+                                    n.display_name().to_string()
+                                };
+                                let mut text = egui::RichText::new(label);
+                                if is_dir {
+                                    text = text.color(DIR);
                                 }
-                            });
+                                let resp = ui.selectable_label(*c == sel, text);
+                                if *c == sel && self.nav_scroll {
+                                    resp.scroll_to_me(Some(egui::Align::Center));
+                                }
+                                if resp.clicked() {
+                                    jump = Some(*c);
+                                }
+                            }
+                        });
+                });
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.set_width(ui.available_width());
+                    match kind {
+                        NodeKind::File => {
+                            if ui.button("open in editor  (Enter / l)").clicked() {
+                                self.open_in_editor(sel);
+                            }
+                            ui.add_space(4.0);
+                            // take/put-back so the markdown cache and the body can
+                            // be borrowed simultaneously without a per-frame clone
+                            let detail = self.detail.take();
+                            if let Some((_, body)) = &detail {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("nav-preview")
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+                                    });
+                            }
+                            self.detail = detail;
                         }
-                        ui.add_space(4.0);
-                        // take/put-back so the markdown cache and the body can
-                        // be borrowed simultaneously without a per-frame clone
-                        let detail = self.detail.take();
-                        if let Some((_, body)) = &detail {
+                        NodeKind::Dir => {
+                            let children = self.g.node(sel).children.clone();
                             egui::ScrollArea::vertical()
                                 .id_salt("nav-preview")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+                                    ui.label(format!("{} entries — l enters", children.len()));
+                                    ui.add_space(4.0);
+                                    for c in children {
+                                        let child = self.g.node(c);
+                                        let icon = if child.kind == NodeKind::Dir {
+                                            "▸ "
+                                        } else {
+                                            "· "
+                                        };
+                                        if ui
+                                            .link(format!("{icon}{}", child.display_name()))
+                                            .clicked()
+                                        {
+                                            jump = Some(c);
+                                        }
+                                    }
                                 });
                         }
-                        self.detail = detail;
-                    }
-                    NodeKind::Dir => {
-                        let children = self.g.node(sel).children.clone();
-                        egui::ScrollArea::vertical()
-                            .id_salt("nav-preview")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.label(format!("{} entries — l enters", children.len()));
-                                ui.add_space(4.0);
-                                for c in children {
-                                    let child = self.g.node(c);
-                                    let icon = if child.kind == NodeKind::Dir {
-                                        "▸ "
-                                    } else {
-                                        "· "
-                                    };
-                                    if ui.link(format!("{icon}{}", child.display_name())).clicked()
-                                    {
-                                        jump = Some(c);
-                                    }
+                        NodeKind::Ghost => {
+                            ui.label("Not written yet. Referenced from:");
+                            ui.add_space(4.0);
+                            let refs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
+                            for r in refs {
+                                if ui.link(self.g.node(r).path.clone()).clicked() {
+                                    jump = Some(r);
                                 }
-                            });
-                    }
-                    NodeKind::Ghost => {
-                        ui.label("Not written yet. Referenced from:");
-                        ui.add_space(4.0);
-                        let refs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
-                        for r in refs {
-                            if ui.link(self.g.node(r).path.clone()).clicked() {
-                                jump = Some(r);
                             }
                         }
                     }
-                }
+                });
             });
         });
+        // ---- connections strip: everything this node touches, color-coded
+        // (blue ▸ child folder, gray ▸ child file, amber → outgoing link,
+        // purple ← incoming link) — all clickable, ] and [ jump the firsts
+        if has_conn {
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("nav-conn")
+                .max_height(110.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        for id in kids {
+                            let n = self.g.node(id);
+                            let (color, label) = if n.kind == NodeKind::Dir {
+                                (DIR, format!("▸ {}/", n.display_name()))
+                            } else {
+                                (FILE, format!("▸ {}", n.display_name()))
+                            };
+                            if ui
+                                .link(egui::RichText::new(label).color(color).small())
+                                .clicked()
+                            {
+                                jump = Some(id);
+                            }
+                        }
+                        for id in outs {
+                            let label = format!("→ {}", self.g.node(id).display_name());
+                            if ui
+                                .link(egui::RichText::new(label).color(WIKI).small())
+                                .clicked()
+                            {
+                                jump = Some(id);
+                            }
+                        }
+                        for id in backs {
+                            let label = format!("← {}", self.g.node(id).display_name());
+                            if ui
+                                .link(egui::RichText::new(label).color(LINK_IN).small())
+                                .clicked()
+                            {
+                                jump = Some(id);
+                            }
+                        }
+                    });
+                });
+        }
         self.nav_scroll = false;
         if let Some(j) = jump {
             self.selected = Some(j);
