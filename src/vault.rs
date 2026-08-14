@@ -174,6 +174,25 @@ pub fn read_body(path: &Path) -> Result<String> {
     Ok(body.to_string())
 }
 
+/// Should a filesystem event at `p` trigger a vault reload? Hidden
+/// components (.obsidian/.git/.text-graph churn — including our own state
+/// saves) never do; markdown files and extensionless paths (directory
+/// creates/renames) do. The watcher's one filter — a wrong `true` costs a
+/// pointless rebuild, a wrong `false` costs a stale graph.
+pub fn watch_relevant(root: &Path, p: &Path) -> bool {
+    let rel = p.strip_prefix(root).unwrap_or(p);
+    let hidden = rel
+        .components()
+        .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')));
+    if hidden {
+        return false;
+    }
+    match rel.extension().and_then(|e| e.to_str()) {
+        Some(ext) => ext.eq_ignore_ascii_case("md"),
+        None => true, // directory events (creates, renames)
+    }
+}
+
 #[derive(Debug, Default)]
 struct FmData {
     title: Option<String>,
@@ -323,6 +342,25 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_relevance_rules() {
+        let root = Path::new("/v");
+        let rel = |p: &str| watch_relevant(root, &root.join(p));
+        assert!(rel("notes/a.md"), "markdown edits reload");
+        assert!(rel("a.MD"), "case-insensitive extension");
+        assert!(rel("newdir"), "extensionless = dir create/rename");
+        assert!(!rel("assets/pic.png"), "non-md files don't");
+        assert!(
+            !rel(".text-graph/view"),
+            "our own state saves must not loop"
+        );
+        assert!(!rel(".text-graph/view.tmp"), "nor the temp file");
+        assert!(!rel(".git/index.md"), "hidden dirs never do, even with .md");
+        assert!(!rel("notes/.hidden.md"), "hidden files neither");
+        // a path outside the root is judged on its own components
+        assert!(!watch_relevant(root, Path::new("/elsewhere/.git/x.md")));
+    }
 
     fn targets(body: &str) -> Vec<String> {
         extract_links(body).into_iter().map(|l| l.target).collect()

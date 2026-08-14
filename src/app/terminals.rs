@@ -226,20 +226,7 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
         }
         rows.push(runs);
     }
-    // Bottom-most line with real (alphanumeric) content, box-drawing
-    // stripped: for a TUI that's its status line ("✳ Deliberating…"),
-    // for a shell the last output line — an honest "what is it doing".
-    let summary = (0..shown).rev().find_map(|r| {
-        let text: String = grid.cells[r * cols..(r + 1) * cols]
-            .iter()
-            .map(|c| c.ch)
-            .collect();
-        let t = text
-            .trim()
-            .trim_matches(|ch: char| "│┃┆┇╎╏╰╯╭╮─━┄┈┐└┘┌├┤".contains(ch))
-            .trim();
-        t.chars().any(char::is_alphanumeric).then(|| t.to_string())
-    });
+    let summary = text_graph::mirror::summary_line(grid);
     CachedPane {
         cols: grid.cols,
         total_rows: grid.rows,

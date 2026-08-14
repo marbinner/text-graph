@@ -295,6 +295,27 @@ pub fn indexed_rgb(i: u8) -> (u8, u8, u8) {
     }
 }
 
+/// The bottom-most screen line with real (alphanumeric) content, box-drawing
+/// stripped: for a TUI that's its status line ("✳ Deliberating…"), for a
+/// shell the last output line — an honest "what is it doing right now".
+pub fn summary_line(g: &TermGrid) -> Option<String> {
+    let cols = g.cols as usize;
+    if cols == 0 {
+        return None;
+    }
+    (0..g.rows as usize).rev().find_map(|r| {
+        let text: String = g.cells[r * cols..(r + 1) * cols]
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        let t = text
+            .trim()
+            .trim_matches(|ch: char| "│┃┆┇╎╏╰╯╭╮─━┄┈┐└┘┌├┤".contains(ch))
+            .trim();
+        t.chars().any(char::is_alphanumeric).then(|| t.to_string())
+    })
+}
+
 fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
     let (rows, cols) = s.size();
     let mut cells = Vec::with_capacity(rows as usize * cols as usize);
@@ -471,6 +492,34 @@ mod tests {
         assert_eq!(g.cells[0].ch, 'h');
         assert_eq!(g.cells[20].ch, 't'); // row 1, col 0 (cols = 20)
         assert_eq!(g.cursor, Some((1, 5)));
+    }
+
+    #[test]
+    fn summary_is_the_status_line_not_the_input_box() {
+        // claude-shaped screen: output, a status line, then the input box —
+        // the box is pure box-drawing + '>' and must be skipped
+        let mut p = vt100::Parser::new(6, 30, 0);
+        p.process(
+            b"some earlier output\r\n\
+              \xE2\x9C\xB3 Deliberating\xE2\x80\xA6 (12s)\r\n\
+              \xE2\x95\xAD\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x95\xAE\r\n\
+              \xE2\x94\x82 > \xE2\x94\x82\r\n\
+              \xE2\x95\xB0\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x95\xAF",
+        );
+        let g = screen_to_grid(p.screen());
+        assert_eq!(summary_line(&g).unwrap(), "✳ Deliberating… (12s)");
+    }
+
+    #[test]
+    fn summary_of_a_shell_is_its_last_line_and_blank_screens_are_none() {
+        let g = grid(b"$ cargo test\r\nok. 84 passed");
+        assert_eq!(summary_line(&g).unwrap(), "ok. 84 passed");
+        assert_eq!(summary_line(&grid(b"")), None);
+        assert_eq!(
+            summary_line(&grid(b"\x1b[?2004h")),
+            None,
+            "control-only screen"
+        );
     }
 
     #[test]

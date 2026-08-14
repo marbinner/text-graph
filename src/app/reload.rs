@@ -15,19 +15,7 @@ impl Viewer {
         let root = self.root.clone();
         let handler = move |res: Result<notify::Event, notify::Error>| {
             let Ok(event) = res else { return };
-            let relevant = event.paths.iter().any(|p| {
-                let rel = p.strip_prefix(&root).unwrap_or(p);
-                let hidden = rel
-                    .components()
-                    .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')));
-                if hidden {
-                    return false; // .obsidian/.git churn must not trigger reloads
-                }
-                match rel.extension().and_then(|e| e.to_str()) {
-                    Some(ext) => ext.eq_ignore_ascii_case("md"),
-                    None => true, // directory events (creates, renames)
-                }
-            });
+            let relevant = event.paths.iter().any(|p| vault::watch_relevant(&root, p));
             if relevant {
                 *state.lock().unwrap() = Some(Instant::now());
                 ctx.request_repaint();
@@ -214,5 +202,104 @@ impl Viewer {
                 Err(e) => self.reload_error = Some(format!("{e:#}")),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use text_graph::{graph, vault};
+
+    fn fixture_viewer() -> Viewer {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+        let scan = vault::scan(&root).expect("fixture scans");
+        Viewer::new(graph::build(scan), root)
+    }
+
+    /// A throwaway 1-file vault, built and cleaned per test.
+    fn tiny_graph() -> Graph {
+        let d = std::env::temp_dir().join(format!(
+            "tg-reload-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("only.md"), "hello").unwrap();
+        let g = graph::build(vault::scan(&d).expect("tiny scans"));
+        let _ = std::fs::remove_dir_all(&d);
+        g
+    }
+
+    #[test]
+    fn stale_reload_results_are_discarded() {
+        let mut v = fixture_viewer();
+        let fixture_nodes = v.g.nodes.len();
+        v.reload_gen = 2;
+        // gen 1 (superseded) arrives first with a different graph; gen 2
+        // rebuilds the fixture. Only gen 2 may apply.
+        v.reload_tx.send((1, Ok(tiny_graph()))).unwrap();
+        let root = v.root.clone();
+        v.reload_tx
+            .send((2, Ok(graph::build(vault::scan(&root).unwrap()))))
+            .unwrap();
+        v.pump_reload(&egui::Context::default());
+        assert_eq!(
+            v.g.nodes.len(),
+            fixture_nodes,
+            "stale gen-1 graph must not apply"
+        );
+        assert!(v.last_reload.is_some());
+        assert!(v.reload_error.is_none());
+    }
+
+    #[test]
+    fn reload_errors_are_captured_not_applied() {
+        let mut v = fixture_viewer();
+        let before = v.g.nodes.len();
+        v.reload_gen = 1;
+        v.reload_tx
+            .send((1, Err(anyhow::anyhow!("disk on fire"))))
+            .unwrap();
+        v.pump_reload(&egui::Context::default());
+        assert_eq!(v.g.nodes.len(), before, "old graph stays on error");
+        assert!(v.reload_error.as_deref().unwrap().contains("disk on fire"));
+    }
+
+    #[test]
+    fn apply_carries_selection_by_ident_and_consumes_pending_select() {
+        let mut v = fixture_viewer();
+        v.selected = v.g.by_path("index.md");
+        assert!(v.selected.is_some());
+        v.pending_select = Some("empty.md".to_string());
+        let g2 = graph::build(vault::scan(&v.root).unwrap());
+        v.apply_graph(g2);
+        // pending_select wins the selection; it exists in the new graph
+        let sel = v.selected.expect("selection survives");
+        assert_eq!(v.g.node(sel).path, "empty.md");
+        assert!(v.pending_select.is_none());
+    }
+
+    #[test]
+    fn snapshot_merges_live_and_parked_arrangements_sorted() {
+        let mut v = fixture_viewer();
+        v.terms
+            .offsets
+            .insert(("zeta".into(), "%1".into()), Vec2::new(1.0, 2.0));
+        v.terms
+            .parked
+            .insert("alpha".into(), vec![("%9".into(), Vec2::new(3.0, 4.0))]);
+        let s = v.snapshot_state();
+        assert!(s.camera.is_some());
+        let keys: Vec<(&str, &str)> = s
+            .cards
+            .iter()
+            .map(|c| (c.session.as_str(), c.pane.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [("alpha", "%9"), ("zeta", "%1")],
+            "live + parked both saved, deterministically sorted"
+        );
     }
 }
