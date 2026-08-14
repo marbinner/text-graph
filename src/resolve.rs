@@ -35,7 +35,12 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
         let id = NodeId(idx as u32);
         by_stem.entry(casefold(&node.name)).or_default().push(id);
         for alias in &node.aliases {
-            by_alias.entry(casefold(alias)).or_default().push(id);
+            let bucket = by_alias.entry(casefold(alias)).or_default();
+            // dedupe: repeated or case-variant aliases on one file must not
+            // make a link to it look ambiguous
+            if !bucket.contains(&id) {
+                bucket.push(id);
+            }
         }
         comp_paths.push((id, strip_md(&node.path).split('/').map(casefold).collect()));
     }
@@ -149,5 +154,43 @@ mod tests {
         assert!(!is_asset("v1.2"));
         assert!(!is_asset("2026-08-14"));
         assert!(!is_asset("plain"));
+    }
+
+    #[test]
+    fn duplicate_aliases_on_one_file_do_not_fake_ambiguity() {
+        use crate::graph::{Graph, Node, NodeId, NodeKind};
+        use crate::vault::RawLink;
+        let node = |kind, path: &str, name: &str, aliases: Vec<String>, parent| Node {
+            kind,
+            path: path.into(),
+            name: name.into(),
+            title: None,
+            aliases,
+            parent,
+            children: Vec::new(),
+        };
+        let mut g = Graph {
+            nodes: vec![
+                node(NodeKind::Dir, "", "r", vec![], None),
+                node(
+                    NodeKind::File,
+                    "a.md",
+                    "a",
+                    vec!["Same".into(), "same".into()],
+                    Some(NodeId(0)),
+                ),
+                node(NodeKind::File, "b.md", "b", vec![], Some(NodeId(0))),
+            ],
+            links: Vec::new(),
+            root: NodeId(0),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            ambiguities: Vec::new(),
+            self_links_dropped: 0,
+        };
+        let links = vec![(NodeId(2), vec![RawLink { target: "same".into(), offset: 0 }])];
+        resolve(&mut g, &links);
+        assert_eq!(g.links.len(), 1);
+        assert!(g.ambiguities.is_empty(), "case-variant duplicate aliases flagged ambiguity");
     }
 }
