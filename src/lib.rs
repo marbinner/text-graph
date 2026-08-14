@@ -10,6 +10,7 @@
 //! shell lives in the binary (`src/app.rs`), keeping this library headless.
 
 pub mod agents;
+pub mod create;
 pub mod graph;
 pub mod keys;
 pub mod layout;
