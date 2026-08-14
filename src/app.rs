@@ -304,6 +304,8 @@ struct Viewer {
     drag_card: Option<(String, String)>,
     /// Set on double-click: next paint recenters the view on this card.
     zoom_to_card: Option<(String, String)>,
+    /// Position of the `t` (cycle terminals) key, modulo the pane count.
+    term_cycle: usize,
     // ---- creation (right-click menu) ----
     /// Node captured at right-click time — the context menu's subject.
     ctx_node: Option<NodeId>,
@@ -404,6 +406,7 @@ impl Viewer {
             term_offsets: HashMap::new(),
             drag_card: None,
             zoom_to_card: None,
+            term_cycle: 0,
             ctx_node: None,
             ctx_card: None,
             create: None,
@@ -876,13 +879,14 @@ impl Viewer {
         if self.create.is_some() {
             return; // the create dialog owns the keyboard
         }
-        let (open_key, esc, enter, frame_key, reset) = ui.input(|i| {
+        let (open_key, esc, enter, frame_key, reset, term_key) = ui.input(|i| {
             (
                 i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
                 i.key_pressed(Key::Escape),
                 i.key_pressed(Key::Enter),
                 !i.modifiers.command && i.key_pressed(Key::F),
                 i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
+                i.modifiers.is_none() && i.key_pressed(Key::T),
             )
         });
         if self.search_open {
@@ -914,7 +918,58 @@ impl Viewer {
             self.frame_node(sel);
         } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
+        } else if term_key
+            && ui.memory(|m| m.focused().is_none())
+            && !self.agent_panes.is_empty()
+        {
+            // cycle through the terminal cards, flying to and focusing each
+            let i = self.term_cycle % self.agent_panes.len();
+            self.term_cycle += 1;
+            let a = &self.agent_panes[i];
+            let key = (a.session.clone(), a.pane.clone());
+            self.focused_term = Some(key.clone());
+            self.fly_to_card(key);
         }
+
+        // vim-style navigation: hjkl pans, d/u zooms — continuous while held
+        if ui.memory(|m| m.focused().is_none()) {
+            let (dt, h, j, k, l, d, u) = ui.input(|i| {
+                let m = i.modifiers.is_none();
+                (
+                    i.stable_dt.min(0.1),
+                    m && i.key_down(Key::H),
+                    m && i.key_down(Key::J),
+                    m && i.key_down(Key::K),
+                    m && i.key_down(Key::L),
+                    m && i.key_down(Key::D),
+                    m && i.key_down(Key::U),
+                )
+            });
+            if h || j || k || l || d || u {
+                let axis = |pos: bool, neg: bool| (pos as i8 - neg as i8) as f32;
+                let pan = 600.0 * dt / self.zoom; // constant screen-space speed
+                self.center.x += pan * axis(l, h);
+                self.center.y += pan * axis(j, k);
+                let zf = 2.2f32.powf(dt * axis(d, u));
+                self.zoom = (self.zoom * zf).clamp(0.02, 50.0);
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    /// Jump the view into a card: readable zoom now, exact centering on the
+    /// next paint (which knows the card's rect at the new zoom).
+    fn fly_to_card(&mut self, t: (String, String)) {
+        if let Some(id) = self
+            .agent_panes
+            .iter()
+            .find(|a| a.session == t.0 && a.pane == t.1)
+            .map(|a| self.anchor_for(&a.cwd))
+        {
+            self.center = self.world_pos(id.0 as usize);
+        }
+        self.zoom = CARD_ZOOM;
+        self.zoom_to_card = Some(t);
     }
 
     fn set_flash(&mut self, msg: String) {
@@ -1427,20 +1482,7 @@ impl Viewer {
         }
         if response.double_clicked() {
             if let Some(t) = over_card.clone() {
-                // Fly the view into this terminal: jump to a readable zoom,
-                // roughly center on its anchor now, and let the next paint
-                // (which knows the card's rect at the new zoom) center it
-                // exactly.
-                if let Some(id) = self
-                    .agent_panes
-                    .iter()
-                    .find(|a| a.session == t.0 && a.pane == t.1)
-                    .map(|a| self.anchor_for(&a.cwd))
-                {
-                    self.center = self.world_pos(id.0 as usize);
-                }
-                self.zoom = CARD_ZOOM;
-                self.zoom_to_card = Some(t);
+                self.fly_to_card(t);
             } else if let Some(h) = self.hover {
                 self.open_in_editor(h);
             }
@@ -1604,7 +1646,7 @@ impl Viewer {
         let status = if let Some((msg, _)) = &self.flash {
             msg.clone()
         } else if let Some((s, p)) = &self.focused_term {
-            format!("typing into {s} {p} — click empty space to release")
+            format!("typing into {s} {p} — Ctrl+Q or click away releases")
         } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
             format!(
@@ -1622,7 +1664,7 @@ impl Viewer {
                 }
             }
                 None => format!(
-                    "{} files · {} dirs · {} links{}   |   / search · f frame · 0 reset view · drag/wheel to pan/zoom",
+                    "{} files · {} dirs · {} links{}   |   / search · f frame · 0 reset · hjkl pan · d/u zoom · t terminals",
                     self.n_files,
                     self.n_dirs,
                     self.g.links.len(),
@@ -1746,7 +1788,7 @@ impl eframe::App for Viewer {
         if due {
             self.rebuild();
         }
-        let release = ui.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::Q));
+        let release = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q));
         if release {
             self.focused_term = None;
         }

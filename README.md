@@ -62,11 +62,14 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, and paths; matches stay lit, `Enter` jumps to the ringed best hit, `Esc` closes |
 | `f` | frame the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
+| `h` `j` `k` `l` | pan left/down/up/right (vim-style; hold to glide) |
+| `d` / `u` | zoom in / out |
+| `t` | cycle through terminal cards — flies to and focuses each in turn |
 | `Esc` | close search, else deselect |
 | click a terminal card | focus it — the keyboard now types into that agent |
 | double-click a terminal card | fly the view into that terminal: zooms to a readable size and centers it |
 | drag a terminal card | arrange it (it stays put, following its anchor node) |
-| click empty space | release terminal focus |
+| `Ctrl+Q` / click empty space | release terminal focus |
 
 Edit any file in the vault and the graph updates ~300ms after you save — new
 links, files, and ghosts appear in place, and existing nodes keep their
@@ -114,9 +117,10 @@ of the folder the agent runs in. Zoomed out it's a summary (`claude · work %0`,
 `in notes/ · active|idle 3m`); zoom in and it becomes the full styled screen —
 colors, cursor, everything, mirrored in real time.
 
-**Click the card and type.** Every key goes to the agent — Enter, Esc,
-arrows, Shift+Tab, Ctrl chords including Ctrl+C to interrupt — while graph
-keybinds suspend; clicking empty space gives you the graph back.
+**Click the card and type** (or press `t` to hop from card to card). Every
+key goes to the agent — Enter, Esc, arrows, Shift+Tab, Ctrl chords
+including Ctrl+C to interrupt — while graph keybinds suspend; `Ctrl+Q` or
+clicking empty space gives you the graph back.
 **Double-click a card** to fly the view into it: the graph zooms to a level
 where the terminal is full-size and readable, centered on that card — pan
 or zoom back out whenever you like. A card stays up for the pane's whole
@@ -138,9 +142,11 @@ How it works, and why it's safe:
   never reflow a session you're viewing in a real terminal.
 - No tmux installed → the feature is simply absent; everything else works.
 
-v1 input limits: Alt+letter arrives as the plain letter, Shift+Enter sends
-Enter, no mouse-into-terminal, no in-graph scrollback — attach externally
-(`tmux attach -t work`) when you need those.
+v1 input limits: `Ctrl+Q` is reserved by the viewer (it releases focus, so
+it never reaches the pane), Alt+letter arrives as the plain letter,
+Shift+Enter sends Enter, no mouse-into-terminal, no in-graph scrollback —
+attach externally (right-click the card, or `tmux attach -t work`) when you
+need those.
 
 ## Determinism
 
