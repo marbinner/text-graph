@@ -45,7 +45,8 @@ fn mirrors_a_scripted_session() {
         "failed to create scripted session"
     );
 
-    let mut m = SessionMirror::attach("t1", Some(&socket), || {}).expect("attach control client");
+    let mut m =
+        SessionMirror::attach("t1", Some(&socket), None, || {}).expect("attach control client");
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut success = false;

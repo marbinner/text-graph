@@ -9,6 +9,7 @@
 //! deterministic radial seed and [`sim`] relaxes it force-directed; the egui
 //! shell lives in the binary (`src/app.rs`), keeping this library headless.
 
+pub mod agents;
 pub mod graph;
 pub mod layout;
 pub mod mirror;

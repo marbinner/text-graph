@@ -52,9 +52,13 @@ pub struct SessionMirror {
 }
 
 impl SessionMirror {
+    /// `set_size`: declare a client size, which lets tmux resize the window
+    /// to us. Only pass Some for sessions we own (`tg_*`) — sizing a session
+    /// the user is viewing in a real terminal would reflow it under them.
     pub fn attach(
         session: &str,
         socket: Option<&str>,
+        set_size: Option<(u16, u16)>,
         wake: impl Fn() + Send + 'static,
     ) -> std::io::Result<Self> {
         let (client, rx) = TmuxClient::attach(session, socket, wake)?;
@@ -67,9 +71,10 @@ impl SessionMirror {
             exited: false,
             generation: 0,
         };
-        // Declare a workable client size (best effort — an old-syntax %error
-        // lands on an Ignore tag and is dropped).
-        m.send(Pending::Ignore, "refresh-client -C 120x40");
+        if let Some((w, h)) = set_size {
+            let cmd = format!("refresh-client -C {w}x{h}");
+            m.send(Pending::Ignore, &cmd);
+        }
         m.list_panes();
         Ok(m)
     }
