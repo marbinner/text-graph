@@ -62,6 +62,11 @@
   suspend), drag = arrange (world-space offset from anchor in
   `term_offsets`), Ctrl+Q or click-away = release. Cards win pointer
   contention over nodes beneath them via last-frame `term_rects`.
+- hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
+  graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
+  selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
+  anything else in either mode; `l` guards against key-repeat spawning
+  editors.
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
 - Node bodies are never held in memory; the detail pane reads the selected

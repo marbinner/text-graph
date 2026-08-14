@@ -443,6 +443,11 @@ struct Viewer {
     zoom_to_card: Option<(String, String)>,
     /// Position of the `t` (cycle terminals) key, modulo the pane count.
     term_cycle: usize,
+    /// First `g` of a `gg` chord (tree navigation), with its press time.
+    pending_g: Option<Instant>,
+    /// Scroll the navigator's sibling list to the cursor on the next frame
+    /// (set by keyboard navigation, not by clicks).
+    nav_scroll: bool,
     /// The card the terminal cursor is on: highlighted, Enter focuses it.
     /// Unlike `focused_term`, the keyboard still belongs to the graph.
     term_selected: Option<(String, String)>,
@@ -580,6 +585,8 @@ impl Viewer {
             resize_term: None,
             zoom_to_card: None,
             term_cycle: 0,
+            pending_g: None,
+            nav_scroll: false,
             term_selected: None,
             term_scores: Vec::new(),
             term_best: None,
@@ -1236,18 +1243,89 @@ impl Viewer {
             self.fly_to_card(key);
         }
 
-        // vim-style navigation: hjkl pans, d/u zooms — continuous while held
+        // Ranger-style tree walk — SELECTION IS THE MODE: with a node
+        // selected, hjkl walks the Contains tree (discrete steps, key
+        // repeat); with nothing selected they pan. Esc switches back.
+        let tree_nav = self.selected.is_some() && ui.memory(|m| m.focused().is_none());
+        if let Some(sel) = self.selected.filter(|_| tree_nav) {
+            let (h, j, k, l, g, sg) = ui.input(|i| {
+                let m = i.modifiers.is_none();
+                (
+                    m && i.key_pressed(Key::H),
+                    m && i.key_pressed(Key::J),
+                    m && i.key_pressed(Key::K),
+                    m && i.key_pressed(Key::L),
+                    m && i.key_pressed(Key::G),
+                    i.modifiers.shift_only() && i.key_pressed(Key::G),
+                )
+            });
+            let mut to: Option<NodeId> = None;
+            if h {
+                to = self.g.node(sel).parent;
+            } else if j {
+                to = self.g.nav_sibling(sel, 1);
+            } else if k {
+                to = self.g.nav_sibling(sel, -1);
+            } else if l {
+                match self.g.node(sel).kind {
+                    NodeKind::Dir => to = self.g.nav_enter(sel),
+                    // key repeat must not spawn an editor per repeat tick
+                    NodeKind::File
+                        if !ui.input(|i| {
+                            i.events.iter().any(|e| {
+                                matches!(
+                                    e,
+                                    egui::Event::Key {
+                                        key: Key::L,
+                                        pressed: true,
+                                        repeat: true,
+                                        ..
+                                    }
+                                )
+                            })
+                        }) =>
+                    {
+                        self.open_in_editor(sel);
+                    }
+                    _ => {}
+                }
+            } else if sg {
+                to = self.g.nav_sibling_end(sel, true);
+            } else if g {
+                // vim gg: two bare g presses in quick succession
+                if self
+                    .pending_g
+                    .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
+                {
+                    to = self.g.nav_sibling_end(sel, false);
+                    self.pending_g = None;
+                } else {
+                    self.pending_g = Some(Instant::now());
+                }
+            }
+            if (h || j || k || l || sg) && !g {
+                self.pending_g = None;
+            }
+            if let Some(t) = to {
+                self.selected = Some(t);
+                self.frame_node(t); // the camera follows the walk
+                self.nav_scroll = true; // and the sibling list follows too
+            }
+        }
+
+        // vim-style camera: hjkl pans (when no node is selected), d/u zooms
+        // — continuous while held
         if ui.memory(|m| m.focused().is_none()) {
             let (dt, h, j, k, l, d, u) = ui.input(|i| {
-                let m = i.modifiers.is_none();
+                let m = i.modifiers.is_none() && !tree_nav;
                 (
                     i.stable_dt.min(0.1),
                     m && i.key_down(Key::H),
                     m && i.key_down(Key::J),
                     m && i.key_down(Key::K),
                     m && i.key_down(Key::L),
-                    m && i.key_down(Key::D),
-                    m && i.key_down(Key::U),
+                    i.modifiers.is_none() && i.key_down(Key::D),
+                    i.modifiers.is_none() && i.key_down(Key::U),
                 )
             });
             if h || j || k || l || d || u {
@@ -1680,83 +1758,154 @@ impl Viewer {
         }
     }
 
+    /// The ranger-style navigator: breadcrumb, sibling column with the
+    /// cursor, preview column. Keyboard walking happens in `handle_keys`
+    /// (hjkl / gg / G while a node is selected); this renders the state and
+    /// accepts clicks.
     fn detail_pane(&mut self, ui: &mut egui::Ui) {
         let Some(sel) = self.selected else { return };
         if self.detail.as_ref().map(|(id, _)| *id) != Some(sel) {
             self.detail = Some((sel, self.load_body(sel)));
         }
         // Owned copies so the panel closures below can borrow self freely.
-        let (kind, display, sub) = {
+        let (kind, display, sub, parent) = {
             let node = self.g.node(sel);
             let sub = if node.path.is_empty() {
                 node.name.clone()
             } else {
                 node.path.clone()
             };
-            (node.kind, node.display_name().to_string(), sub)
+            (node.kind, node.display_name().to_string(), sub, node.parent)
         };
 
-        ui.set_min_width(320.0);
+        ui.set_min_width(430.0);
         ui.add_space(6.0);
-        ui.heading(display);
+        let mut jump: Option<NodeId> = None;
+
+        // breadcrumb: clickable ancestors, root first
+        let mut chain: Vec<NodeId> = Vec::new();
+        let mut cur = parent;
+        while let Some(p) = cur {
+            chain.push(p);
+            cur = self.g.node(p).parent;
+        }
+        chain.reverse();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            for a in &chain {
+                let name = self.g.node(*a).display_name().to_string();
+                if ui.link(egui::RichText::new(name).color(DIR)).clicked() {
+                    jump = Some(*a);
+                }
+                ui.label(egui::RichText::new("/").weak());
+            }
+            ui.label(egui::RichText::new(&display).strong());
+        });
         ui.label(egui::RichText::new(sub).small().color(TEXT));
         ui.separator();
 
-        let mut jump: Option<NodeId> = None;
-        match kind {
-            NodeKind::File => {
-                if ui.button("open in editor  (Enter)").clicked() {
-                    self.open_in_editor(sel);
-                }
-                ui.add_space(4.0);
-                // take/put-back so the markdown cache and the body can be
-                // borrowed simultaneously without cloning the body per frame
-                let detail = self.detail.take();
-                if let Some((_, body)) = &detail {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+        // ranger columns: siblings (cursor) | preview of the selection
+        let sibs: Vec<NodeId> = match parent {
+            Some(p) => self.g.node(p).children.clone(),
+            None => vec![sel], // root (and ghosts): a list of one
+        };
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            ui.vertical(|ui| {
+                ui.set_width(150.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("nav-sibs")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for c in &sibs {
+                            let n = self.g.node(*c);
+                            let is_dir = n.kind == NodeKind::Dir;
+                            let label = if is_dir {
+                                format!("{}/", n.display_name())
+                            } else {
+                                n.display_name().to_string()
+                            };
+                            let mut text = egui::RichText::new(label);
+                            if is_dir {
+                                text = text.color(DIR);
+                            }
+                            let resp = ui.selectable_label(*c == sel, text);
+                            if *c == sel && self.nav_scroll {
+                                resp.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if resp.clicked() {
+                                jump = Some(*c);
+                            }
+                        }
                     });
-                }
-                self.detail = detail;
-            }
-            NodeKind::Dir => {
-                let children = self.g.node(sel).children.clone();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.label(format!("{} entries", children.len()));
-                    ui.add_space(4.0);
-                    for c in children {
-                        let child = self.g.node(c);
-                        let icon = if child.kind == NodeKind::Dir {
-                            "▸ "
-                        } else {
-                            "· "
-                        };
-                        if ui.link(format!("{icon}{}", child.display_name())).clicked() {
-                            jump = Some(c);
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(ui.available_width());
+                match kind {
+                    NodeKind::File => {
+                        if ui.button("open in editor  (Enter / l)").clicked() {
+                            self.open_in_editor(sel);
+                        }
+                        ui.add_space(4.0);
+                        // take/put-back so the markdown cache and the body can
+                        // be borrowed simultaneously without a per-frame clone
+                        let detail = self.detail.take();
+                        if let Some((_, body)) = &detail {
+                            egui::ScrollArea::vertical()
+                                .id_salt("nav-preview")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+                                });
+                        }
+                        self.detail = detail;
+                    }
+                    NodeKind::Dir => {
+                        let children = self.g.node(sel).children.clone();
+                        egui::ScrollArea::vertical()
+                            .id_salt("nav-preview")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.label(format!("{} entries — l enters", children.len()));
+                                ui.add_space(4.0);
+                                for c in children {
+                                    let child = self.g.node(c);
+                                    let icon = if child.kind == NodeKind::Dir {
+                                        "▸ "
+                                    } else {
+                                        "· "
+                                    };
+                                    if ui.link(format!("{icon}{}", child.display_name())).clicked()
+                                    {
+                                        jump = Some(c);
+                                    }
+                                }
+                            });
+                    }
+                    NodeKind::Ghost => {
+                        ui.label("Not written yet. Referenced from:");
+                        ui.add_space(4.0);
+                        let refs: Vec<NodeId> = self
+                            .g
+                            .links
+                            .iter()
+                            .filter(|l| l.to == sel)
+                            .map(|l| l.from)
+                            .collect();
+                        for r in refs {
+                            if ui.link(self.g.node(r).path.clone()).clicked() {
+                                jump = Some(r);
+                            }
                         }
                     }
-                });
-            }
-            NodeKind::Ghost => {
-                ui.label("Not written yet. Referenced from:");
-                ui.add_space(4.0);
-                let refs: Vec<NodeId> = self
-                    .g
-                    .links
-                    .iter()
-                    .filter(|l| l.to == sel)
-                    .map(|l| l.from)
-                    .collect();
-                for r in refs {
-                    if ui.link(self.g.node(r).path.clone()).clicked() {
-                        jump = Some(r);
-                    }
                 }
-            }
-        }
+            });
+        });
+        self.nav_scroll = false;
         if let Some(j) = jump {
             self.selected = Some(j);
             self.frame_node(j);
+            self.nav_scroll = true;
         }
     }
 
