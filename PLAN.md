@@ -211,12 +211,13 @@ agents.
 2. **E2 — read-only live mirrors in the graph.** Terminal cards anchored to dir
    nodes; LOD (zoomed out: name + activity glow + last line; zoomed in: the live
    styled grid); discovery of vault sessions (`tg_*` ours by name, foreign panes by
-   cwd-in-vault + agent-command allowlist with ~10s hysteresis against
-   foreground-command flicker during tool calls).
+   cwd-in-vault + agent-command allowlist; identity is sticky for the pane's
+   lifetime — pinned to the pane's root pid — so tool calls of any length
+   survive, with a short grace only for panes that vanish from a scan).
    — **Decision point: mirror a real claude session and judge fidelity before E3.**
 3. **E3 — input.** Click-to-focus; egui key/text events → xterm byte sequences →
    `send-keys -H`; all graph keybinds suspend while a terminal is focused; release
-   by clicking empty space or Ctrl+Shift+Q. Known long tail: bracketed paste,
+   by clicking empty space or Ctrl+Q. Known long tail: bracketed paste,
    Shift+Enter, extended keys — expect a punch-list from real use. Mouse-into-
    terminal and in-graph scrollback are explicitly v2 (attach externally for those).
 4. **E4 — lifecycle.** Launch-from-node buttons (`tmux new-session -d -s tg_… -c

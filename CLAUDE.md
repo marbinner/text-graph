@@ -45,14 +45,17 @@
   egui's input (not just read) so widget focus/shortcuts never fire. After
   a capture replay the pane cursor MUST be restored via the queried
   position — the replay parks it at the bottom row (regression-guarded by
-  `typed_input_round_trips`). Reply blocks terminate only on the %end/%error
-  matching their %begin's command number — protocol-shaped screen text is
-  data. Agent identity is sticky for a pane's lifetime (tool calls flip
-  pane_current_command to bash for arbitrarily long); GRACE only governs
-  remembering vanished panes.
+  `typed_input_round_trips` and the headless mirror pump test). Reply
+  blocks terminate only on the %end/%error matching their %begin's command
+  number — protocol-shaped screen text is data. Agent identity is sticky
+  for a pane's lifetime (tool calls flip pane_current_command to bash for
+  arbitrarily long) and pinned to the pane's root pid (pane ids restart at
+  %0 on a new tmux server); GRACE only governs remembering vanished panes.
+  The control-mode reader must consume BYTES (read_until + lossy), never
+  read_line — panes emit raw >=0x80 bytes and an Err would kill the mirror.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
   suspend), drag = arrange (world-space offset from anchor in
-  `term_offsets`), Ctrl+Shift+Q or click-away = release. Cards win pointer
+  `term_offsets`), Ctrl+Q or click-away = release. Cards win pointer
   contention over nodes beneath them via last-frame `term_rects`.
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.

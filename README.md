@@ -75,7 +75,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | click a terminal card | focus it — the keyboard now types into that agent |
 | double-click a terminal card | fly the view into that terminal: zooms to a readable size and centers it |
 | drag a terminal card | arrange it (it stays put, following its anchor node) |
-| drag a card's corner grip (`tg_` cards) | **natively resize the terminal** — the tmux session itself changes size and the card follows; foreign sessions resize from their own terminal |
+| drag a card's corner grip (`tg_` cards, full view — compact zoomed-out cards have no grip) | **natively resize the terminal** — the tmux session itself changes size and the card follows; foreign sessions resize from their own terminal |
 | `Ctrl+Q` / click empty space | release terminal focus |
 
 Edit any file in the vault and the graph updates ~300ms after you save — new
@@ -151,19 +151,21 @@ How it works, and why it's safe:
   approach). tmux stays the real terminal: sessions persist when the viewer
   closes, `tmux attach` from any terminal keeps working, and tmux answers all
   the TUI's terminal queries — the viewer only renders display streams.
-- Sessions named `tg_*` (launched from the graph) always show; other tmux
-  panes show while their cwd is in the vault and their foreground command
-  matches the agent list (with a grace period covering the moments a tool
-  call puts `bash` in the foreground).
+- Sessions named `tg_*` (launched from the graph) always show while their
+  cwd is in the vault; other tmux panes additionally need their foreground
+  command to match the agent list. Once recognized, a pane's identity is
+  **sticky for its lifetime** (pinned to the pane's root process), so
+  tool calls that put `bash` in the foreground for minutes don't drop the
+  card.
 - The viewer never sends size hints to sessions it didn't create, so it can
   never reflow a session you're viewing in a real terminal.
 - No tmux installed → the feature is simply absent; everything else works.
 
 v1 input limits: `Ctrl+Q` is reserved by the viewer (it releases focus, so
-it never reaches the pane), Alt+letter arrives as the plain letter,
-Shift+Enter sends Enter, no mouse-into-terminal, no in-graph scrollback —
-attach externally (right-click the card, or `tmux attach -t work`) when you
-need those.
+it never reaches the pane), Shift+Enter sends Enter, no mouse-into-terminal,
+no in-graph scrollback — attach externally (right-click the card, or
+`tmux attach -t work`) when you need those. Alt chords (Alt+b/f word
+motion, Alt+digit args) work.
 
 ## Determinism
 
@@ -215,9 +217,11 @@ cargo test      # unit + integration; integration asserts fixtures/EXPECTED.md
 cargo clippy --all-targets
 ```
 
-Two integration tests run against a real tmux on a private socket (skipped
-without tmux): one asserts a scripted styled screen mirrors correctly, the
-other drives the exact typing path end-to-end and asserts the echo.
+A suite of integration tests runs against a real tmux on a private socket
+(skipped without tmux): scripted styled-screen mirroring, the exact typing
+path end-to-end, native resize propagation, and agent launching. The
+mirror's protocol layer (reply correlation, capture replay, cursor
+restore) is additionally unit-tested without tmux.
 
 House rules: if you touch `fixtures/vault/`, re-count `fixtures/EXPECTED.md`
 and update the tests in the same commit — the numbers are asserted exactly.
