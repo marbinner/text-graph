@@ -27,6 +27,11 @@ graph live-reloads when you save.
 | **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton |
 | **WikiLink edge** | `[[...]]` in note bodies; drawn as faint curves, bright on the hovered node |
 
+Zoomed in, discs reveal a type glyph: a folder silhouette on dirs, a
+dog-eared page on files, an outlined page on ghosts — zoomed out they stay
+plain color-coded circles (blue dirs, gray files), so huge graphs render
+cheap.
+
 ### Link resolution
 
 Casefolded throughout; `.md` suffix optional; alias (`[[x|shown]]`) and

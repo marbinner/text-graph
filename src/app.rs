@@ -40,6 +40,43 @@ const DIM: f32 = 0.18;
 /// Zoom level a double-clicked card flies to — full styled screen, readable.
 const CARD_ZOOM: f32 = 2.2;
 
+/// Screen radius above which a node shows its type glyph.
+const ICON_MIN_R: f32 = 6.5;
+
+/// Folder silhouette: tab + rounded body, sized relative to the node disc.
+fn paint_folder_icon(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
+    let w = r * 1.02;
+    let h = r * 0.72;
+    let body = Rect::from_center_size(c + Vec2::new(0.0, r * 0.10), Vec2::new(w, h));
+    let tab = Rect::from_min_size(
+        Pos2::new(body.min.x, body.min.y - r * 0.20),
+        Vec2::new(w * 0.45, r * 0.24),
+    );
+    p.rect_filled(tab, r * 0.08, color);
+    p.rect_filled(body, r * 0.10, color);
+}
+
+/// Dog-eared page. `fill` paints it solid (punch-out on filled discs);
+/// `outline` strokes it instead (hollow ghosts).
+fn paint_doc_icon(p: &egui::Painter, c: Pos2, r: f32, fill: Option<Color32>, outline: Option<Color32>) {
+    let w = r * 0.78;
+    let h = r * 1.02;
+    let page = Rect::from_center_size(c, Vec2::new(w, h));
+    let ear = w * 0.40;
+    let pts = vec![
+        page.min,
+        Pos2::new(page.max.x - ear, page.min.y),
+        Pos2::new(page.max.x, page.min.y + ear),
+        Pos2::new(page.max.x, page.max.y),
+        Pos2::new(page.min.x, page.max.y),
+    ];
+    if let Some(color) = fill {
+        p.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+    } else if let Some(color) = outline {
+        p.add(egui::Shape::closed_line(pts, Stroke::new(1.0, color)));
+    }
+}
+
 /// Bottom-right corner zone of a card that resizes instead of moving.
 fn resize_handle(card: Rect) -> Rect {
     Rect::from_min_max(card.max - Vec2::splat(16.0), card.max)
@@ -1903,15 +1940,30 @@ impl Viewer {
             let node = self.g.node(id);
             let on = lit[id.0 as usize];
             let dimmed = |c: Color32| if on { c } else { c.gamma_multiply(DIM) };
+            // Type glyph inside the disc once it's big enough to read — a
+            // dark punch-out silhouette, painter primitives only (no text
+            // layout), so zoomed-out rendering stays a plain circle.
+            let glyph = r >= ICON_MIN_R;
+            let punch = dimmed(TERM_BG);
             match node.kind {
                 NodeKind::Ghost => {
                     painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(GHOST)));
+                    if glyph {
+                        // an unwritten page, hollow like its node
+                        paint_doc_icon(&painter, s, r, None, Some(dimmed(GHOST)));
+                    }
                 }
                 NodeKind::Dir => {
                     painter.circle_filled(s, r, dimmed(DIR));
+                    if glyph {
+                        paint_folder_icon(&painter, s, r, punch);
+                    }
                 }
                 NodeKind::File => {
                     painter.circle_filled(s, r, dimmed(FILE));
+                    if glyph {
+                        paint_doc_icon(&painter, s, r, Some(punch), None);
+                    }
                 }
             }
             if active == Some(id) {
