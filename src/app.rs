@@ -86,7 +86,10 @@ fn build_cached(grid: &TermGrid) -> CachedPane {
     if let Some((cr, _)) = grid.cursor {
         shown = shown.max(cr as usize + 1);
     }
-    let shown = shown.clamp(2, grid.rows.max(2) as usize);
+    // never exceed the real row count — a 1-row pane must not slice past the
+    // cells vec (was a reachable panic)
+    let max_rows = grid.rows.max(1) as usize;
+    let shown = shown.max(2).min(max_rows);
 
     let mut rows = Vec::with_capacity(shown);
     for r in 0..shown {
@@ -776,8 +779,12 @@ impl Viewer {
         self.selected = self
             .selected
             .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
+        // remap rather than clear: a reload landing mid-drag (agents save
+        // files constantly) must not silently turn the gesture into a pan
+        self.drag_node = self
+            .drag_node
+            .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
         self.hover = None;
-        self.drag_node = None;
         self.best = None;
 
         let Derived { radius, haystacks, n_files, n_dirs, dir_by_path } = Self::derived(&g);
@@ -1041,8 +1048,11 @@ impl Viewer {
         // use last frame's geometry — standard immediate-mode lag,
         // imperceptible at interactive frame rates.
         let over_card: Option<(String, String)> = response.hover_pos().and_then(|c| {
+            // reverse: cards are painted in order, so the LAST rect containing
+            // the cursor is the one visibly on top
             self.term_rects
                 .iter()
+                .rev()
                 .find(|(_, _, r)| r.contains(c))
                 .map(|(s, p, _)| (s.clone(), p.clone()))
         });
@@ -1195,7 +1205,9 @@ impl Viewer {
             let Some(parent) = node.parent else { continue };
             let sa = self.to_screen(rect, self.world_pos(i));
             let sb = self.to_screen(rect, self.world_pos(parent.0 as usize));
-            if !view.contains(sa) && !view.contains(sb) {
+            // bbox test, not endpoint containment: a long edge crossing the
+            // viewport must not vanish when both ends are off-screen
+            if !view.intersects(Rect::from_two_pos(sa, sb)) {
                 continue;
             }
             let on = lit[i] && lit[parent.0 as usize];
@@ -1208,7 +1220,7 @@ impl Viewer {
         for l in &self.g.links {
             let sa = self.to_screen(rect, self.world_pos(l.from.0 as usize));
             let sb = self.to_screen(rect, self.world_pos(l.to.0 as usize));
-            if !view.contains(sa) && !view.contains(sb) {
+            if !view.intersects(Rect::from_two_pos(sa, sb)) {
                 continue;
             }
             let bright = active == Some(l.from) || active == Some(l.to);

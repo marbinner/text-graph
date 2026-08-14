@@ -192,10 +192,14 @@ impl Sim {
 
             if let Some((id, px, py)) = self.pinned {
                 let i = id as usize;
-                self.x[i] = px;
-                self.y[i] = py;
-                self.vx[i] = 0.0;
-                self.vy[i] = 0.0;
+                if i < n {
+                    // bounds-guarded: a stale pin held across a graph swap
+                    // must degrade, not panic
+                    self.x[i] = px;
+                    self.y[i] = py;
+                    self.vx[i] = 0.0;
+                    self.vy[i] = 0.0;
+                }
             }
         }
     }
@@ -257,6 +261,14 @@ mod tests {
         };
         // a→ghost are spring-linked; b→ghost are not
         assert!(d(1, 3) < d(2, 3), "linked pair should sit closer");
+    }
+
+    #[test]
+    fn stale_pin_out_of_range_does_not_panic() {
+        let g = synth();
+        let mut s = Sim::new(&g);
+        s.pin(999, 0.0, 0.0);
+        s.tick(10);
     }
 
     #[test]

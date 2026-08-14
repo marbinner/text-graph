@@ -20,6 +20,10 @@ pub const RING_SPACING: f32 = 180.0;
 /// Contains tree) get `None` — v1 doesn't place them.
 pub fn radial(g: &Graph) -> Vec<Option<Pos>> {
     let n = g.nodes.len();
+    if n == 0 {
+        return Vec::new(); // graph::build always makes a root, but the pub
+        // API must not panic on a hand-built empty graph
+    }
     let mut pos = vec![None; n];
     let mut weight = vec![0f32; n];
     subtree_weight(g, g.root, &mut weight);
@@ -123,5 +127,19 @@ mod tests {
     fn root_is_at_origin() {
         let pos = radial(&tiny());
         assert_eq!(pos[0], Some(Pos { x: 0.0, y: 0.0 }));
+    }
+
+    #[test]
+    fn empty_graph_yields_no_positions() {
+        let g = Graph {
+            nodes: Vec::new(),
+            links: Vec::new(),
+            root: NodeId(0),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            ambiguities: Vec::new(),
+            self_links_dropped: 0,
+        };
+        assert!(radial(&g).is_empty());
     }
 }
