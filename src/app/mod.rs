@@ -6,6 +6,8 @@
 //! and paint call goes through it. Zoom is toward the cursor. Dragging a node
 //! pins it and reheats the simulation; dragging empty space pans.
 
+mod diag;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -372,6 +374,8 @@ struct CreateDialog {
     err: Option<String>,
 }
 
+type ReloadMsg = (u64, anyhow::Result<Graph>);
+
 struct Viewer {
     g: Graph,
     sim: Sim,
@@ -407,6 +411,15 @@ struct Viewer {
     _watcher: Option<notify::RecommendedWatcher>,
     /// Timestamp of the last relevant filesystem event (debounce state).
     reload_at: Arc<Mutex<Option<Instant>>>,
+    /// Monotonic reload request counter — results from superseded requests
+    /// are discarded on arrival.
+    reload_gen: u64,
+    reload_tx: std::sync::mpsc::Sender<ReloadMsg>,
+    reload_rx: std::sync::mpsc::Receiver<ReloadMsg>,
+    /// Health state, surfaced by the diagnostics badge.
+    last_reload: Option<Instant>,
+    reload_error: Option<String>,
+    diag_open: bool,
     // ---- terminals in the graph ----
     /// Dir path → node, for anchoring agent panes at their cwd.
     dir_by_path: HashMap<String, NodeId>,
@@ -537,6 +550,7 @@ impl Viewer {
             dir_by_path,
         } = Self::derived(&g);
         let n = haystacks.len();
+        let (reload_tx, reload_rx) = std::sync::mpsc::channel();
         let vs = state::load(&root);
         let cam = vs.camera;
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
@@ -571,6 +585,12 @@ impl Viewer {
             detail: None,
             _watcher: None,
             reload_at: Arc::new(Mutex::new(None)),
+            reload_gen: 0,
+            reload_tx,
+            reload_rx,
+            last_reload: None,
+            reload_error: None,
+            diag_open: false,
             dir_by_path,
             agents_seen: Arc::new(Mutex::new(Vec::new())),
             agent_panes: Vec::new(),
@@ -1076,15 +1096,14 @@ impl Viewer {
         }
     }
 
-    /// Re-scan the vault and swap the graph in, carrying over sim positions,
+    /// Swap a freshly built graph in, carrying over sim positions,
     /// selection, and search identity by path so an edit ripples the layout
     /// instead of re-settling it. Identity is `Node::ident` (ghosts
-    /// namespaced — see graph.rs).
-    fn rebuild(&mut self) {
-        let Ok(scan) = vault::scan(&self.root) else {
-            return; // vault temporarily unreadable — keep showing the old graph
-        };
-        let g = graph::build(scan);
+    /// namespaced — see graph.rs). The expensive scan+build happens on a
+    /// worker thread (see `ui`); only this cheap carry-over runs here.
+    fn apply_graph(&mut self, g: Graph) {
+        self.last_reload = Some(Instant::now());
+        self.reload_error = None;
 
         let old_pos: HashMap<String, (f32, f32)> = self
             .g
@@ -2605,7 +2624,28 @@ impl eframe::App for Viewer {
             }
         };
         if due {
-            self.rebuild();
+            // scan+build on a worker (45ms at 500 files — a visible hitch
+            // if done here, and agents save constantly); only the cheap
+            // carry-over runs on the UI thread when the result lands
+            self.reload_gen += 1;
+            let generation = self.reload_gen;
+            let root = self.root.clone();
+            let tx = self.reload_tx.clone();
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let res = vault::scan(&root).map(graph::build);
+                let _ = tx.send((generation, res));
+                ctx.request_repaint();
+            });
+        }
+        while let Ok((generation, res)) = self.reload_rx.try_recv() {
+            if generation != self.reload_gen {
+                continue; // superseded by a newer save — discard stale build
+            }
+            match res {
+                Ok(g) => self.apply_graph(g),
+                Err(e) => self.reload_error = Some(format!("{e:#}")),
+            }
         }
         let release = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q));
         if release {
@@ -2635,6 +2675,7 @@ impl eframe::App for Viewer {
             .show(ui, |ui| self.canvas(ui));
         let ctx = ui.ctx().clone();
         self.create_dialog_ui(&ctx);
+        self.diag_ui(&ctx);
         self.persist_state(false);
         // egui repaints on demand; without a heartbeat the debounced save
         // would never run once the sim settles and input stops
