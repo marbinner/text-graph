@@ -64,7 +64,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `f` | frame the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
 | `h` `j` `k` `l` | pan left/down/up/right (vim-style; hold to glide) |
-| `d` / `u` | zoom in / out |
+| `u` / `d` | zoom in / out |
 | `t` | cycle through terminal cards — flies to and focuses each in turn |
 | `Esc` | close search, else deselect |
 | click a terminal card | focus it — the keyboard now types into that agent |

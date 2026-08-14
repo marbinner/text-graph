@@ -999,10 +999,11 @@ impl Viewer {
             });
             if h || j || k || l || d || u {
                 let axis = |pos: bool, neg: bool| (pos as i8 - neg as i8) as f32;
-                let pan = 600.0 * dt / self.zoom; // constant screen-space speed
+                let pan = 2200.0 * dt / self.zoom; // constant screen-space speed
                 self.center.x += pan * axis(l, h);
                 self.center.y += pan * axis(j, k);
-                let zf = 2.2f32.powf(dt * axis(d, u));
+                // u dives in, d pulls out (vim half-page up/down, roughly)
+                let zf = 6.0f32.powf(dt * axis(u, d));
                 self.zoom = (self.zoom * zf).clamp(0.02, 50.0);
                 ui.ctx().request_repaint();
             }
