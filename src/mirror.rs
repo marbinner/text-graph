@@ -44,8 +44,28 @@ enum Pending {
     Cursor(PaneId),
 }
 
+/// The command channel back to tmux. Tests swap in a recorder so `pump`'s
+/// reply-correlation logic runs headless.
+enum Transport {
+    Tmux(TmuxClient),
+    #[cfg(test)]
+    Recorded(Vec<String>),
+}
+
+impl Transport {
+    fn command(&mut self, cmd: &str) {
+        match self {
+            Transport::Tmux(c) => {
+                let _ = c.command(cmd);
+            }
+            #[cfg(test)]
+            Transport::Recorded(v) => v.push(cmd.to_string()),
+        }
+    }
+}
+
 pub struct SessionMirror {
-    client: TmuxClient,
+    client: Transport,
     rx: Receiver<TmuxEvent>,
     panes: HashMap<PaneId, vt100::Parser>,
     /// FIFO tags correlating our sent commands with incoming Reply blocks.
@@ -68,7 +88,7 @@ impl SessionMirror {
     ) -> std::io::Result<Self> {
         let (client, rx) = TmuxClient::attach(session, socket, wake)?;
         let mut m = SessionMirror {
-            client,
+            client: Transport::Tmux(client),
             rx,
             panes: HashMap::new(),
             pending: VecDeque::new(),
@@ -86,7 +106,7 @@ impl SessionMirror {
 
     fn send(&mut self, tag: Pending, cmd: &str) {
         self.pending.push_back(tag);
-        let _ = self.client.command(cmd);
+        self.client.command(cmd);
     }
 
     fn list_panes(&mut self) {
@@ -305,6 +325,103 @@ fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::Sender;
+
+    /// A mirror with a recorded transport and a hand-fed event channel —
+    /// the full pump/reply-FIFO path, no tmux required.
+    fn test_mirror() -> (SessionMirror, Sender<TmuxEvent>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut m = SessionMirror {
+            client: Transport::Recorded(Vec::new()),
+            rx,
+            panes: HashMap::new(),
+            pending: VecDeque::new(),
+            saw_banner: false,
+            exited: false,
+            generation: 0,
+        };
+        m.list_panes(); // what attach() does after the handshake
+        (m, tx)
+    }
+
+    fn sent(m: &SessionMirror) -> &[String] {
+        match &m.client {
+            Transport::Recorded(v) => v,
+            Transport::Tmux(_) => unreachable!(),
+        }
+    }
+
+    fn reply(tx: &Sender<TmuxEvent>, lines: &[&str], error: bool) {
+        tx.send(TmuxEvent::Reply {
+            lines: lines.iter().map(|s| s.to_string()).collect(),
+            error,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn pump_correlates_replies_and_restores_cursor() {
+        let (mut m, tx) = test_mirror();
+
+        // 1. the attach handshake's unsolicited banner must NOT consume the
+        //    pending ListPanes tag
+        reply(&tx, &[], false);
+        // 2. list-panes answer: one 20x4 pane appears, capture + cursor
+        //    queries go out
+        reply(&tx, &["%5,20,4"], false);
+        m.pump();
+        assert!(sent(&m)[1].contains("capture-pane -peq -t %5"), "{:?}", sent(&m));
+        assert!(sent(&m)[2].contains("-t %5"), "cursor query");
+
+        // 3. capture replay parks the parser cursor at the bottom…
+        reply(&tx, &["hello", "world"], false);
+        // 4. …and the cursor query must move it back to the true position
+        reply(&tx, &["0,5"], false);
+        // 5. live output then lands at that cursor, not on the last row
+        tx.send(TmuxEvent::Output { pane: "%5".into(), bytes: b"!".to_vec() }).unwrap();
+        m.pump();
+        let grids = m.grids();
+        let (id, g) = &grids[0];
+        assert_eq!(id, "%5");
+        assert_eq!((g.cols, g.rows), (20, 4));
+        let row0: String = g.cells[..20].iter().map(|c| c.ch).collect();
+        assert_eq!(row0.trim_end(), "hello!");
+        assert_eq!(g.cursor, Some((0, 6)));
+
+        // 6. an %error reply still pops its tag — the FIFO stays aligned —
+        //    and a failed list-panes must not wipe the panes
+        m.command("resize-window -t %5 -x 1 -y 1"); // Pending::Ignore
+        m.list_panes();
+        reply(&tx, &[], false); // Ignore's reply
+        reply(&tx, &["oops"], true); // list-panes failed
+        m.pump();
+        assert_eq!(m.grids().len(), 1, "error reply must not clear panes");
+
+        // 7. a resize re-captures at the new geometry
+        m.list_panes();
+        reply(&tx, &["%5,30,10"], false);
+        m.pump();
+        let g = &m.grids()[0].1;
+        assert_eq!((g.cols, g.rows), (30, 10));
+        // answer the re-capture + cursor query the resize queued, keeping
+        // the reply FIFO aligned like a real tmux would
+        reply(&tx, &["resized"], false);
+        reply(&tx, &["0,0"], false);
+
+        // 8. pane replaced: %5 gone, %7 appears
+        tx.send(TmuxEvent::Changed).unwrap();
+        m.pump(); // queues another list-panes
+        reply(&tx, &["%7,10,5"], false);
+        m.pump();
+        let grids = m.grids();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].0, "%7");
+
+        // 9. exit flag
+        tx.send(TmuxEvent::Exit).unwrap();
+        m.pump();
+        assert!(m.exited);
+    }
 
     fn grid(bytes: &[u8]) -> TermGrid {
         let mut p = vt100::Parser::new(4, 20, 0);

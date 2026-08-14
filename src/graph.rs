@@ -45,6 +45,17 @@ impl Node {
             .or_else(|| self.aliases.first().map(String::as_str))
             .unwrap_or(&self.name)
     }
+
+    /// Cross-reload identity key. A ghost's `path` is raw target text, which
+    /// can collide with a real dir path (ghost `[[notes]]` vs dir `notes`) —
+    /// ghosts get their own namespace so position/selection carry-over never
+    /// confuses the two.
+    pub fn ident(&self) -> String {
+        match self.kind {
+            NodeKind::Ghost => format!("[[{}]]", self.path),
+            _ => self.path.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -219,5 +230,37 @@ fn sort_children(g: &mut Graph) {
     for node in &mut g.nodes {
         node.children
             .sort_by(|a, b| keys[a.0 as usize].cmp(&keys[b.0 as usize]));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(kind: NodeKind, path: &str) -> Node {
+        Node {
+            kind,
+            path: path.to_string(),
+            name: path.to_string(),
+            title: None,
+            aliases: Vec::new(),
+            parent: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// The cross-reload identity invariant: a ghost whose raw target text
+    /// equals a real node's path must NOT share its identity — otherwise
+    /// live reload hands the ghost the dir's position/selection (or vice
+    /// versa).
+    #[test]
+    fn ghost_ident_never_collides_with_real_paths() {
+        let dir = node(NodeKind::Dir, "notes");
+        let file = node(NodeKind::File, "notes");
+        let ghost = node(NodeKind::Ghost, "notes");
+        assert_eq!(dir.ident(), "notes");
+        assert_eq!(file.ident(), "notes");
+        assert_ne!(ghost.ident(), dir.ident());
+        assert_eq!(ghost.ident(), "[[notes]]");
     }
 }

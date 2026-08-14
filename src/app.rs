@@ -17,7 +17,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use text_graph::agents::{self, AgentPane};
-use text_graph::graph::{Graph, Node, NodeId, NodeKind};
+use text_graph::graph::{Graph, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
@@ -947,19 +947,10 @@ impl Viewer {
         }
     }
 
-    /// Cross-reload identity key. A ghost's `path` is raw target text, which
-    /// can collide with a real dir path (ghost `[[notes]]` vs dir `notes/`) —
-    /// ghosts get their own namespace so carry-over never confuses the two.
-    fn ident(node: &Node) -> String {
-        match node.kind {
-            NodeKind::Ghost => format!("[[{}]]", node.path),
-            _ => node.path.clone(),
-        }
-    }
-
     /// Re-scan the vault and swap the graph in, carrying over sim positions,
     /// selection, and search identity by path so an edit ripples the layout
-    /// instead of re-settling it.
+    /// instead of re-settling it. Identity is `Node::ident` (ghosts
+    /// namespaced — see graph.rs).
     fn rebuild(&mut self) {
         let Ok(scan) = vault::scan(&self.root) else {
             return; // vault temporarily unreadable — keep showing the old graph
@@ -971,11 +962,11 @@ impl Viewer {
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| (Self::ident(n), (self.sim.x[i], self.sim.y[i])))
+            .map(|(i, n)| (n.ident(), (self.sim.x[i], self.sim.y[i])))
             .collect();
         let mut sim = Sim::new(&g);
         for (i, node) in g.nodes.iter().enumerate() {
-            if let Some(&(x, y)) = old_pos.get(&Self::ident(node)) {
+            if let Some(&(x, y)) = old_pos.get(&node.ident()) {
                 sim.x[i] = x;
                 sim.y[i] = y;
             }
@@ -986,19 +977,19 @@ impl Viewer {
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| (Self::ident(n), NodeId(i as u32)))
+            .map(|(i, n)| (n.ident(), NodeId(i as u32)))
             .collect();
         self.selected = self
             .selected
-            .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
+            .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
         // remap rather than clear: a reload landing mid-drag (agents save
         // files constantly) must not silently turn the gesture into a pan
         self.drag_node = self
             .drag_node
-            .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
+            .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
         self.ctx_node = self
             .ctx_node
-            .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
+            .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
         self.hover = None;
         self.best = None;
 
