@@ -8,6 +8,7 @@
 
 mod actions;
 mod diag;
+mod images;
 mod navigator;
 mod reload;
 mod terminals;
@@ -238,6 +239,8 @@ struct Viewer {
     dir_by_path: HashMap<String, NodeId>,
     /// Everything terminal-card related — see terminals::Terminals.
     terms: terminals::Terminals,
+    /// Thumbnail decode worker + texture cache for Image nodes.
+    thumbs: images::Thumbs,
     // ---- view-state persistence ----
     /// View state as last written to `.text-graph/view` (skip no-op saves).
     saved_state: Option<state::ViewState>,
@@ -376,6 +379,7 @@ impl Viewer {
             diag_open: false,
             dir_by_path,
             terms: terminals::Terminals::new(restore_offsets),
+            thumbs: images::Thumbs::new(),
             saved_state: None,
             last_save: Instant::now(),
             save_warned: false,
@@ -760,6 +764,21 @@ impl Viewer {
         self.center + (s - rect.center()) / self.zoom
     }
 
+    /// Screen radius above which an Image node paints as a thumbnail box
+    /// rather than a disc.
+    const IMG_BOX_MIN_R: f32 = 7.0;
+
+    /// The rect an Image node's thumbnail occupies: aspect from the decoded
+    /// texture (4:3 until it arrives), fit into half-extents 1.5r × r.
+    fn image_box(&self, id: NodeId, s: Pos2, r: f32) -> Rect {
+        let aspect = self
+            .thumbs
+            .aspect(&self.g.node(id).path)
+            .unwrap_or(4.0 / 3.0);
+        let half_h = (1.5 * r / aspect).min(r);
+        Rect::from_center_size(s, Vec2::new(aspect * half_h, half_h) * 2.0)
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if !self.fitted {
@@ -776,6 +795,7 @@ impl Viewer {
         // ---- agent terminals: discovery snapshot, mirrors, screen caches ----
         let ctx = ui.ctx().clone();
         self.sync_terminals(&ctx);
+        self.thumbs.pump(&ctx);
 
         // ---- input ----
         // Cards sit on top and win pointer contention. over_card and hover
@@ -945,7 +965,14 @@ impl Viewer {
             if !view.contains(s) {
                 continue;
             }
-            let r = (self.radius[i] * self.zoom).clamp(1.5, 16.0);
+            // images render as thumbnails, so their "radius" is the box
+            // half-height with a much larger cap — hover targets, rings, and
+            // label anchors all follow it
+            let r = if self.g.nodes[i].kind == NodeKind::Image {
+                (self.radius[i] * 2.0 * self.zoom).clamp(1.5, 110.0)
+            } else {
+                (self.radius[i] * self.zoom).clamp(1.5, 16.0)
+            };
             visible.push((NodeId(i as u32), s, r));
         }
 
@@ -1127,23 +1154,74 @@ impl Viewer {
                     }
                 }
                 NodeKind::Image => {
-                    painter.circle_filled(s, r, dimmed(IMG));
-                    if glyph {
-                        paint_img_icon(&painter, s, r, punch, dimmed(IMG));
+                    if r < Self::IMG_BOX_MIN_R {
+                        painter.circle_filled(s, r, dimmed(IMG));
+                    } else {
+                        // decode on demand, draw the thumbnail once it lands;
+                        // a framed placeholder with the photo glyph meanwhile
+                        self.thumbs
+                            .request(ui.ctx(), &node.path, self.root.join(&node.path));
+                        let bx = self.image_box(id, s, r);
+                        let tint = if on {
+                            Color32::WHITE
+                        } else {
+                            Color32::WHITE.gamma_multiply(DIM)
+                        };
+                        match self.thumbs.cache.get(&node.path) {
+                            Some(images::ThumbState::Ready(tex)) => {
+                                painter.image(
+                                    tex.id(),
+                                    bx,
+                                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                    tint,
+                                );
+                            }
+                            _ => {
+                                painter.rect_filled(bx, 2.0, dimmed(TERM_BG));
+                                paint_img_icon(
+                                    &painter,
+                                    s,
+                                    r.min(14.0),
+                                    dimmed(IMG),
+                                    dimmed(TERM_BG),
+                                );
+                            }
+                        }
+                        painter.rect_stroke(
+                            bx,
+                            2.0,
+                            Stroke::new(1.0, dimmed(EDGE)),
+                            egui::StrokeKind::Outside,
+                        );
                     }
                 }
             }
+            // rings follow the painted shape: thumbnail boxes get a rect
+            // ring, everything else the classic circle
+            let boxed = node.kind == NodeKind::Image && r >= Self::IMG_BOX_MIN_R;
+            let ring = |color: Color32, width: f32| {
+                if boxed {
+                    painter.rect_stroke(
+                        self.image_box(id, s, r).expand(3.0),
+                        2.0,
+                        Stroke::new(width, color),
+                        egui::StrokeKind::Outside,
+                    );
+                } else {
+                    painter.circle_stroke(s, r + 3.0, Stroke::new(width, color));
+                }
+            };
             if active == Some(id) {
                 let color = if self.selected == Some(id) {
                     SELECT
                 } else {
                     HOVER
                 };
-                painter.circle_stroke(s, r + 3.0, Stroke::new(2.0, color));
+                ring(color, 2.0);
             } else if searching && self.best == Some(id) {
-                painter.circle_stroke(s, r + 3.0, Stroke::new(2.0, HOVER));
+                ring(HOVER, 2.0);
             } else if partners.contains(&id) {
-                painter.circle_stroke(s, r + 3.0, Stroke::new(1.5, WIKI));
+                ring(WIKI, 1.5);
             }
         }
 
@@ -1177,8 +1255,15 @@ impl Viewer {
             } else {
                 TEXT.gamma_multiply(0.35 + 0.65 * fade.unwrap_or(0.0))
             };
+            // a thumbnail box can be wider than r — hang the label off its
+            // right edge, not the nominal radius
+            let anchor = if node.kind == NodeKind::Image && r >= Self::IMG_BOX_MIN_R {
+                Pos2::new(self.image_box(id, s, r).max.x + 5.0, s.y)
+            } else {
+                s + Vec2::new(r + 5.0, 0.0)
+            };
             painter.text(
-                s + Vec2::new(r + 5.0, 0.0),
+                anchor,
                 Align2::LEFT_CENTER,
                 node.display_name(),
                 FontId::proportional(11.5),

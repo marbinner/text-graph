@@ -92,6 +92,7 @@ impl Viewer {
         self.scores = vec![None; g.nodes.len()];
         self.last_query.clear(); // force a re-score against the new nodes
         self.detail = None; // re-read the body — the pane shows fresh edits
+        self.thumbs.clear(); // image files may have changed on disk
         self.g = g;
         self.sim = sim;
 

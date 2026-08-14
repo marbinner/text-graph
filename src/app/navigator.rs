@@ -224,7 +224,36 @@ impl Viewer {
                                 self.open_in_editor(sel);
                             }
                             ui.add_space(4.0);
-                            ui.label(egui::RichText::new("image file").weak());
+                            let key = self.g.node(sel).path.clone();
+                            let ctx = ui.ctx().clone();
+                            self.thumbs.request(&ctx, &key, self.root.join(&key));
+                            match self.thumbs.cache.get(&key) {
+                                Some(images::ThumbState::Ready(tex)) => {
+                                    let size = tex.size_vec2();
+                                    let w = ui.available_width().min(size.x.max(96.0));
+                                    let h = w * size.y / size.x.max(1.0);
+                                    ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                                        tex.id(),
+                                        egui::vec2(w, h),
+                                    )));
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} × {} (thumbnail)",
+                                            size.x as u32, size.y as u32
+                                        ))
+                                        .small()
+                                        .weak(),
+                                    );
+                                }
+                                Some(images::ThumbState::Failed) => {
+                                    ui.label(
+                                        egui::RichText::new("could not decode this image").weak(),
+                                    );
+                                }
+                                _ => {
+                                    ui.label(egui::RichText::new("loading…").weak());
+                                }
+                            }
                         }
                         NodeKind::Ghost => {
                             ui.label("Not written yet. Referenced from:");
