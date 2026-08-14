@@ -7,10 +7,11 @@
 //! pins it and reheats the simulation; dragging empty space pans.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Vec2};
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use text_graph::graph::{Graph, NodeId, NodeKind};
@@ -39,7 +40,8 @@ pub fn run(path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let viewer = Viewer::new(graph::build(scan));
+    let root = scan.root.clone();
+    let viewer = Viewer::new(graph::build(scan), root);
     let title = format!("text-graph — {}", viewer.g.node(viewer.g.root).name);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -81,10 +83,15 @@ struct Viewer {
     last_query: String,
     scores: Vec<Option<u32>>,
     best: Option<NodeId>,
+    // ---- detail pane ----
+    root: PathBuf,
+    md_cache: CommonMarkCache,
+    /// Body of the selected file, read on demand and cached per selection.
+    detail: Option<(NodeId, String)>,
 }
 
 impl Viewer {
-    fn new(g: Graph) -> Self {
+    fn new(g: Graph, root: PathBuf) -> Self {
         let sim = Sim::new(&g);
         let mut degree = vec![0usize; g.nodes.len()];
         for (i, node) in g.nodes.iter().enumerate() {
@@ -138,6 +145,9 @@ impl Viewer {
             last_query: String::new(),
             scores: vec![None; n],
             best: None,
+            root,
+            md_cache: CommonMarkCache::default(),
+            detail: None,
         }
     }
 
@@ -225,6 +235,78 @@ impl Viewer {
                 self.search_focus_pending = false;
             }
         });
+    }
+
+    fn load_body(&self, id: NodeId) -> String {
+        let node = self.g.node(id);
+        match node.kind {
+            NodeKind::File => vault::read_body(&self.root.join(&node.path))
+                .unwrap_or_else(|e| format!("*error reading file:* {e}")),
+            _ => String::new(),
+        }
+    }
+
+    fn detail_pane(&mut self, ui: &mut egui::Ui) {
+        let Some(sel) = self.selected else { return };
+        if self.detail.as_ref().map(|(id, _)| *id) != Some(sel) {
+            self.detail = Some((sel, self.load_body(sel)));
+        }
+        // Owned copies so the panel closures below can borrow self freely.
+        let (kind, display, sub) = {
+            let node = self.g.node(sel);
+            let sub = if node.path.is_empty() { node.name.clone() } else { node.path.clone() };
+            (node.kind, node.display_name().to_string(), sub)
+        };
+
+        ui.set_min_width(320.0);
+        ui.add_space(6.0);
+        ui.heading(display);
+        ui.label(egui::RichText::new(sub).small().color(TEXT));
+        ui.separator();
+
+        let mut jump: Option<NodeId> = None;
+        match kind {
+            NodeKind::File => {
+                // take/put-back so the markdown cache and the body can be
+                // borrowed simultaneously without cloning the body per frame
+                let detail = self.detail.take();
+                if let Some((_, body)) = &detail {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+                    });
+                }
+                self.detail = detail;
+            }
+            NodeKind::Dir => {
+                let children = self.g.node(sel).children.clone();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.label(format!("{} entries", children.len()));
+                    ui.add_space(4.0);
+                    for c in children {
+                        let child = self.g.node(c);
+                        let icon = if child.kind == NodeKind::Dir { "▸ " } else { "· " };
+                        if ui.link(format!("{icon}{}", child.display_name())).clicked() {
+                            jump = Some(c);
+                        }
+                    }
+                });
+            }
+            NodeKind::Ghost => {
+                ui.label("Not written yet. Referenced from:");
+                ui.add_space(4.0);
+                let refs: Vec<NodeId> =
+                    self.g.links.iter().filter(|l| l.to == sel).map(|l| l.from).collect();
+                for r in refs {
+                    if ui.link(self.g.node(r).path.clone()).clicked() {
+                        jump = Some(r);
+                    }
+                }
+            }
+        }
+        if let Some(j) = jump {
+            self.selected = Some(j);
+            self.frame_node(j);
+        }
     }
 
     fn world_pos(&self, i: usize) -> Pos2 {
@@ -506,6 +588,11 @@ impl eframe::App for Viewer {
         self.update_search();
         if self.search_open {
             egui::Panel::top("search_bar").show(ui, |ui| self.search_bar(ui));
+        }
+        if self.selected.is_some() {
+            egui::Panel::right("detail")
+                .resizable(true)
+                .show(ui, |ui| self.detail_pane(ui));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))

@@ -134,6 +134,18 @@ fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
     RawFile { rel_path, title: fm.title, aliases: fm.aliases, links, warning }
 }
 
+/// Read one file and return its body with BOM and frontmatter stripped — the
+/// same rules the scanner applies. Used by the viewer's detail pane, which
+/// reads bodies on demand rather than holding them in memory.
+pub fn read_body(path: &Path) -> Result<String> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let cow = String::from_utf8_lossy(&bytes);
+    let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
+    let (_, body, _) = split_frontmatter(text);
+    Ok(body.to_string())
+}
+
 #[derive(Debug, Default)]
 struct FmData {
     title: Option<String>,
