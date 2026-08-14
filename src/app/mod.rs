@@ -55,6 +55,36 @@ const DIM: f32 = 0.18;
 /// Screen radius above which a node shows its type glyph.
 const ICON_MIN_R: f32 = 6.5;
 
+/// Cursor flashlight: labels within this screen distance of the pointer are
+/// revealed even when the zoom LOD would hide them.
+const REVEAL_R: f32 = 130.0;
+/// Cap on flashlight labels — a dense zoomed-out cluster would otherwise
+/// dissolve into text soup.
+const REVEAL_MAX: usize = 12;
+
+/// The nearest lit nodes within `REVEAL_R` of the cursor, each with a 0..=1
+/// proximity weight (1 at the cursor). Capped at `REVEAL_MAX`, nearest
+/// first, ties broken by node index so the pick is deterministic.
+fn reveal_near_cursor(
+    cursor: Pos2,
+    visible: &[(NodeId, Pos2, f32)],
+    lit: &[bool],
+) -> Vec<(NodeId, f32)> {
+    let mut near: Vec<(f32, NodeId)> = visible
+        .iter()
+        .filter(|(id, _, _)| lit[id.0 as usize])
+        .filter_map(|&(id, s, _)| {
+            let d = s.distance(cursor);
+            (d < REVEAL_R).then_some((d, id))
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    near.truncate(REVEAL_MAX);
+    near.into_iter()
+        .map(|(d, id)| (id, 1.0 - d / REVEAL_R))
+        .collect()
+}
+
 /// Folder silhouette: tab + rounded body, sized relative to the node disc.
 fn paint_folder_icon(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     let w = r * 1.02;
@@ -1086,7 +1116,15 @@ impl Viewer {
             }
         }
 
-        // labels — LOD by screen radius; always for the active neighborhood
+        // labels — LOD by screen radius; always for the active neighborhood;
+        // plus the cursor flashlight: nodes near the pointer reveal their
+        // names (distance-faded) even when zoomed out below the LOD cutoff
+        let reveal: HashMap<NodeId, f32> = match response.hover_pos() {
+            Some(c) if over_card.is_none() => {
+                reveal_near_cursor(c, &visible, &lit).into_iter().collect()
+            }
+            _ => HashMap::new(),
+        };
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
             let show = if searching {
@@ -1097,10 +1135,17 @@ impl Viewer {
                     || (lit[id.0 as usize]
                         && ((node.kind == NodeKind::Dir && r >= 3.0) || r >= 5.0))
             };
-            if !show {
+            let fade = reveal.get(&id).copied();
+            if !show && fade.is_none() {
                 continue;
             }
-            let color = if active == Some(id) { HOVER } else { TEXT };
+            let color = if active == Some(id) {
+                HOVER
+            } else if show {
+                TEXT
+            } else {
+                TEXT.gamma_multiply(0.35 + 0.65 * fade.unwrap_or(0.0))
+            };
             painter.text(
                 s + Vec2::new(r + 5.0, 0.0),
                 Align2::LEFT_CENTER,
@@ -1214,5 +1259,46 @@ impl eframe::App for Viewer {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_state(true);
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::*;
+
+    fn vis(pts: &[(f32, f32)]) -> Vec<(NodeId, Pos2, f32)> {
+        pts.iter()
+            .enumerate()
+            .map(|(i, &(x, y))| (NodeId(i as u32), Pos2::new(x, y), 3.0))
+            .collect()
+    }
+
+    #[test]
+    fn nearer_nodes_weigh_more_and_far_ones_drop() {
+        let v = vis(&[(0.0, 0.0), (60.0, 0.0), (500.0, 0.0)]);
+        let r = reveal_near_cursor(Pos2::ZERO, &v, &[true; 3]);
+        let ids: Vec<u32> = r.iter().map(|(id, _)| id.0).collect();
+        assert_eq!(ids, vec![0, 1]); // 500px is outside the flashlight
+        assert!((r[0].1 - 1.0).abs() < 1e-5);
+        assert!(r[0].1 > r[1].1);
+    }
+
+    #[test]
+    fn dimmed_nodes_stay_dark() {
+        let v = vis(&[(0.0, 0.0), (10.0, 0.0)]);
+        let r = reveal_near_cursor(Pos2::ZERO, &v, &[true, false]);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].0, NodeId(0));
+    }
+
+    #[test]
+    fn crowd_is_capped_deterministically() {
+        // all at the same distance — the cap must keep the lowest indexes
+        let pts: Vec<(f32, f32)> = (0..20).map(|_| (50.0, 0.0)).collect();
+        let v = vis(&pts);
+        let r = reveal_near_cursor(Pos2::ZERO, &v, &[true; 20]);
+        assert_eq!(r.len(), REVEAL_MAX);
+        let ids: Vec<u32> = r.iter().map(|(id, _)| id.0).collect();
+        assert_eq!(ids, (0..REVEAL_MAX as u32).collect::<Vec<_>>());
     }
 }
