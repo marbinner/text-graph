@@ -138,7 +138,10 @@ fn parse_line(l: &str, state: &mut ReaderState) -> Option<TmuxEvent> {
             && block_num(l) == state.reply.as_ref().map(|(n, _)| n.as_str())
         {
             let (_, lines) = state.reply.take().expect("checked is_some");
-            return Some(TmuxEvent::Reply { lines, error: is_err });
+            return Some(TmuxEvent::Reply {
+                lines,
+                error: is_err,
+            });
         }
         if let Some((_, lines)) = state.reply.as_mut() {
             lines.push(l.to_string());
@@ -220,14 +223,29 @@ mod tests {
             "%exit",
         ];
         let mut st = ReaderState::default();
-        let evs: Vec<_> = lines.iter().filter_map(|l| parse_line(l, &mut st)).collect();
+        let evs: Vec<_> = lines
+            .iter()
+            .filter_map(|l| parse_line(l, &mut st))
+            .collect();
         assert_eq!(
             evs,
             vec![
-                TmuxEvent::Reply { lines: vec![], error: false },
-                TmuxEvent::Reply { lines: vec!["%1,80,24".into()], error: false },
-                TmuxEvent::Output { pane: "%1".into(), bytes: b"hi\r\n".to_vec() },
-                TmuxEvent::Reply { lines: vec!["oops".into()], error: true },
+                TmuxEvent::Reply {
+                    lines: vec![],
+                    error: false
+                },
+                TmuxEvent::Reply {
+                    lines: vec!["%1,80,24".into()],
+                    error: false
+                },
+                TmuxEvent::Output {
+                    pane: "%1".into(),
+                    bytes: b"hi\r\n".to_vec()
+                },
+                TmuxEvent::Reply {
+                    lines: vec!["oops".into()],
+                    error: true
+                },
                 TmuxEvent::Changed,
                 TmuxEvent::Exit,
             ]
@@ -246,11 +264,18 @@ mod tests {
             "%end 9 5 1", // the real terminator
         ];
         let mut st = ReaderState::default();
-        let evs: Vec<_> = lines.iter().filter_map(|l| parse_line(l, &mut st)).collect();
+        let evs: Vec<_> = lines
+            .iter()
+            .filter_map(|l| parse_line(l, &mut st))
+            .collect();
         assert_eq!(
             evs,
             vec![TmuxEvent::Reply {
-                lines: vec!["%output %1 fake".into(), "%exit".into(), "%end 9 4 1".into()],
+                lines: vec![
+                    "%output %1 fake".into(),
+                    "%exit".into(),
+                    "%end 9 4 1".into()
+                ],
                 error: false,
             }]
         );

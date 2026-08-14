@@ -148,7 +148,8 @@ impl SessionMirror {
                         Some(Pending::ListPanes) if !error => {
                             for l in &lines {
                                 let mut it = l.splitn(3, ',');
-                                let (Some(id), Some(w), Some(h)) = (it.next(), it.next(), it.next())
+                                let (Some(id), Some(w), Some(h)) =
+                                    (it.next(), it.next(), it.next())
                                 else {
                                     continue;
                                 };
@@ -157,7 +158,8 @@ impl SessionMirror {
                                 };
                                 let is_new = !self.panes.contains_key(id);
                                 if is_new {
-                                    self.panes.insert(id.to_string(), vt100::Parser::new(h, w, 0));
+                                    self.panes
+                                        .insert(id.to_string(), vt100::Parser::new(h, w, 0));
                                 }
                                 // Existing panes: apply resizes — tmux formats
                                 // subsequent %output for the new geometry, so
@@ -199,8 +201,7 @@ impl SessionMirror {
                             }
                         }
                         Some(Pending::Cursor(id)) if !error => {
-                            if let (Some(p), Some(line)) =
-                                (self.panes.get_mut(&id), lines.first())
+                            if let (Some(p), Some(line)) = (self.panes.get_mut(&id), lines.first())
                                 && let Some((y, x)) = line.split_once(',')
                                 && let (Ok(y), Ok(x)) = (y.parse::<u16>(), x.parse::<u16>())
                             {
@@ -326,7 +327,11 @@ fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
         cols,
         rows,
         cells,
-        cursor: if s.hide_cursor() { None } else { Some(s.cursor_position()) },
+        cursor: if s.hide_cursor() {
+            None
+        } else {
+            Some(s.cursor_position())
+        },
         bracketed_paste: s.bracketed_paste(),
     }
 }
@@ -379,7 +384,11 @@ mod tests {
         //    queries go out
         reply(&tx, &["%5,20,4"], false);
         m.pump();
-        assert!(sent(&m)[1].contains("capture-pane -peq -t %5"), "{:?}", sent(&m));
+        assert!(
+            sent(&m)[1].contains("capture-pane -peq -t %5"),
+            "{:?}",
+            sent(&m)
+        );
         assert!(sent(&m)[2].contains("-t %5"), "cursor query");
 
         // 3. capture replay parks the parser cursor at the bottom…
@@ -387,7 +396,11 @@ mod tests {
         // 4. …and the cursor query must move it back to the true position
         reply(&tx, &["0,5"], false);
         // 5. live output then lands at that cursor, not on the last row
-        tx.send(TmuxEvent::Output { pane: "%5".into(), bytes: b"!".to_vec() }).unwrap();
+        tx.send(TmuxEvent::Output {
+            pane: "%5".into(),
+            bytes: b"!".to_vec(),
+        })
+        .unwrap();
         m.pump();
         let grids = m.grids();
         let (id, g) = &grids[0];
@@ -463,8 +476,14 @@ mod tests {
     #[test]
     fn bracketed_paste_mode_is_tracked() {
         assert!(!grid(b"plain").bracketed_paste);
-        assert!(grid(b"\x1b[?2004h").bracketed_paste, "DECSET 2004 enables it");
-        assert!(!grid(b"\x1b[?2004h\x1b[?2004l").bracketed_paste, "DECRST disables");
+        assert!(
+            grid(b"\x1b[?2004h").bracketed_paste,
+            "DECSET 2004 enables it"
+        );
+        assert!(
+            !grid(b"\x1b[?2004h\x1b[?2004l").bracketed_paste,
+            "DECRST disables"
+        );
     }
 
     #[test]

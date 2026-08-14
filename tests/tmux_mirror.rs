@@ -6,9 +6,9 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use text_graph::agents;
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, indexed_rgb};
-use text_graph::agents;
 
 fn tmux(socket: &str, args: &[&str]) -> bool {
     Command::new("tmux")
@@ -43,17 +43,20 @@ fn mirrors_a_scripted_session() {
     let socket = format!("tg-test-{}", std::process::id());
     let _guard = ServerGuard(socket.clone());
     assert!(
-        tmux(&socket, &[
-            "new-session",
-            "-d",
-            "-s",
-            "t1",
-            "-x",
-            "80",
-            "-y",
-            "24",
-            "printf 'plain \\033[1;31mRED\\033[0m text'; sleep 30",
-        ]),
+        tmux(
+            &socket,
+            &[
+                "new-session",
+                "-d",
+                "-s",
+                "t1",
+                "-x",
+                "80",
+                "-y",
+                "24",
+                "printf 'plain \\033[1;31mRED\\033[0m text'; sleep 30",
+            ]
+        ),
         "failed to create scripted session"
     );
 
@@ -72,14 +75,16 @@ fn mirrors_a_scripted_session() {
                 // cells are indexed by CHAR position, not byte offset
                 let cell_at = last_row[..byte_at].chars().count();
                 let cell = g.cells[cell_at];
-                success = last_row.contains("plain")
-                    && cell.bold
-                    && cell.fg == Some(indexed_rgb(1));
+                success =
+                    last_row.contains("plain") && cell.bold && cell.fg == Some(indexed_rgb(1));
             }
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(success, "expected styled 'plain RED text'; row 0 was {last_row:?}");
+    assert!(
+        success,
+        "expected styled 'plain RED text'; row 0 was {last_row:?}"
+    );
 }
 
 /// The native-resize path the corner grip uses: `resize-window` sent over
@@ -99,7 +104,20 @@ fn resize_window_updates_mirror_grid() {
     let socket = format!("tg-test-rz-{}", std::process::id());
     let _guard = ServerGuard(socket.clone());
     assert!(
-        tmux(&socket, &["new-session", "-d", "-s", "t3", "-x", "80", "-y", "24", "cat"]),
+        tmux(
+            &socket,
+            &[
+                "new-session",
+                "-d",
+                "-s",
+                "t3",
+                "-x",
+                "80",
+                "-y",
+                "24",
+                "cat"
+            ]
+        ),
         "failed to create session"
     );
 
@@ -153,7 +171,14 @@ fn launch_creates_uniquely_named_tg_sessions() {
 
     // all sessions exist, cwd'd where we asked
     let out = Command::new("tmux")
-        .args(["-L", &socket, "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}"])
+        .args([
+            "-L",
+            &socket,
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{pane_current_path}",
+        ])
         .output()
         .expect("list-panes");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
@@ -183,7 +208,20 @@ fn typed_input_round_trips() {
     let socket = format!("tg-test-in-{}", std::process::id());
     let _guard = ServerGuard(socket.clone());
     assert!(
-        tmux(&socket, &["new-session", "-d", "-s", "t2", "-x", "80", "-y", "24", "cat"]),
+        tmux(
+            &socket,
+            &[
+                "new-session",
+                "-d",
+                "-s",
+                "t2",
+                "-x",
+                "80",
+                "-y",
+                "24",
+                "cat"
+            ]
+        ),
         "failed to create cat session"
     );
 

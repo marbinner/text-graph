@@ -8,12 +8,22 @@ fn main() {
     let panes = text_graph::agents::scan(&vault);
     println!("scan: {} panes with cwd in vault", panes.len());
     for p in &panes {
-        println!("  {} {} pid={} cmd={} cwd={}", p.session, p.pane, p.pid, p.command, p.cwd.display());
+        println!(
+            "  {} {} pid={} cmd={} cwd={}",
+            p.session,
+            p.pane,
+            p.pid,
+            p.command,
+            p.cwd.display()
+        );
     }
     let active = tr.update(&panes, &allow, Instant::now());
     println!("active agents: {}", active.len());
     for a in &active {
-        println!("  {} {} agent={} ours={}", a.session, a.pane, a.agent, a.ours);
+        println!(
+            "  {} {} agent={} ours={}",
+            a.session, a.pane, a.agent, a.ours
+        );
     }
     if let Some(a) = active.first() {
         let mut m = text_graph::mirror::SessionMirror::attach(&a.session, None, None, || {})
@@ -24,7 +34,12 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
         }
         let grids = m.grids();
-        println!("mirror '{}': {} grids, exited={}", a.session, grids.len(), m.exited);
+        println!(
+            "mirror '{}': {} grids, exited={}",
+            a.session,
+            grids.len(),
+            m.exited
+        );
         for (id, g) in &grids {
             let row0: String = g.cells[..g.cols as usize].iter().map(|c| c.ch).collect();
             println!("  {id} {}x{} row0={:?}", g.cols, g.rows, row0.trim_end());

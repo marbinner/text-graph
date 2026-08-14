@@ -40,10 +40,12 @@ pub struct AgentPane {
 }
 
 pub fn default_allowlist() -> Vec<String> {
-    let mut v: Vec<String> = ["claude", "codex", "pi", "aider", "goose", "opencode", "gemini"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut v: Vec<String> = [
+        "claude", "codex", "pi", "aider", "goose", "opencode", "gemini",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     if let Ok(extra) = std::env::var("TEXT_GRAPH_AGENTS") {
         v.extend(
             extra
@@ -69,7 +71,11 @@ pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<
         .filter(char::is_ascii_alphanumeric)
         .flat_map(char::to_lowercase)
         .collect();
-    let slug = if slug.is_empty() { "agent".to_string() } else { slug };
+    let slug = if slug.is_empty() {
+        "agent".to_string()
+    } else {
+        slug
+    };
     launch_named(socket, dir, &slug, Some(agent))
 }
 
@@ -94,7 +100,11 @@ fn launch_named(
         c
     };
     for n in 1..=99u32 {
-        let name = if n == 1 { format!("tg_{slug}") } else { format!("tg_{slug}_{n}") };
+        let name = if n == 1 {
+            format!("tg_{slug}")
+        } else {
+            format!("tg_{slug}_{n}")
+        };
         // '=' prefix = exact session-name match, not prefix match
         let taken = tmux(&["has-session", "-t", &format!("={name}")])
             .output()?
@@ -103,7 +113,17 @@ fn launch_named(
         if taken {
             continue;
         }
-        let mut c = tmux(&["new-session", "-d", "-s", &name, "-x", "90", "-y", "26", "-c"]);
+        let mut c = tmux(&[
+            "new-session",
+            "-d",
+            "-s",
+            &name,
+            "-x",
+            "90",
+            "-y",
+            "26",
+            "-c",
+        ]);
         c.arg(dir);
         if let Some(cmd) = cmd {
             c.arg(cmd);
@@ -119,7 +139,9 @@ fn launch_named(
             .status
             .success();
         if !lost_race {
-            return Err(std::io::Error::other(format!("tmux new-session {name} failed")));
+            return Err(std::io::Error::other(format!(
+                "tmux new-session {name} failed"
+            )));
         }
     }
     Err(std::io::Error::other("all tg_ session names taken"))
@@ -245,9 +267,7 @@ impl Tracker {
         // (scan-flicker) grace
         self.last_ok.retain(|k, (t, _, _)| {
             now.duration_since(*t) <= GRACE
-                || panes
-                    .iter()
-                    .any(|p| p.session == k.0 && p.pane == k.1)
+                || panes.iter().any(|p| p.session == k.0 && p.pane == k.1)
         });
         out
     }
@@ -330,7 +350,11 @@ mod tests {
         let allow = vec!["claude".to_string()];
         let mut tr = Tracker::new();
         let t0 = Instant::now();
-        assert_eq!(tr.update(&[pane_pid("work", "claude", 42)], &allow, t0).len(), 1);
+        assert_eq!(
+            tr.update(&[pane_pid("work", "claude", 42)], &allow, t0)
+                .len(),
+            1
+        );
 
         // tmux server restarted: same session name, pane ids start over at
         // %1, but the root process differs — the remembered identity must

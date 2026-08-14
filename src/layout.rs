@@ -38,7 +38,10 @@ fn subtree_weight(g: &Graph, id: NodeId, out: &mut [f32]) -> f32 {
     let w = if node.children.is_empty() {
         1.0
     } else {
-        node.children.iter().map(|c| subtree_weight(g, *c, out)).sum()
+        node.children
+            .iter()
+            .map(|c| subtree_weight(g, *c, out))
+            .sum()
     };
     out[id.0 as usize] = w;
     w
@@ -65,7 +68,10 @@ fn assign(
     for &c in children {
         let span = (a1 - a0) * weight[c.0 as usize] / total;
         let mid = a + span * 0.5;
-        pos[c.0 as usize] = Some(Pos { x: r * mid.cos(), y: r * mid.sin() });
+        pos[c.0 as usize] = Some(Pos {
+            x: r * mid.cos(),
+            y: r * mid.sin(),
+        });
         assign(g, c, a, a + span, depth + 1, weight, pos);
         a += span;
     }

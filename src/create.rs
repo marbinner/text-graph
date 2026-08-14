@@ -66,7 +66,11 @@ fn clean_rel(dir: &str, input: &str) -> Result<String> {
         parts.push(part);
     }
     let rel = parts.join("/");
-    Ok(if dir.is_empty() { rel } else { format!("{dir}/{rel}") })
+    Ok(if dir.is_empty() {
+        rel
+    } else {
+        format!("{dir}/{rel}")
+    })
 }
 
 /// Refuse to create through a symlinked path component: a linked dir (or
@@ -96,7 +100,11 @@ pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
     // O_CREAT|O_EXCL, not exists()-then-write: a racing writer (an agent
     // saving x.md at the same moment) must not be truncated, and a dangling
     // symlink must not be followed to create a file outside the vault.
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(&abs) {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&abs)
+    {
         Ok(_) => Ok(abs),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             bail!("{rel} already exists")
@@ -135,16 +143,19 @@ mod tests {
 
     #[test]
     fn slashes_imply_folders_and_are_trimmed() {
-        assert_eq!(note_rel_path("notes", "daily/2026-08-15").unwrap(), "notes/daily/2026-08-15.md");
+        assert_eq!(
+            note_rel_path("notes", "daily/2026-08-15").unwrap(),
+            "notes/daily/2026-08-15.md"
+        );
         assert_eq!(note_rel_path("", "/ideas/").unwrap(), "ideas.md");
         assert_eq!(folder_rel_path("notes", "sub").unwrap(), "notes/sub");
     }
 
     #[test]
     fn rejects_empty_dots_hidden_backslash_and_colon() {
-        for bad in
-            ["", "  ", "..", "a/../b", ".", "a//b", ".hidden", "a/.b", "a\\b", "C:x", "C:/x"]
-        {
+        for bad in [
+            "", "  ", "..", "a/../b", ".", "a//b", ".hidden", "a/.b", "a\\b", "C:x", "C:/x",
+        ] {
             assert!(note_rel_path("", bad).is_err(), "should reject {bad:?}");
         }
     }
@@ -166,8 +177,11 @@ mod tests {
     }
 
     fn scratch() -> PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("tg-create-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let d = std::env::temp_dir().join(format!(
+            "tg-create-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -193,8 +207,14 @@ mod tests {
         let root = scratch();
         let outside = root.join("outside-target");
         std::os::unix::fs::symlink(&outside, root.join("link.md")).unwrap();
-        assert!(write_note(&root, "link.md").is_err(), "dangling symlink must not be followed");
-        assert!(!outside.exists(), "nothing may be created at the symlink target");
+        assert!(
+            write_note(&root, "link.md").is_err(),
+            "dangling symlink must not be followed"
+        );
+        assert!(
+            !outside.exists(),
+            "nothing may be created at the symlink target"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -205,7 +225,10 @@ mod tests {
         let elsewhere = root.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, root.join("sub")).unwrap();
-        assert!(write_note(&root, "sub/x.md").is_err(), "symlinked dir must be rejected");
+        assert!(
+            write_note(&root, "sub/x.md").is_err(),
+            "symlinked dir must be rejected"
+        );
         assert!(!elsewhere.join("x.md").exists());
         assert!(make_folder(&root, "sub/deeper").is_err());
         let _ = std::fs::remove_dir_all(&root);

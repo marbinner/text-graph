@@ -138,37 +138,101 @@ mod tests {
     #[test]
     fn special_names_and_modifiers() {
         let none = Mods::default();
-        assert_eq!(special_cmd("%1", Special::Enter, none), "send-keys -t %1 Enter");
         assert_eq!(
-            special_cmd("%1", Special::Tab, Mods { shift: true, ..none }),
+            special_cmd("%1", Special::Enter, none),
+            "send-keys -t %1 Enter"
+        );
+        assert_eq!(
+            special_cmd(
+                "%1",
+                Special::Tab,
+                Mods {
+                    shift: true,
+                    ..none
+                }
+            ),
             "send-keys -t %1 BTab"
         );
         assert_eq!(
-            special_cmd("%1", Special::Up, Mods { ctrl: true, shift: true, ..none }),
+            special_cmd(
+                "%1",
+                Special::Up,
+                Mods {
+                    ctrl: true,
+                    shift: true,
+                    ..none
+                }
+            ),
             "send-keys -t %1 C-S-Up"
         );
         assert_eq!(
-            special_cmd("%1", Special::Enter, Mods { shift: true, ..none }),
+            special_cmd(
+                "%1",
+                Special::Enter,
+                Mods {
+                    shift: true,
+                    ..none
+                }
+            ),
             "send-keys -t %1 Enter",
             "shift on enter drops to plain"
         );
         assert_eq!(special_cmd("%1", Special::F(5), none), "send-keys -t %1 F5");
-        assert_eq!(special_cmd("%1", Special::F(13), none), "send-keys -t %1 F12", "clamped");
+        assert_eq!(
+            special_cmd("%1", Special::F(13), none),
+            "send-keys -t %1 F12",
+            "clamped"
+        );
     }
 
     #[test]
     fn chords_are_bytes() {
-        let ctrl = Mods { ctrl: true, ..Default::default() };
-        let alt = Mods { alt: true, ..Default::default() };
-        let both = Mods { ctrl: true, alt: true, shift: false };
-        assert_eq!(chord_cmd("%1", 'c', ctrl), Some("send-keys -t %1 -H 03".into()));
-        assert_eq!(chord_cmd("%1", 'x', alt), Some("send-keys -t %1 -H 1b 78".into()));
-        assert_eq!(chord_cmd("%1", 'b', both), Some("send-keys -t %1 -H 1b 02".into()));
-        assert_eq!(chord_cmd("%1", ' ', ctrl), Some("send-keys -t %1 -H 00".into()));
+        let ctrl = Mods {
+            ctrl: true,
+            ..Default::default()
+        };
+        let alt = Mods {
+            alt: true,
+            ..Default::default()
+        };
+        let both = Mods {
+            ctrl: true,
+            alt: true,
+            shift: false,
+        };
+        assert_eq!(
+            chord_cmd("%1", 'c', ctrl),
+            Some("send-keys -t %1 -H 03".into())
+        );
+        assert_eq!(
+            chord_cmd("%1", 'x', alt),
+            Some("send-keys -t %1 -H 1b 78".into())
+        );
+        assert_eq!(
+            chord_cmd("%1", 'b', both),
+            Some("send-keys -t %1 -H 1b 02".into())
+        );
+        assert_eq!(
+            chord_cmd("%1", ' ', ctrl),
+            Some("send-keys -t %1 -H 00".into())
+        );
         // xterm Ctrl+digit control bytes (Ctrl+6 = RS is vim's alternate-file)
-        assert_eq!(chord_cmd("%1", '6', ctrl), Some("send-keys -t %1 -H 1e".into()));
-        assert_eq!(chord_cmd("%1", '8', ctrl), Some("send-keys -t %1 -H 7f".into()));
-        assert_eq!(chord_cmd("%1", '1', ctrl), Some("send-keys -t %1 -H 31".into()));
-        assert_eq!(chord_cmd("%1", 'a', Mods::default()), None, "plain chars go via text");
+        assert_eq!(
+            chord_cmd("%1", '6', ctrl),
+            Some("send-keys -t %1 -H 1e".into())
+        );
+        assert_eq!(
+            chord_cmd("%1", '8', ctrl),
+            Some("send-keys -t %1 -H 7f".into())
+        );
+        assert_eq!(
+            chord_cmd("%1", '1', ctrl),
+            Some("send-keys -t %1 -H 31".into())
+        );
+        assert_eq!(
+            chord_cmd("%1", 'a', Mods::default()),
+            None,
+            "plain chars go via text"
+        );
     }
 }

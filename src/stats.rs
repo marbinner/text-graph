@@ -111,7 +111,14 @@ pub fn render(g: &Graph, s: &Stats) -> String {
                 .iter()
                 .filter(|c| g.node(**c).kind == NodeKind::File)
                 .count();
-            (count, if n.path.is_empty() { "<root>" } else { n.path.as_str() })
+            (
+                count,
+                if n.path.is_empty() {
+                    "<root>"
+                } else {
+                    n.path.as_str()
+                },
+            )
         })
         .filter(|(c, _)| *c > 0)
         .collect();
@@ -126,8 +133,11 @@ pub fn render(g: &Graph, s: &Stats) -> String {
     if !g.ambiguities.is_empty() {
         let _ = writeln!(w, "ambiguous links ({}):", g.ambiguities.len());
         for a in &g.ambiguities {
-            let rejected: Vec<&str> =
-                a.rejected.iter().map(|r| g.node(*r).path.as_str()).collect();
+            let rejected: Vec<&str> = a
+                .rejected
+                .iter()
+                .map(|r| g.node(*r).path.as_str())
+                .collect();
             let _ = writeln!(
                 w,
                 "  {}: [[{}]] -> {}  (not: {})",

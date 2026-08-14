@@ -17,8 +17,26 @@ use crate::vault::RawLink;
 /// resolved or ghosted. An allowlist, not "any extension" — note names like
 /// `v1.2` must not be mistaken for assets.
 const ASSET_EXTS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "pdf", "mp3", "wav", "ogg", "m4a",
-    "mp4", "mov", "avi", "mkv", "zip", "excalidraw", "canvas",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "svg",
+    "webp",
+    "bmp",
+    "ico",
+    "pdf",
+    "mp3",
+    "wav",
+    "ogg",
+    "m4a",
+    "mp4",
+    "mov",
+    "avi",
+    "mkv",
+    "zip",
+    "excalidraw",
+    "canvas",
 ];
 
 pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
@@ -82,15 +100,15 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                         continue;
                     }
                     *ghosts.entry(casefold(&target)).or_insert_with(|| {
-                    g.push_node(Node {
-                        kind: NodeKind::Ghost,
-                        path: target.clone(),
-                        name: target.clone(),
-                        title: None,
-                        aliases: Vec::new(),
-                        parent: None,
-                        children: Vec::new(),
-                    })
+                        g.push_node(Node {
+                            kind: NodeKind::Ghost,
+                            path: target.clone(),
+                            name: target.clone(),
+                            title: None,
+                            aliases: Vec::new(),
+                            parent: None,
+                            children: Vec::new(),
+                        })
                     })
                 }
                 1 => candidates[0],
@@ -111,7 +129,11 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                 continue;
             }
             if seen.insert((*src, to)) {
-                g.links.push(Link { from: *src, to, kind: LinkKind::WikiLink });
+                g.links.push(Link {
+                    from: *src,
+                    to,
+                    kind: LinkKind::WikiLink,
+                });
             }
         }
     }
@@ -129,9 +151,7 @@ fn strip_md(path: &str) -> &str {
     // multibyte char (targets like `мир`, `éé`, or an emoji), where direct
     // slicing panics — and this runs on every link target in the vault.
     match path.len().checked_sub(3).and_then(|i| path.get(i..)) {
-        Some(tail) if path.len() > 3 && tail.eq_ignore_ascii_case(".md") => {
-            &path[..path.len() - 3]
-        }
+        Some(tail) if path.len() > 3 && tail.eq_ignore_ascii_case(".md") => &path[..path.len() - 3],
         _ => path,
     }
 }
@@ -216,14 +236,28 @@ mod tests {
         let links = vec![(
             NodeId(2),
             vec![
-                RawLink { target: "pic.png".into(), offset: 0 },
-                RawLink { target: "missing.png".into(), offset: 1 },
+                RawLink {
+                    target: "pic.png".into(),
+                    offset: 0,
+                },
+                RawLink {
+                    target: "missing.png".into(),
+                    offset: 1,
+                },
             ],
         )];
         resolve(&mut g, &links);
-        assert_eq!(g.links.len(), 1, "a note with an asset-like stem is linkable");
+        assert_eq!(
+            g.links.len(),
+            1,
+            "a note with an asset-like stem is linkable"
+        );
         assert_eq!(g.links[0].to, NodeId(1));
-        assert_eq!(g.nodes.len(), 3, "an unresolved asset target must not ghost");
+        assert_eq!(
+            g.nodes.len(),
+            3,
+            "an unresolved asset target must not ghost"
+        );
     }
 
     #[test]
@@ -258,9 +292,18 @@ mod tests {
             ambiguities: Vec::new(),
             self_links_dropped: 0,
         };
-        let links = vec![(NodeId(2), vec![RawLink { target: "same".into(), offset: 0 }])];
+        let links = vec![(
+            NodeId(2),
+            vec![RawLink {
+                target: "same".into(),
+                offset: 0,
+            }],
+        )];
         resolve(&mut g, &links);
         assert_eq!(g.links.len(), 1);
-        assert!(g.ambiguities.is_empty(), "case-variant duplicate aliases flagged ambiguity");
+        assert!(
+            g.ambiguities.is_empty(),
+            "case-variant duplicate aliases flagged ambiguity"
+        );
     }
 }

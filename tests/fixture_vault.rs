@@ -60,7 +60,10 @@ fn ambiguous_rust_resolves_to_lex_smallest_and_is_flagged() {
     assert_eq!(a.target, "rust");
     assert_eq!(g.node(a.chosen).path, "languages/rust.md");
     assert_eq!(
-        a.rejected.iter().map(|r| g.node(*r).path.as_str()).collect::<Vec<_>>(),
+        a.rejected
+            .iter()
+            .map(|r| g.node(*r).path.as_str())
+            .collect::<Vec<_>>(),
         ["topics/rust.md"]
     );
     // the explicit-path link still reaches the other one
@@ -85,8 +88,16 @@ fn alias_heading_and_block_suffixes_resolve_to_files() {
 #[test]
 fn crlf_and_bom_files_extract_links() {
     let g = build_fixture();
-    assert!(has_link(&g, "notes/daily/2026-08-14.md", "notes/daily/2026-08-13.md"));
-    assert!(has_link(&g, "notes/daily/2026-08-14.md", "projects/rust-app.md"));
+    assert!(has_link(
+        &g,
+        "notes/daily/2026-08-14.md",
+        "notes/daily/2026-08-13.md"
+    ));
+    assert!(has_link(
+        &g,
+        "notes/daily/2026-08-14.md",
+        "projects/rust-app.md"
+    ));
     assert!(has_link(&g, "bom.md", "empty.md"));
 }
 
@@ -101,7 +112,11 @@ fn garbage_frontmatter_warns_but_body_links_survive() {
 fn alias_resolution_works_and_stem_beats_alias() {
     let g = build_fixture();
     // [[rustlang]] resolves via frontmatter aliases, not by filename
-    assert!(has_link(&g, "notes/daily/2026-08-13.md", "languages/rust.md"));
+    assert!(has_link(
+        &g,
+        "notes/daily/2026-08-13.md",
+        "languages/rust.md"
+    ));
     // languages/rust.md also carries alias "empty", but the stem empty.md
     // wins — silently, with no ambiguity recorded
     assert!(has_link(&g, "bom.md", "empty.md"));
@@ -144,7 +159,12 @@ fn deterministic_across_builds() {
     let b = build_fixture();
     let paths = |g: &Graph| g.nodes.iter().map(|n| n.path.clone()).collect::<Vec<_>>();
     let links = |g: &Graph| g.links.iter().map(|l| (l.from, l.to)).collect::<Vec<_>>();
-    let children = |g: &Graph| g.nodes.iter().map(|n| n.children.clone()).collect::<Vec<_>>();
+    let children = |g: &Graph| {
+        g.nodes
+            .iter()
+            .map(|n| n.children.clone())
+            .collect::<Vec<_>>()
+    };
     assert_eq!(paths(&a), paths(&b));
     assert_eq!(links(&a), links(&b));
     assert_eq!(children(&a), children(&b));
@@ -159,7 +179,11 @@ fn radial_layout_places_every_tree_node_and_no_ghosts() {
             NodeKind::Ghost => assert!(pos[i].is_none(), "ghost placed: {}", node.path),
             _ => {
                 let p = pos[i].unwrap_or_else(|| panic!("unplaced node: {}", node.path));
-                assert!(p.x.is_finite() && p.y.is_finite(), "non-finite: {}", node.path);
+                assert!(
+                    p.x.is_finite() && p.y.is_finite(),
+                    "non-finite: {}",
+                    node.path
+                );
             }
         }
     }

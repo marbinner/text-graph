@@ -32,7 +32,10 @@ pub fn to_text(s: &ViewState) -> String {
         out.push_str(&format!("camera\t{x}\t{y}\t{z}\n"));
     }
     for c in &s.cards {
-        out.push_str(&format!("card\t{}\t{}\t{}\t{}\n", c.dx, c.dy, c.pane, c.session));
+        out.push_str(&format!(
+            "card\t{}\t{}\t{}\t{}\n",
+            c.dx, c.dy, c.pane, c.session
+        ));
     }
     out
 }
@@ -69,7 +72,8 @@ pub fn from_text(text: &str) -> ViewState {
 }
 
 fn num(v: Option<&str>) -> Option<f32> {
-    v.and_then(|t| t.parse::<f32>().ok()).filter(|f| f.is_finite())
+    v.and_then(|t| t.parse::<f32>().ok())
+        .filter(|f| f.is_finite())
 }
 
 /// Move every arrangement whose session is absent into the parking map,
@@ -150,21 +154,32 @@ mod tests {
     use super::*;
 
     fn card(session: &str, pane: &str, dx: f32, dy: f32) -> CardPos {
-        CardPos { session: session.into(), pane: pane.into(), dx, dy }
+        CardPos {
+            session: session.into(),
+            pane: pane.into(),
+            dx,
+            dy,
+        }
     }
 
     #[test]
     fn round_trips_camera_and_cards() {
         let s = ViewState {
             camera: Some((12.5, -3.0, 2.2)),
-            cards: vec![card("tg_claude", "%4", -80.0, 12.0), card("work", "%0", 5.5, 0.0)],
+            cards: vec![
+                card("tg_claude", "%4", -80.0, 12.0),
+                card("work", "%0", 5.5, 0.0),
+            ],
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }
 
     #[test]
     fn session_names_with_tabs_survive() {
-        let s = ViewState { camera: None, cards: vec![card("weird\tname", "%1", 1.0, 2.0)] };
+        let s = ViewState {
+            camera: None,
+            cards: vec![card("weird\tname", "%1", 1.0, 2.0)],
+        };
         assert_eq!(from_text(&to_text(&s)), s);
     }
 
@@ -173,14 +188,20 @@ mod tests {
         let text = "text-graph view v99\nnonsense\ncamera\tx\ty\tz\ncamera\t1\t2\t0\n\
                     card\tnan\t2\t%1\ts\ncard\t1\t2\t%1\tok\nfuture-thing\tdata\n";
         let s = from_text(text);
-        assert_eq!(s.camera, None, "non-numeric / non-positive-zoom cameras dropped");
+        assert_eq!(
+            s.camera, None,
+            "non-numeric / non-positive-zoom cameras dropped"
+        );
         assert_eq!(s.cards, vec![card("ok", "%1", 1.0, 2.0)]);
     }
 
     #[test]
     fn empty_or_missing_is_default() {
         assert_eq!(from_text(""), ViewState::default());
-        assert_eq!(load(Path::new("/nonexistent-vault-path")), ViewState::default());
+        assert_eq!(
+            load(Path::new("/nonexistent-vault-path")),
+            ViewState::default()
+        );
     }
 
     fn k(s: &str, p: &str) -> (String, String) {
@@ -194,7 +215,11 @@ mod tests {
         let mut offsets: HashMap<(String, String), (f32, f32)> = HashMap::new();
         let mut parked = HashMap::new();
         parked.insert("work".to_string(), vec![("%2".to_string(), (7.0, 9.0))]);
-        claim(&mut offsets, &mut parked, &[k("work", "%1"), k("work", "%2")]);
+        claim(
+            &mut offsets,
+            &mut parked,
+            &[k("work", "%1"), k("work", "%2")],
+        );
         assert_eq!(offsets.get(&k("work", "%2")), Some(&(7.0, 9.0)));
         assert!(!offsets.contains_key(&k("work", "%1")));
         assert!(parked.is_empty());
@@ -206,7 +231,10 @@ mod tests {
         // pane %1 inherits the arrangement
         let mut offsets: HashMap<(String, String), (f32, f32)> = HashMap::new();
         let mut parked = HashMap::new();
-        parked.insert("tg_claude".to_string(), vec![("%9".to_string(), (1.0, 2.0))]);
+        parked.insert(
+            "tg_claude".to_string(),
+            vec![("%9".to_string(), (1.0, 2.0))],
+        );
         claim(&mut offsets, &mut parked, &[k("tg_claude", "%1")]);
         assert_eq!(offsets.get(&k("tg_claude", "%1")), Some(&(1.0, 2.0)));
         assert!(parked.is_empty());

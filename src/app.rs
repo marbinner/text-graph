@@ -58,7 +58,13 @@ fn paint_folder_icon(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
 
 /// Dog-eared page. `fill` paints it solid (punch-out on filled discs);
 /// `outline` strokes it instead (hollow ghosts).
-fn paint_doc_icon(p: &egui::Painter, c: Pos2, r: f32, fill: Option<Color32>, outline: Option<Color32>) {
+fn paint_doc_icon(
+    p: &egui::Painter,
+    c: Pos2,
+    r: f32,
+    fill: Option<Color32>,
+    outline: Option<Color32>,
+) {
     let w = r * 0.78;
     let h = r * 1.02;
     let page = Rect::from_center_size(c, Vec2::new(w, h));
@@ -86,11 +92,17 @@ fn resize_handle(card: Rect) -> Rect {
 fn paint_resize_grip(p: &egui::Painter, card: Rect, color: Color32) {
     let m = card.max;
     p.line_segment(
-        [Pos2::new(m.x - 11.0, m.y - 3.0), Pos2::new(m.x - 3.0, m.y - 11.0)],
+        [
+            Pos2::new(m.x - 11.0, m.y - 3.0),
+            Pos2::new(m.x - 3.0, m.y - 11.0),
+        ],
         Stroke::new(1.5, color),
     );
     p.line_segment(
-        [Pos2::new(m.x - 6.0, m.y - 3.0), Pos2::new(m.x - 3.0, m.y - 6.0)],
+        [
+            Pos2::new(m.x - 6.0, m.y - 3.0),
+            Pos2::new(m.x - 3.0, m.y - 6.0),
+        ],
         Stroke::new(1.5, color),
     );
 }
@@ -258,12 +270,42 @@ fn map_key(key: Key) -> Option<Special> {
 fn key_char(key: Key) -> Option<char> {
     use Key::*;
     Some(match key {
-        A => 'a', B => 'b', C => 'c', D => 'd', E => 'e', F => 'f', G => 'g',
-        H => 'h', I => 'i', J => 'j', K => 'k', L => 'l', M => 'm', N => 'n',
-        O => 'o', P => 'p', Q => 'q', R => 'r', S => 's', T => 't', U => 'u',
-        V => 'v', W => 'w', X => 'x', Y => 'y', Z => 'z',
-        Num0 => '0', Num1 => '1', Num2 => '2', Num3 => '3', Num4 => '4',
-        Num5 => '5', Num6 => '6', Num7 => '7', Num8 => '8', Num9 => '9',
+        A => 'a',
+        B => 'b',
+        C => 'c',
+        D => 'd',
+        E => 'e',
+        F => 'f',
+        G => 'g',
+        H => 'h',
+        I => 'i',
+        J => 'j',
+        K => 'k',
+        L => 'l',
+        M => 'm',
+        N => 'n',
+        O => 'o',
+        P => 'p',
+        Q => 'q',
+        R => 'r',
+        S => 's',
+        T => 't',
+        U => 'u',
+        V => 'v',
+        W => 'w',
+        X => 'x',
+        Y => 'y',
+        Z => 'z',
+        Num0 => '0',
+        Num1 => '1',
+        Num2 => '2',
+        Num3 => '3',
+        Num4 => '4',
+        Num5 => '5',
+        Num6 => '6',
+        Num7 => '7',
+        Num8 => '8',
+        Num9 => '9',
         Space => ' ',
         OpenBracket => '[',
         CloseBracket => ']',
@@ -466,12 +508,24 @@ impl Viewer {
                 dir_by_path.insert(n.path.clone(), NodeId(i as u32));
             }
         }
-        Derived { radius, haystacks, n_files, n_dirs, dir_by_path }
+        Derived {
+            radius,
+            haystacks,
+            n_files,
+            n_dirs,
+            dir_by_path,
+        }
     }
 
     fn new(g: Graph, root: PathBuf) -> Self {
         let sim = Sim::new(&g);
-        let Derived { radius, haystacks, n_files, n_dirs, dir_by_path } = Self::derived(&g);
+        let Derived {
+            radius,
+            haystacks,
+            n_files,
+            n_dirs,
+            dir_by_path,
+        } = Self::derived(&g);
         let n = haystacks.len();
         let vs = state::load(&root);
         let cam = vs.camera;
@@ -553,7 +607,9 @@ impl Viewer {
     /// egui-winit as clipboard events with NO Key event, so they're handled
     /// as Copy/Cut — without that, an agent can't be interrupted.
     fn forward_input(&mut self, ui: &egui::Ui) {
-        let Some((session, pane)) = self.focused_term.clone() else { return };
+        let Some((session, pane)) = self.focused_term.clone() else {
+            return;
+        };
         if !self.mirrors.contains_key(&session) {
             self.focused_term = None;
             return;
@@ -596,7 +652,12 @@ impl Viewer {
                 }
                 egui::Event::Copy => cmds.push(keys::hex_cmd(&pane, &[0x03])), // Ctrl+C
                 egui::Event::Cut => cmds.push(keys::hex_cmd(&pane, &[0x18])),  // Ctrl+X
-                egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
                     let mods = Mods {
                         ctrl: modifiers.ctrl,
                         alt: modifiers.alt,
@@ -685,7 +746,8 @@ impl Viewer {
             }
         }
         self.attach_backoff.retain(|s, _| sessions.contains(s));
-        self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
+        self.mirrors
+            .retain(|s, m| !m.exited && sessions.contains(s));
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));
         // Arrangements are never dropped, only parked by session name and
@@ -698,7 +760,11 @@ impl Viewer {
             .iter()
             .map(|a| (a.session.clone(), a.pane.clone()))
             .collect();
-        state::claim(&mut self.term_offsets, &mut self.restore_offsets, &pane_keys);
+        state::claim(
+            &mut self.term_offsets,
+            &mut self.restore_offsets,
+            &pane_keys,
+        );
         let focus_dead = self
             .focused_term
             .as_ref()
@@ -706,21 +772,23 @@ impl Viewer {
         if focus_dead {
             self.focused_term = None;
         }
-        if self
-            .term_selected
-            .as_ref()
-            .is_some_and(|(s, p)| !self.agent_panes.iter().any(|a| &a.session == s && &a.pane == p))
-        {
+        if self.term_selected.as_ref().is_some_and(|(s, p)| {
+            !self
+                .agent_panes
+                .iter()
+                .any(|a| &a.session == s && &a.pane == p)
+        }) {
             self.term_selected = None;
         }
         // A focused pane killed externally (session survives) must release
         // the keyboard — otherwise every keystroke drains into a dead
         // target while all graph keybinds stay suspended.
-        if self
-            .focused_term
-            .as_ref()
-            .is_some_and(|(s, p)| !self.agent_panes.iter().any(|a| &a.session == s && &a.pane == p))
-        {
+        if self.focused_term.as_ref().is_some_and(|(s, p)| {
+            !self
+                .agent_panes
+                .iter()
+                .any(|a| &a.session == s && &a.pane == p)
+        }) {
             self.focused_term = None;
         }
 
@@ -735,7 +803,8 @@ impl Viewer {
                 self.term_cache
                     .retain(|(cs, cp), _| cs != s || grids.iter().any(|(p, _)| p == cp));
                 for (pane, grid) in grids {
-                    self.term_cache.insert((s.clone(), pane), build_cached(&grid));
+                    self.term_cache
+                        .insert((s.clone(), pane), build_cached(&grid));
                 }
             }
         }
@@ -784,7 +853,9 @@ impl Viewer {
 
         for (i, a) in self.agent_panes.iter().enumerate() {
             let key = (a.session.clone(), a.pane.clone());
-            let Some(c) = self.term_cache.get(&key) else { continue };
+            let Some(c) = self.term_cache.get(&key) else {
+                continue;
+            };
             let focused = self.focused_term.as_ref() == Some(&key);
             let anchor = self.anchor_for(&a.cwd);
             let anchor_w = self.world_pos(anchor.0 as usize);
@@ -831,7 +902,8 @@ impl Viewer {
             if !view.intersects(card) {
                 continue;
             }
-            self.term_rects.push((a.session.clone(), a.pane.clone(), card));
+            self.term_rects
+                .push((a.session.clone(), a.pane.clone(), card));
 
             // drawn before the card, so it vanishes cleanly behind its edge
             painter.extend(egui::Shape::dashed_line(
@@ -847,8 +919,7 @@ impl Viewer {
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
             let searching = self.search_open && !self.query.is_empty();
             let smatch = searching && self.term_scores.get(i).copied().flatten().is_some();
-            let sbest = searching
-                && self.term_best.as_ref().is_some_and(|(_, bk)| bk == &key);
+            let sbest = searching && self.term_best.as_ref().is_some_and(|(_, bk)| bk == &key);
             let cursor = self.term_selected.as_ref() == Some(&key);
             let (border, bw) = if focused {
                 (SELECT, 2.5)
@@ -983,7 +1054,8 @@ impl Viewer {
             }
         };
         if let Ok(mut w) = notify::recommended_watcher(handler)
-            && w.watch(&self.root, notify::RecursiveMode::Recursive).is_ok()
+            && w.watch(&self.root, notify::RecursiveMode::Recursive)
+                .is_ok()
         {
             self._watcher = Some(w);
         }
@@ -1035,7 +1107,13 @@ impl Viewer {
         self.hover = None;
         self.best = None;
 
-        let Derived { radius, haystacks, n_files, n_dirs, dir_by_path } = Self::derived(&g);
+        let Derived {
+            radius,
+            haystacks,
+            n_files,
+            n_dirs,
+            dir_by_path,
+        } = Self::derived(&g);
         self.radius = radius;
         self.haystacks = haystacks;
         self.n_files = n_files;
@@ -1143,16 +1221,11 @@ impl Viewer {
             && let Some(sel) = self.selected
         {
             self.open_in_editor(sel);
-        } else if frame_key
-            && let Some(sel) = self.selected
-        {
+        } else if frame_key && let Some(sel) = self.selected {
             self.frame_node(sel);
         } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
-        } else if term_key
-            && ui.memory(|m| m.focused().is_none())
-            && !self.agent_panes.is_empty()
-        {
+        } else if term_key && ui.memory(|m| m.focused().is_none()) && !self.agent_panes.is_empty() {
             // hop the terminal cursor to the next card — keyboard stays on
             // the graph so repeated t keeps hopping; Enter dives in
             let i = self.term_cycle % self.agent_panes.len();
@@ -1233,7 +1306,10 @@ impl Viewer {
             }
         }
         cards.sort_by(|a, b| (&a.session, &a.pane).cmp(&(&b.session, &b.pane)));
-        state::ViewState { camera: Some((self.center.x, self.center.y, self.zoom)), cards }
+        state::ViewState {
+            camera: Some((self.center.x, self.center.y, self.zoom)),
+            cards,
+        }
     }
 
     /// Debounced view-state save; `force` (exit) skips the debounce. Errors
@@ -1267,7 +1343,10 @@ impl Viewer {
                 let n = self.g.node(id);
                 match n.kind {
                     NodeKind::Dir => n.path.clone(),
-                    _ => n.parent.map(|p| self.g.node(p).path.clone()).unwrap_or_default(),
+                    _ => n
+                        .parent
+                        .map(|p| self.g.node(p).path.clone())
+                        .unwrap_or_default(),
                 }
             })
             .unwrap_or_default();
@@ -1296,7 +1375,9 @@ impl Viewer {
             }
             ui.menu_button("Kill terminal", |ui| {
                 ui.label(
-                    egui::RichText::new("ends whatever is running there").weak().small(),
+                    egui::RichText::new("ends whatever is running there")
+                        .weak()
+                        .small(),
                 );
                 if ui.button(format!("Kill {s} {p}")).clicked() {
                     self.kill_pane(&s, &p);
@@ -1353,7 +1434,11 @@ impl Viewer {
 
     /// Absolute path for a vault-relative dir ("" = root).
     fn ctx_path(&self, dir: &str) -> PathBuf {
-        if dir.is_empty() { self.root.clone() } else { self.root.join(dir) }
+        if dir.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(dir)
+        }
     }
 
     /// Open a real terminal window attached to the card's session, landed on
@@ -1365,7 +1450,16 @@ impl Viewer {
             return;
         };
         cmd.args(["tmux", "attach-session", "-t", &format!("={session}")]);
-        cmd.args([";", "select-window", "-t", pane, ";", "select-pane", "-t", pane]);
+        cmd.args([
+            ";",
+            "select-window",
+            "-t",
+            pane,
+            ";",
+            "select-pane",
+            "-t",
+            pane,
+        ]);
         match detached(&mut cmd) {
             Ok(()) => self.set_flash(format!("attaching {session} in a new terminal")),
             Err(e) => self.set_flash(format!("attach failed: {e}")),
@@ -1381,7 +1475,11 @@ impl Viewer {
             .map(|s| s.success())
             .unwrap_or(false);
         if ok {
-            if self.focused_term.as_ref().is_some_and(|(fs, fp)| fs == session && fp == pane) {
+            if self
+                .focused_term
+                .as_ref()
+                .is_some_and(|(fs, fp)| fs == session && fp == pane)
+            {
                 self.focused_term = None;
             }
             self.set_flash(format!("killed {session} {pane}"));
@@ -1393,8 +1491,14 @@ impl Viewer {
     fn open_create(&mut self, folder: bool, dir: String, label: String) {
         self.focused_term = None; // the dialog owns the keyboard now
         self.close_search();
-        self.create =
-            Some(CreateDialog { folder, dir, label, buf: String::new(), focus: true, err: None });
+        self.create = Some(CreateDialog {
+            folder,
+            dir,
+            label,
+            buf: String::new(),
+            focus: true,
+            err: None,
+        });
     }
 
     fn launch_agent(&mut self, dir: &str, agent: &str) {
@@ -1407,7 +1511,9 @@ impl Viewer {
 
     /// The centered "New note / New folder" window, while `self.create` is on.
     fn create_dialog_ui(&mut self, ctx: &egui::Context) {
-        let Some(mut dlg) = self.create.take() else { return };
+        let Some(mut dlg) = self.create.take() else {
+            return;
+        };
         let mut submit = false;
         let mut cancel = false;
         egui::Window::new(if dlg.folder { "New folder" } else { "New note" })
@@ -1419,7 +1525,11 @@ impl Viewer {
                 ui.label(egui::RichText::new(format!("in {}/", dlg.label)).weak());
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut dlg.buf)
-                        .hint_text(if dlg.folder { "folder or sub/folder" } else { "name or sub/name" })
+                        .hint_text(if dlg.folder {
+                            "folder or sub/folder"
+                        } else {
+                            "name or sub/name"
+                        })
                         .desired_width(260.0),
                 );
                 if dlg.focus {
@@ -1432,8 +1542,8 @@ impl Viewer {
                 submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 ui.horizontal(|ui| {
                     submit |= ui.button("Create").clicked();
-                    cancel = ui.button("Cancel").clicked()
-                        || ui.input(|i| i.key_pressed(Key::Escape));
+                    cancel =
+                        ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(Key::Escape));
                 });
             });
         if submit {
@@ -1508,7 +1618,11 @@ impl Viewer {
             .iter()
             .enumerate()
             .map(|(i, a)| {
-                let dir = a.cwd.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+                let dir = a
+                    .cwd
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
                 let hay = format!("{} {} {} {}", a.agent, a.session, a.pane, dir);
                 let score = pattern.score(Utf32Str::new(&hay, &mut buf), &mut self.matcher);
                 if let Some(s) = score
@@ -1574,7 +1688,11 @@ impl Viewer {
         // Owned copies so the panel closures below can borrow self freely.
         let (kind, display, sub) = {
             let node = self.g.node(sel);
-            let sub = if node.path.is_empty() { node.name.clone() } else { node.path.clone() };
+            let sub = if node.path.is_empty() {
+                node.name.clone()
+            } else {
+                node.path.clone()
+            };
             (node.kind, node.display_name().to_string(), sub)
         };
 
@@ -1608,7 +1726,11 @@ impl Viewer {
                     ui.add_space(4.0);
                     for c in children {
                         let child = self.g.node(c);
-                        let icon = if child.kind == NodeKind::Dir { "▸ " } else { "· " };
+                        let icon = if child.kind == NodeKind::Dir {
+                            "▸ "
+                        } else {
+                            "· "
+                        };
                         if ui.link(format!("{icon}{}", child.display_name())).clicked() {
                             jump = Some(c);
                         }
@@ -1618,8 +1740,13 @@ impl Viewer {
             NodeKind::Ghost => {
                 ui.label("Not written yet. Referenced from:");
                 ui.add_space(4.0);
-                let refs: Vec<NodeId> =
-                    self.g.links.iter().filter(|l| l.to == sel).map(|l| l.from).collect();
+                let refs: Vec<NodeId> = self
+                    .g
+                    .links
+                    .iter()
+                    .filter(|l| l.to == sel)
+                    .map(|l| l.from)
+                    .collect();
                 for r in refs {
                     if ui.link(self.g.node(r).path.clone()).clicked() {
                         jump = Some(r);
@@ -1663,8 +1790,7 @@ impl Viewer {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if !self.fitted {
             self.fit(rect);
             self.fitted = true;
@@ -1758,7 +1884,8 @@ impl Viewer {
                             self.to_screen(rect, self.world_pos(id.0 as usize))
                         });
                     if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
-                        self.term_offsets.insert(t.clone(), (min - anchor_s) / self.zoom);
+                        self.term_offsets
+                            .insert(t.clone(), (min - anchor_s) / self.zoom);
                     }
                     self.drag_card = Some(t);
                 }
@@ -2015,7 +2142,11 @@ impl Viewer {
                 }
             }
             if active == Some(id) {
-                let color = if self.selected == Some(id) { SELECT } else { HOVER };
+                let color = if self.selected == Some(id) {
+                    SELECT
+                } else {
+                    HOVER
+                };
                 painter.circle_stroke(s, r + 3.0, Stroke::new(2.0, color));
             } else if searching && self.best == Some(id) {
                 painter.circle_stroke(s, r + 3.0, Stroke::new(2.0, HOVER));
@@ -2052,7 +2183,11 @@ impl Viewer {
         self.paint_terminals(&painter, rect, view);
 
         // status line
-        if self.flash.as_ref().is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(6)) {
+        if self
+            .flash
+            .as_ref()
+            .is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(6))
+        {
             self.flash = None;
         }
         let status = if let Some((msg, _)) = &self.flash {
@@ -2062,7 +2197,11 @@ impl Viewer {
         } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
             let tcount = self.term_scores.iter().flatten().count();
-            let terms = if tcount > 0 { format!(" + {tcount} terminals") } else { String::new() };
+            let terms = if tcount > 0 {
+                format!(" + {tcount} terminals")
+            } else {
+                String::new()
+            };
             format!(
                 "{count} match{}{terms} — Enter jumps to best · Esc closes",
                 if count == 1 { "" } else { "es" }
@@ -2074,19 +2213,23 @@ impl Viewer {
         } else {
             match active.map(|id| self.g.node(id)) {
                 Some(n) => {
-                let what = if n.path.is_empty() { &n.name } else { &n.path };
-                if n.kind == NodeKind::Ghost {
-                    format!("[[{what}]] — not written yet")
-                } else {
-                    what.clone()
+                    let what = if n.path.is_empty() { &n.name } else { &n.path };
+                    if n.kind == NodeKind::Ghost {
+                        format!("[[{what}]] — not written yet")
+                    } else {
+                        what.clone()
+                    }
                 }
-            }
                 None => format!(
                     "{} files · {} dirs · {} links{}   |   / search · f frame · 0 reset · hjkl pan · d/u zoom · t terminals",
                     self.n_files,
                     self.n_dirs,
                     self.g.links.len(),
-                    if self.sim.active() { " · settling…" } else { "" },
+                    if self.sim.active() {
+                        " · settling…"
+                    } else {
+                        ""
+                    },
                 ),
             }
         };
@@ -2101,14 +2244,19 @@ impl Viewer {
 }
 
 /// Editors that run inside a terminal and therefore need one opened for them.
-const TERMINAL_EDITORS: &[&str] =
-    &["vim", "nvim", "vi", "nano", "micro", "hx", "helix", "kak", "vis", "ne"];
+const TERMINAL_EDITORS: &[&str] = &[
+    "vim", "nvim", "vi", "nano", "micro", "hx", "helix", "kak", "vis", "ne",
+];
 
 fn spawn_editor(file: &Path) -> std::io::Result<()> {
     let editor = std::env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()));
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        });
     let Some(editor) = editor else {
         return detached(std::process::Command::new("xdg-open").arg(file));
     };
@@ -2135,7 +2283,10 @@ fn new_terminal_window() -> Option<std::process::Command> {
     let mk = |bin: &str, extra: &[&str]| -> std::process::Command {
         let mut c = std::process::Command::new(bin);
         c.args(extra); // user-supplied flags go before the command separator
-        let base = Path::new(bin).file_name().and_then(|s| s.to_str()).unwrap_or(bin);
+        let base = Path::new(bin)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(bin);
         match base {
             "gnome-terminal" => {
                 c.arg("--");

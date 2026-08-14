@@ -82,7 +82,10 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
             Err(e) => {
                 // an unreadable subdirectory must not silently vanish from
                 // the graph while stats report "errors: 0"
-                errors.push(ScanError { rel_path: "(walk)".into(), message: e.to_string() });
+                errors.push(ScanError {
+                    rel_path: "(walk)".into(),
+                    message: e.to_string(),
+                });
                 continue;
             }
         };
@@ -109,11 +112,18 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     for (rel, path) in paths {
         match std::fs::read(&path) {
             Ok(bytes) => files.push(parse_file(rel, &bytes)),
-            Err(e) => errors.push(ScanError { rel_path: rel, message: e.to_string() }),
+            Err(e) => errors.push(ScanError {
+                rel_path: rel,
+                message: e.to_string(),
+            }),
         }
     }
 
-    Ok(VaultScan { root, files, errors })
+    Ok(VaultScan {
+        root,
+        files,
+        errors,
+    })
 }
 
 fn rel_str(root: &Path, path: &Path) -> String {
@@ -130,7 +140,11 @@ fn in_skipped_dir(root: &Path, path: &Path) -> bool {
     path.strip_prefix(root)
         .unwrap_or(path)
         .components()
-        .any(|c| SKIPPED_DIRS.iter().any(|s| c.as_os_str().to_str() == Some(s)))
+        .any(|c| {
+            SKIPPED_DIRS
+                .iter()
+                .any(|s| c.as_os_str().to_str() == Some(s))
+        })
 }
 
 fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
@@ -140,15 +154,20 @@ fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
 
     let (fm, body, warning) = split_frontmatter(text);
     let links = extract_links(body);
-    RawFile { rel_path, title: fm.title, aliases: fm.aliases, links, warning }
+    RawFile {
+        rel_path,
+        title: fm.title,
+        aliases: fm.aliases,
+        links,
+        warning,
+    }
 }
 
 /// Read one file and return its body with BOM and frontmatter stripped — the
 /// same rules the scanner applies. Used by the viewer's detail pane, which
 /// reads bodies on demand rather than holding them in memory.
 pub fn read_body(path: &Path) -> Result<String> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
     let cow = String::from_utf8_lossy(&bytes);
     let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
     let (_, body, _) = split_frontmatter(text);
@@ -191,7 +210,11 @@ fn split_frontmatter(text: &str) -> (FmData, &str, Option<String>) {
             }
             (FmData { title, aliases }, body, None)
         }
-        Err(e) => (FmData::default(), body, Some(format!("invalid frontmatter: {e}"))),
+        Err(e) => (
+            FmData::default(),
+            body,
+            Some(format!("invalid frontmatter: {e}")),
+        ),
     }
 }
 
@@ -253,7 +276,9 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
     while let Some(found) = body[i..].find("[[") {
         let start = i + found;
         let inner_start = start + 2;
-        let Some(close) = body[inner_start..].find("]]") else { break };
+        let Some(close) = body[inner_start..].find("]]") else {
+            break;
+        };
         let inner_end = inner_start + close;
         let inner = &body[inner_start..inner_end];
 
@@ -287,7 +312,10 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
         if target.is_empty() {
             continue; // [[]] or [[#heading]] — empty / same-file reference
         }
-        out.push(RawLink { target: target.to_string(), offset: start });
+        out.push(RawLink {
+            target: target.to_string(),
+            offset: start,
+        });
     }
     out
 }

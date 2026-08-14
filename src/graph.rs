@@ -133,7 +133,11 @@ pub fn build(scan: VaultScan) -> Graph {
         links: Vec::new(),
         root: NodeId(0),
         warnings: Vec::new(),
-        errors: scan.errors.into_iter().map(|e| (e.rel_path, e.message)).collect(),
+        errors: scan
+            .errors
+            .into_iter()
+            .map(|e| (e.rel_path, e.message))
+            .collect(),
         ambiguities: Vec::new(),
         self_links_dropped: 0,
     };

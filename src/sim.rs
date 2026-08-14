@@ -230,11 +230,18 @@ mod tests {
             parent,
             children,
         };
-        g.nodes.push(mk(NodeKind::Dir, "", "r", None, vec![NodeId(1), NodeId(2)]));
-        g.nodes.push(mk(NodeKind::File, "a.md", "a", Some(NodeId(0)), vec![]));
-        g.nodes.push(mk(NodeKind::File, "b.md", "b", Some(NodeId(0)), vec![]));
+        g.nodes
+            .push(mk(NodeKind::Dir, "", "r", None, vec![NodeId(1), NodeId(2)]));
+        g.nodes
+            .push(mk(NodeKind::File, "a.md", "a", Some(NodeId(0)), vec![]));
+        g.nodes
+            .push(mk(NodeKind::File, "b.md", "b", Some(NodeId(0)), vec![]));
         g.nodes.push(mk(NodeKind::Ghost, "gh", "gh", None, vec![]));
-        g.links.push(Link { from: NodeId(1), to: NodeId(3), kind: LinkKind::WikiLink });
+        g.links.push(Link {
+            from: NodeId(1),
+            to: NodeId(3),
+            kind: LinkKind::WikiLink,
+        });
         g
     }
 
@@ -256,9 +263,7 @@ mod tests {
         let g = synth();
         let mut s = Sim::new(&g);
         s.tick(300);
-        let d = |i: usize, j: usize| {
-            ((s.x[i] - s.x[j]).powi(2) + (s.y[i] - s.y[j]).powi(2)).sqrt()
-        };
+        let d = |i: usize, j: usize| ((s.x[i] - s.x[j]).powi(2) + (s.y[i] - s.y[j]).powi(2)).sqrt();
         // a→ghost are spring-linked; b→ghost are not
         assert!(d(1, 3) < d(2, 3), "linked pair should sit closer");
     }
