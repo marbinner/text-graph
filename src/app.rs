@@ -1256,7 +1256,7 @@ impl Viewer {
         // repeat); with nothing selected they pan. Esc switches back.
         let tree_nav = self.selected.is_some() && ui.memory(|m| m.focused().is_none());
         if let Some(sel) = self.selected.filter(|_| tree_nav) {
-            let (h, j, k, l, g, sg, find) = ui.input(|i| {
+            let (h, j, k, l, g, sg, find, out_jump, back_jump) = ui.input(|i| {
                 let m = i.modifiers.is_none();
                 (
                     m && i.key_pressed(Key::H),
@@ -1266,6 +1266,8 @@ impl Viewer {
                     m && i.key_pressed(Key::G),
                     i.modifiers.shift_only() && i.key_pressed(Key::G),
                     m && i.key_pressed(Key::F),
+                    m && i.key_pressed(Key::CloseBracket),
+                    m && i.key_pressed(Key::OpenBracket),
                 )
             });
             if find {
@@ -1304,6 +1306,12 @@ impl Viewer {
                     }
                     _ => {}
                 }
+            } else if out_jump {
+                // ] follows the note's first outgoing wikilink
+                to = self.g.outlinks(sel).next().map(|l| l.to);
+            } else if back_jump {
+                // [ jumps to the first note linking here
+                to = self.g.backlinks(sel).next().map(|l| l.from);
             } else if sg {
                 to = self.g.nav_sibling_end(sel, true);
             } else if g {
@@ -1318,7 +1326,7 @@ impl Viewer {
                     self.pending_g = Some(Instant::now());
                 }
             }
-            if (h || j || k || l || sg) && !g {
+            if (h || j || k || l || sg || out_jump || back_jump) && !g {
                 self.pending_g = None;
             }
             if let Some(t) = to {
@@ -1921,6 +1929,27 @@ impl Viewer {
                         if ui.button("open in editor  (Enter / l)").clicked() {
                             self.open_in_editor(sel);
                         }
+                        // wikilink neighborhood: ] follows, [ backtracks
+                        let outs: Vec<NodeId> = self.g.outlinks(sel).map(|l| l.to).collect();
+                        let backs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
+                        for (arrow, ids) in [("→", outs), ("←", backs)] {
+                            if ids.is_empty() {
+                                continue;
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.label(egui::RichText::new(arrow).color(WIKI));
+                                for id in ids {
+                                    let name = self.g.node(id).display_name().to_string();
+                                    if ui
+                                        .link(egui::RichText::new(name).color(WIKI).small())
+                                        .clicked()
+                                    {
+                                        jump = Some(id);
+                                    }
+                                }
+                            });
+                        }
                         ui.add_space(4.0);
                         // take/put-back so the markdown cache and the body can
                         // be borrowed simultaneously without a per-frame clone
@@ -1960,13 +1989,7 @@ impl Viewer {
                     NodeKind::Ghost => {
                         ui.label("Not written yet. Referenced from:");
                         ui.add_space(4.0);
-                        let refs: Vec<NodeId> = self
-                            .g
-                            .links
-                            .iter()
-                            .filter(|l| l.to == sel)
-                            .map(|l| l.from)
-                            .collect();
+                        let refs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
                         for r in refs {
                             if ui.link(self.g.node(r).path.clone()).clicked() {
                                 jump = Some(r);
