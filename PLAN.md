@@ -167,7 +167,7 @@ arena; deterministic ordering; `stats` command. Fully tested with no window, no 
 tree (deterministic), node drag with live sim response, hover-dim of non-neighborhood,
 degree-scaled node sizes, alias resolution, ghosts rendered hollow.
 
-**C — Daily driver.** One commit per step, in order:
+**C — Daily driver. ✓ done.** One commit per step, in order:
 1. Fuzzy search (`nucleo-matcher`): `/` opens bar; matches name+path+aliases; live
    dims non-matches; Enter frames + selects best hit; Esc clears.
 2. Detail pane (`egui_commonmark`): selection opens right panel with rendered
