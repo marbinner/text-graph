@@ -16,7 +16,9 @@ use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
+use text_graph::agents::{self, AgentPane};
 use text_graph::graph::{Graph, Node, NodeId, NodeKind};
+use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
 use text_graph::{graph, vault};
 
@@ -33,6 +35,120 @@ const TEXT: Color32 = Color32::from_rgb(0x9a, 0xa0, 0xac);
 
 /// Dim factor applied to everything outside the active node's neighborhood.
 const DIM: f32 = 0.18;
+
+// ---- terminal cards ----
+const AGENT: Color32 = Color32::from_rgb(0x4e, 0xc9, 0x8b);
+const TERM_BG: Color32 = Color32::from_rgb(0x10, 0x13, 0x19);
+const TERM_BORDER: Color32 = Color32::from_rgb(0x3a, 0x40, 0x4d);
+const TERM_FG_T: (u8, u8, u8) = (0xc9, 0xd1, 0xd9);
+const TERM_BG_T: (u8, u8, u8) = (0x10, 0x13, 0x19);
+
+/// One style-run of a terminal row, precomputed at cache time so painting is
+/// a straight pass.
+struct Run {
+    start_col: u16,
+    text: String,
+    fg: Color32,
+    bg: Option<Color32>,
+    italic: bool,
+    underline: bool,
+}
+
+/// A pane's screen, converted once per mirror generation.
+struct CachedPane {
+    cols: u16,
+    rows: Vec<Vec<Run>>, // trailing blank rows trimmed
+    cursor: Option<(u16, u16)>,
+    last_line: String,
+}
+
+fn brighten(c: Color32) -> Color32 {
+    Color32::from_rgb(
+        c.r().saturating_add(45),
+        c.g().saturating_add(45),
+        c.b().saturating_add(45),
+    )
+}
+
+fn build_cached(grid: &TermGrid) -> CachedPane {
+    let cols = grid.cols as usize;
+    let blank_row = |r: usize| {
+        grid.cells[r * cols..(r + 1) * cols]
+            .iter()
+            .all(|c| c.ch == ' ' && c.bg.is_none() && !c.inverse)
+    };
+    let mut shown = 0;
+    for r in 0..grid.rows as usize {
+        if !blank_row(r) {
+            shown = r + 1;
+        }
+    }
+    if let Some((cr, _)) = grid.cursor {
+        shown = shown.max(cr as usize + 1);
+    }
+    let shown = shown.clamp(2, grid.rows.max(2) as usize);
+
+    let mut rows = Vec::with_capacity(shown);
+    let mut last_line = String::new();
+    for r in 0..shown {
+        let mut runs: Vec<Run> = Vec::new();
+        for (ci, cell) in grid.cells[r * cols..(r + 1) * cols].iter().enumerate() {
+            let (mut fg_t, mut bg_t) = (cell.fg.unwrap_or(TERM_FG_T), cell.bg);
+            if cell.inverse {
+                let old = fg_t;
+                fg_t = bg_t.unwrap_or(TERM_BG_T);
+                bg_t = Some(old);
+            }
+            let mut fg = Color32::from_rgb(fg_t.0, fg_t.1, fg_t.2);
+            if cell.bold {
+                fg = brighten(fg);
+            }
+            let bg = bg_t.map(|(r, g, b)| Color32::from_rgb(r, g, b));
+            match runs.last_mut() {
+                Some(run)
+                    if run.fg == fg
+                        && run.bg == bg
+                        && run.italic == cell.italic
+                        && run.underline == cell.underline =>
+                {
+                    run.text.push(cell.ch);
+                }
+                _ => runs.push(Run {
+                    start_col: ci as u16,
+                    text: cell.ch.to_string(),
+                    fg,
+                    bg,
+                    italic: cell.italic,
+                    underline: cell.underline,
+                }),
+            }
+        }
+        let t: String = runs.iter().map(|r| r.text.as_str()).collect();
+        if !t.trim().is_empty() {
+            last_line = t.trim_end().to_string();
+        }
+        rows.push(runs);
+    }
+    CachedPane { cols: grid.cols, rows, cursor: grid.cursor, last_line }
+}
+
+fn hash_angle(session: &str, pane: &str, index: usize) -> f32 {
+    let mut h: u32 = 17;
+    for b in session.bytes().chain(pane.bytes()) {
+        h = h.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    h = h.wrapping_add(index as u32 * 97);
+    (h % 628) as f32 / 100.0
+}
+
+/// Everything `derived()` recomputes from a fresh graph.
+struct Derived {
+    radius: Vec<f32>,
+    haystacks: Vec<String>,
+    n_files: usize,
+    n_dirs: usize,
+    dir_by_path: HashMap<String, NodeId>,
+}
 
 pub fn run(path: &Path) -> ExitCode {
     let scan = match vault::scan(path) {
@@ -54,6 +170,7 @@ pub fn run(path: &Path) -> ExitCode {
     let app = Box::new(move |cc: &eframe::CreationContext<'_>| {
         let mut viewer = viewer;
         viewer.start_watcher(cc.egui_ctx.clone());
+        viewer.start_agent_scan(cc.egui_ctx.clone());
         Ok(Box::new(viewer) as Box<dyn eframe::App>)
     });
     match eframe::run_native(&title, options, app) {
@@ -100,12 +217,23 @@ struct Viewer {
     _watcher: Option<notify::RecommendedWatcher>,
     /// Timestamp of the last relevant filesystem event (debounce state).
     reload_at: Arc<Mutex<Option<Instant>>>,
+    // ---- terminals in the graph ----
+    /// Dir path → node, for anchoring agent panes at their cwd.
+    dir_by_path: HashMap<String, NodeId>,
+    /// Written by the scanner thread, snapshotted each frame.
+    agents_seen: Arc<Mutex<Vec<AgentPane>>>,
+    agent_panes: Vec<AgentPane>,
+    mirrors: HashMap<String, SessionMirror>,
+    /// (session, pane) → converted screen; refreshed per mirror generation.
+    term_cache: HashMap<(String, String), CachedPane>,
+    term_gen: HashMap<String, u64>,
+    term_activity: HashMap<String, Instant>,
 }
 
 impl Viewer {
     /// Everything derivable from the graph alone — shared by `new` and the
     /// live-reload `rebuild`.
-    fn derived(g: &Graph) -> (Vec<f32>, Vec<String>, usize, usize) {
+    fn derived(g: &Graph) -> Derived {
         let mut degree = vec![0usize; g.nodes.len()];
         for (i, node) in g.nodes.iter().enumerate() {
             degree[i] += node.children.len();
@@ -137,12 +265,18 @@ impl Viewer {
             .collect();
         let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
         let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
-        (radius, haystacks, n_files, n_dirs)
+        let mut dir_by_path = HashMap::new();
+        for (i, n) in g.nodes.iter().enumerate() {
+            if n.kind == NodeKind::Dir {
+                dir_by_path.insert(n.path.clone(), NodeId(i as u32));
+            }
+        }
+        Derived { radius, haystacks, n_files, n_dirs, dir_by_path }
     }
 
     fn new(g: Graph, root: PathBuf) -> Self {
         let sim = Sim::new(&g);
-        let (radius, haystacks, n_files, n_dirs) = Self::derived(&g);
+        let Derived { radius, haystacks, n_files, n_dirs, dir_by_path } = Self::derived(&g);
         let n = haystacks.len();
         Self {
             g,
@@ -169,6 +303,202 @@ impl Viewer {
             detail: None,
             _watcher: None,
             reload_at: Arc::new(Mutex::new(None)),
+            dir_by_path,
+            agents_seen: Arc::new(Mutex::new(Vec::new())),
+            agent_panes: Vec::new(),
+            mirrors: HashMap::new(),
+            term_cache: HashMap::new(),
+            term_gen: HashMap::new(),
+            term_activity: HashMap::new(),
+        }
+    }
+
+    /// Poll tmux for agent panes anchored in this vault (default server),
+    /// publish diffs, wake the UI.
+    fn start_agent_scan(&self, ctx: egui::Context) {
+        let shared = self.agents_seen.clone();
+        let root = self.root.clone();
+        std::thread::spawn(move || {
+            let allow = agents::default_allowlist();
+            let mut tracker = agents::Tracker::new();
+            loop {
+                let panes = agents::scan(&root);
+                let active = tracker.update(&panes, &allow, Instant::now());
+                {
+                    let mut s = shared.lock().unwrap();
+                    if *s != active {
+                        *s = active;
+                        ctx.request_repaint();
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(1500));
+            }
+        });
+    }
+
+    /// Snapshot discovery, keep mirrors in sync with it, pump events, and
+    /// refresh converted screens per mirror generation.
+    fn sync_terminals(&mut self, ctx: &egui::Context) {
+        self.agent_panes = self.agents_seen.lock().unwrap().clone();
+
+        let sessions: HashSet<String> =
+            self.agent_panes.iter().map(|a| a.session.clone()).collect();
+        for s in &sessions {
+            if !self.mirrors.contains_key(s) {
+                let c = ctx.clone();
+                // Never pass a size for discovered sessions — the user may be
+                // viewing them in a real terminal.
+                if let Ok(m) = SessionMirror::attach(s, None, None, move || c.request_repaint()) {
+                    self.mirrors.insert(s.clone(), m);
+                }
+            }
+        }
+        self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
+        self.term_cache.retain(|(s, _), _| sessions.contains(s));
+        self.term_gen.retain(|s, _| sessions.contains(s));
+
+        for (s, m) in &mut self.mirrors {
+            if m.pump() {
+                self.term_activity.insert(s.clone(), Instant::now());
+            }
+            let mgen = m.generation();
+            if self.term_gen.get(s).copied() != Some(mgen) {
+                self.term_gen.insert(s.clone(), mgen);
+                let grids = m.grids();
+                self.term_cache
+                    .retain(|(cs, cp), _| cs != s || grids.iter().any(|(p, _)| p == cp));
+                for (pane, grid) in grids {
+                    self.term_cache.insert((s.clone(), pane), build_cached(&grid));
+                }
+            }
+        }
+
+        // glow fades need a few follow-up frames
+        if self
+            .term_activity
+            .values()
+            .any(|t| t.elapsed() < Duration::from_secs(2))
+        {
+            ctx.request_repaint_after(Duration::from_millis(150));
+        }
+    }
+
+    /// Nearest Dir node at or above `cwd`.
+    fn anchor_for(&self, cwd: &Path) -> NodeId {
+        let rel = cwd.strip_prefix(&self.root).unwrap_or(Path::new(""));
+        let mut key = rel.to_string_lossy().replace('\\', "/");
+        loop {
+            if let Some(&id) = self.dir_by_path.get(&key) {
+                return id;
+            }
+            match key.rfind('/') {
+                Some(i) => key.truncate(i),
+                None if !key.is_empty() => key.clear(),
+                None => return self.g.root,
+            }
+        }
+    }
+
+    fn paint_terminals(&self, painter: &egui::Painter, rect: Rect, view: Rect) {
+        if self.agent_panes.is_empty() {
+            return;
+        }
+        let f = (6.0 * self.zoom).clamp(2.5, 16.0);
+        let compact = f < 5.0;
+        let font = FontId::monospace(f);
+        // measured monospace advance keeps columns honest at any zoom
+        let probe = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
+        let (adv, line_h) = (probe.size().x, probe.size().y);
+        let title_h = 16.0;
+        let pad = 6.0;
+
+        for (i, a) in self.agent_panes.iter().enumerate() {
+            let key = (a.session.clone(), a.pane.clone());
+            let Some(c) = self.term_cache.get(&key) else { continue };
+            let anchor = self.anchor_for(&a.cwd);
+            let anchor_s = self.to_screen(rect, self.world_pos(anchor.0 as usize));
+            let off = Vec2::angled(hash_angle(&a.session, &a.pane, i)) * 170.0 * self.zoom.max(0.35);
+            let size = if compact {
+                Vec2::new(220.0, 42.0)
+            } else {
+                Vec2::new(
+                    c.cols as f32 * adv + pad * 2.0,
+                    c.rows.len() as f32 * line_h + title_h + pad * 2.0,
+                )
+            };
+            let card = Rect::from_min_size(anchor_s + off, size);
+            if !view.intersects(card) {
+                continue;
+            }
+
+            painter.extend(egui::Shape::dashed_line(
+                &[anchor_s, card.left_center()],
+                Stroke::new(1.0, EDGE),
+                6.0,
+                4.0,
+            ));
+
+            let hot = self
+                .term_activity
+                .get(&a.session)
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+            let border = if hot { AGENT } else { TERM_BORDER };
+            painter.rect_filled(card, 4.0, TERM_BG);
+            painter.rect_stroke(card, 4.0, Stroke::new(1.5, border), egui::StrokeKind::Inside);
+            let title = format!("{} · {} {}", a.agent, a.session, a.pane);
+            painter.text(
+                card.left_top() + Vec2::new(pad, 2.0),
+                Align2::LEFT_TOP,
+                title,
+                FontId::proportional(11.0),
+                if hot { AGENT } else { TEXT },
+            );
+
+            if compact {
+                painter.text(
+                    card.left_top() + Vec2::new(pad, 22.0),
+                    Align2::LEFT_TOP,
+                    &c.last_line,
+                    FontId::monospace(10.0),
+                    Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
+                );
+                continue;
+            }
+
+            let origin = card.left_top() + Vec2::new(pad, title_h + pad);
+            for (r, row) in c.rows.iter().enumerate() {
+                let y = origin.y + r as f32 * line_h;
+                let mut job = egui::text::LayoutJob::default();
+                for run in row {
+                    if let Some(bg) = run.bg {
+                        let x0 = origin.x + run.start_col as f32 * adv;
+                        let w = run.text.chars().count() as f32 * adv;
+                        painter.rect_filled(
+                            Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, line_h)),
+                            0.0,
+                            bg,
+                        );
+                    }
+                    let mut fmt = egui::TextFormat::simple(font.clone(), run.fg);
+                    fmt.italics = run.italic;
+                    if run.underline {
+                        fmt.underline = Stroke::new(1.0, run.fg);
+                    }
+                    job.append(&run.text, 0.0, fmt);
+                }
+                let galley = painter.layout_job(job);
+                painter.galley(Pos2::new(origin.x, y), galley, Color32::WHITE);
+            }
+            if let Some((cr, cc)) = c.cursor
+                && (cr as usize) < c.rows.len()
+            {
+                let p0 = Pos2::new(origin.x + cc as f32 * adv, origin.y + cr as f32 * line_h);
+                painter.rect_filled(
+                    Rect::from_min_size(p0, Vec2::new(adv.max(2.0), line_h)),
+                    0.0,
+                    HOVER.gamma_multiply(0.55),
+                );
+            }
         }
     }
 
@@ -253,11 +583,12 @@ impl Viewer {
         self.drag_node = None;
         self.best = None;
 
-        let (radius, haystacks, n_files, n_dirs) = Self::derived(&g);
+        let Derived { radius, haystacks, n_files, n_dirs, dir_by_path } = Self::derived(&g);
         self.radius = radius;
         self.haystacks = haystacks;
         self.n_files = n_files;
         self.n_dirs = n_dirs;
+        self.dir_by_path = dir_by_path;
         self.scores = vec![None; g.nodes.len()];
         self.last_query.clear(); // force a re-score against the new nodes
         self.detail = None; // re-read the body — the pane shows fresh edits
@@ -500,6 +831,10 @@ impl Viewer {
             ui.ctx().request_repaint();
         }
 
+        // ---- agent terminals: discovery snapshot, mirrors, screen caches ----
+        let ctx = ui.ctx().clone();
+        self.sync_terminals(&ctx);
+
         // ---- input ----
         // drag_started uses last frame's hover — standard immediate-mode lag,
         // imperceptible at interactive frame rates.
@@ -698,6 +1033,9 @@ impl Viewer {
                 color,
             );
         }
+
+        // terminal cards, on top of the graph
+        self.paint_terminals(&painter, rect, view);
 
         // status line
         let status = if searching {
