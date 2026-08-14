@@ -18,7 +18,7 @@ commit.
 | Case-insensitive resolution | `[[Readme]]` → `notes/readme.md` |
 | Unique-basename resolution across dirs | `[[2026-08-14]]`, `[[ideas]]`, `[[grafér]]`, `[[empty]]` |
 | Explicit-path resolution | `[[projects/rust-app]]`, `[[topics/rust]]`, `[[languages/rust]]` |
-| **Ambiguous basename** → lexicographically smallest path, flagged | `[[rust]]` → `languages/rust.md` (not `topics/rust.md`); ambiguous count = 1 |
+| **Ambiguous basename** → first in sorted path order, flagged | `[[rust]]` → `languages/rust.md` (not `topics/rust.md`); ambiguous count = 1 |
 | Alias syntax | `[[ideas\|my ideas]]`, `[[rust-app\|the app]]`, `[[languages/rust\|other rust]]` |
 | Heading suffix stripped for resolution | `[[index#Heading One]]` → index.md (heading not validated in v1) |
 | Block suffix stripped for resolution | `[[scratch#^abc123]]` → scratch.md |

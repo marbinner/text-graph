@@ -60,8 +60,8 @@ pub struct Link {
     pub kind: LinkKind,
 }
 
-/// A basename link that matched several files; resolution picked the
-/// lexicographically smallest path and recorded the rest.
+/// A basename link that matched several files; resolution picked the first
+/// in sorted path order and recorded the rest.
 #[derive(Debug)]
 pub struct Ambiguity {
     pub source: NodeId,

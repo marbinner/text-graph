@@ -3,8 +3,8 @@
 //! Rules: casefolded matching; a bare name matches files by stem first, then
 //! by frontmatter `aliases:`; a target containing `/` matches by
 //! path-component suffix (so any unambiguous suffix of a path works).
-//! Ambiguity resolves to the lexicographically
-//! smallest path and is flagged. Unresolved targets become Ghost nodes.
+//! Ambiguity resolves to the first candidate in sorted path order
+//! (component-wise) and is flagged. Unresolved targets become Ghost nodes.
 //! Self-links resolve and are then dropped. Duplicate (from, to) edges are
 //! deduplicated.
 
@@ -23,8 +23,8 @@ const ASSET_EXTS: &[&str] = &[
 
 pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
     // Index all File nodes. Files are indexed in NodeId order, which is
-    // sorted-path order, so the first candidate in any bucket is the
-    // lexicographically smallest path — the deterministic ambiguity winner.
+    // sorted-path order (component-wise PathBuf ordering), so the first
+    // candidate in any bucket is the deterministic ambiguity winner.
     let mut by_stem: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut by_alias: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut comp_paths: Vec<(NodeId, Vec<String>)> = Vec::new();
