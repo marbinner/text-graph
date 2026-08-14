@@ -16,7 +16,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
-use text_graph::graph::{Graph, NodeId, NodeKind};
+use text_graph::graph::{Graph, Node, NodeId, NodeKind};
 use text_graph::sim::Sim;
 use text_graph::{graph, vault};
 
@@ -205,6 +205,16 @@ impl Viewer {
         }
     }
 
+    /// Cross-reload identity key. A ghost's `path` is raw target text, which
+    /// can collide with a real dir path (ghost `[[notes]]` vs dir `notes/`) —
+    /// ghosts get their own namespace so carry-over never confuses the two.
+    fn ident(node: &Node) -> String {
+        match node.kind {
+            NodeKind::Ghost => format!("[[{}]]", node.path),
+            _ => node.path.clone(),
+        }
+    }
+
     /// Re-scan the vault and swap the graph in, carrying over sim positions,
     /// selection, and search identity by path so an edit ripples the layout
     /// instead of re-settling it.
@@ -219,26 +229,26 @@ impl Viewer {
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| (n.path.clone(), (self.sim.x[i], self.sim.y[i])))
+            .map(|(i, n)| (Self::ident(n), (self.sim.x[i], self.sim.y[i])))
             .collect();
         let mut sim = Sim::new(&g);
         for (i, node) in g.nodes.iter().enumerate() {
-            if let Some(&(x, y)) = old_pos.get(&node.path) {
+            if let Some(&(x, y)) = old_pos.get(&Self::ident(node)) {
                 sim.x[i] = x;
                 sim.y[i] = y;
             }
         }
         sim.calm();
 
-        let by_path: HashMap<&str, NodeId> = g
+        let by_ident: HashMap<String, NodeId> = g
             .nodes
             .iter()
             .enumerate()
-            .map(|(i, n)| (n.path.as_str(), NodeId(i as u32)))
+            .map(|(i, n)| (Self::ident(n), NodeId(i as u32)))
             .collect();
         self.selected = self
             .selected
-            .and_then(|id| by_path.get(self.g.node(id).path.as_str()).copied());
+            .and_then(|id| by_ident.get(&Self::ident(self.g.node(id))).copied());
         self.hover = None;
         self.drag_node = None;
         self.best = None;
