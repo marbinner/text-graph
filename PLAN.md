@@ -1,5 +1,9 @@
 # text-graph — Plan
 
+*Last updated 2026-08-14 (v0.2.0, 93 tests). Where to pick up: the
+agent-needs-attention signal, jump history (Ctrl+O/I), or Phase 2 step 0 —
+see the Status paragraph under milestone E and the audit backlog under D.*
+
 **Phase 1 (current):** a fast native GUI over a markdown vault. Point it at a folder of
 `.md` files and it renders an interactive graph. One static Rust binary — egui, no
 webview, no JS, no runtime.
@@ -196,7 +200,7 @@ Audit backlog (external audit, 2026-08):
 - Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
 - License + release packaging (user decision on license first).
 
-**E — Terminals in the graph (current).** Agent TUIs (claude, codex, pi, any harness)
+**E — Terminals in the graph (done, except the procfs fallback).** Agent TUIs (claude, codex, pi, any harness)
 live in tmux sessions; the viewer renders them as live terminal cards anchored to the
 node they were opened at, and you type into them in place. Architecture: the viewer
 attaches as a **tmux control-mode client** (`tmux -C attach`) — the iTerm2 approach —
