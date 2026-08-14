@@ -822,13 +822,13 @@ impl Viewer {
     }
 
     fn handle_keys(&mut self, ui: &egui::Ui) {
-        let (open_key, esc, enter, frame_key, home) = ui.input(|i| {
+        let (open_key, esc, enter, frame_key, reset) = ui.input(|i| {
             (
                 i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
                 i.key_pressed(Key::Escape),
                 i.key_pressed(Key::Enter),
                 !i.modifiers.command && i.key_pressed(Key::F),
-                i.key_pressed(Key::Home),
+                i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
             )
         });
         if self.search_open {
@@ -858,7 +858,7 @@ impl Viewer {
             && let Some(sel) = self.selected
         {
             self.frame_node(sel);
-        } else if home {
+        } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
         }
     }
@@ -1336,7 +1336,7 @@ impl Viewer {
                 }
             }
                 None => format!(
-                    "{} files · {} dirs · {} links{}   |   / search · f frame · Home fit · drag/wheel to pan/zoom",
+                    "{} files · {} dirs · {} links{}   |   / search · f frame · 0 reset view · drag/wheel to pan/zoom",
                     self.n_files,
                     self.n_dirs,
                     self.g.links.len(),

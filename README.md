@@ -58,7 +58,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, and paths; matches stay lit, `Enter` jumps to the ringed best hit, `Esc` closes |
 | `f` | frame the selection |
-| `Home` | fit the whole graph |
+| `0` / `Home` | reset the view — fit the whole graph |
 | `Esc` | close search, else deselect |
 | click a terminal card | focus it — the keyboard now types into that agent |
 | double-click a terminal card | fly the view into that terminal: zooms to a readable size and centers it |
