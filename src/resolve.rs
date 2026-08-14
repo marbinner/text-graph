@@ -13,9 +13,11 @@ use std::collections::{HashMap, HashSet};
 use crate::graph::{Ambiguity, Graph, Link, LinkKind, Node, NodeId, NodeKind};
 use crate::vault::RawLink;
 
-/// Extensions treated as assets: links to these are skipped in v1 rather than
-/// resolved or ghosted. An allowlist, not "any extension" — note names like
-/// `v1.2` must not be mistaken for assets.
+/// Extensions treated as assets: UNRESOLVED links to these are skipped
+/// rather than ghosted. Images that exist in the vault are Image nodes and
+/// resolve normally (by full filename or path suffix) before this list is
+/// consulted. An allowlist, not "any extension" — note names like `v1.2`
+/// must not be mistaken for assets.
 const ASSET_EXTS: &[&str] = &[
     "png",
     "jpg",
@@ -40,14 +42,16 @@ const ASSET_EXTS: &[&str] = &[
 ];
 
 pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
-    // Index all File nodes. Files are indexed in NodeId order, which is
-    // sorted relative-path (string) order, so the first candidate in any
-    // bucket is the deterministic ambiguity winner.
+    // Index all File and Image nodes. Leaves are indexed in NodeId order,
+    // which is sorted relative-path (string) order, so the first candidate
+    // in any bucket is the deterministic ambiguity winner. Image names keep
+    // their extension, so `[[pic.png]]` hits by_stem while `[[pic]]` never
+    // matches an image.
     let mut by_stem: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut by_alias: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut comp_paths: Vec<(NodeId, Vec<String>)> = Vec::new();
     for (idx, node) in g.nodes.iter().enumerate() {
-        if node.kind != NodeKind::File {
+        if !matches!(node.kind, NodeKind::File | NodeKind::Image) {
             continue;
         }
         let id = NodeId(idx as u32);

@@ -305,13 +305,16 @@ impl Viewer {
     /// the editor: terminal editors ($EDITOR=nvim etc.) are wrapped in a
     /// fresh terminal emulator instead of hijacking whatever terminal
     /// launched the viewer; GUI editors open their own windows anyway. Dirs
-    /// open in the file manager; ghosts have nothing to open.
+    /// open in the file manager, images in the system viewer; ghosts have
+    /// nothing to open.
     pub(super) fn open_in_editor(&self, id: NodeId) {
         let node = self.g.node(id);
         let path = self.root.join(&node.path);
         let result = match node.kind {
             NodeKind::File => spawn_editor(&path),
-            NodeKind::Dir => detached(std::process::Command::new("xdg-open").arg(&path)),
+            NodeKind::Dir | NodeKind::Image => {
+                detached(std::process::Command::new("xdg-open").arg(&path))
+            }
             NodeKind::Ghost => return,
         };
         if let Err(e) = result {

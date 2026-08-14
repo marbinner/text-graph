@@ -73,7 +73,7 @@ fn hjkl_walks_the_tree_when_a_node_is_selected() {
     press(&mut h, Key::L);
     assert_eq!(
         selected_path(&h).as_deref(),
-        Some("languages"),
+        Some("assets"),
         "l enters the root: first child, dirs-first order"
     );
     // G / gg jump to the ends of the sibling list
@@ -88,7 +88,7 @@ fn hjkl_walks_the_tree_when_a_node_is_selected() {
     press(&mut h, Key::G);
     assert_eq!(
         selected_path(&h).as_deref(),
-        Some("languages"),
+        Some("assets"),
         "gg = first sibling"
     );
 }

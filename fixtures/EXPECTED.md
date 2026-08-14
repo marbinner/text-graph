@@ -9,8 +9,10 @@ commit.
 | Behavior | Fixture that exercises it |
 |---|---|
 | `.obsidian/` and `.trash/` skipped entirely | `.trash/deleted-note.md` contains `[[index]]` — must not appear anywhere |
-| Non-md files are not nodes | `assets/diagram.png` |
-| Dirs with no md descendants are pruned | `assets/` must not become a Dir node |
+| Image files are Image nodes, with their dir chain | `assets/diagram.png` → Image node, `assets/` → Dir node |
+| Non-md, non-image files are not nodes | `misc/data.csv` |
+| Dirs with no md/image descendants are pruned | `misc/` must not become a Dir node |
+| Wikilink to an existing image resolves | `[[diagram.png]]` in index.md → `assets/diagram.png` |
 | Embeds skipped in v1 | `![[diagram.png]]` and `![[embedded-note-trap]]` in index.md — the second is md-resolvable, so an extraction regression surfaces as a ghost |
 | Markdown-style links not edges in v1 | `[ideas](projects/ideas.md)` in index.md |
 | Links in fenced code blocks are not edges | ```` ```text [[trap-link]] ``` ```` in index.md |
@@ -38,22 +40,23 @@ commit.
 | Kind | Count | Members |
 |---|---|---|
 | File | 13 | index, empty, frontmatter-only, bom, projects/{rust-app, ideas}, notes/{readme, scratch}, notes/daily/{2026-08-13, 2026-08-14}, topics/{rust, grafér}, languages/rust |
-| Dir | 6 | vault root, projects, notes, notes/daily, topics, languages (assets pruned) |
+| Dir | 7 | vault root, assets, projects, notes, notes/daily, topics, languages (misc pruned) |
+| Image | 1 | assets/diagram.png |
 | Ghost | 2 | `missing-note`, `nonexistent/deep/ghost` |
-| **Total** | **21** | |
+| **Total** | **23** | |
 
 ## Expected edge counts
 
 | Kind | Count | Notes |
 |---|---|---|
-| Contains | 18 | 13 files + 5 non-root dirs, one parent each |
-| WikiLink | 18 | 16 resolved to Files + 2 to Ghosts |
+| Contains | 20 | 13 files + 6 non-root dirs + 1 image, one parent each |
+| WikiLink | 19 | 16 resolved to Files + 1 to Images + 2 to Ghosts |
 
 ### WikiLink edges by source
 
 | Source file | Resolved targets | Ghost targets |
 |---|---|---|
-| index.md | projects/rust-app, notes/readme, notes/daily/2026-08-14 | missing-note |
+| index.md | projects/rust-app, notes/readme, notes/daily/2026-08-14, assets/diagram.png | missing-note |
 | projects/rust-app.md | languages/rust (ambiguous), topics/rust, projects/ideas, index, notes/scratch | |
 | projects/ideas.md | | nonexistent/deep/ghost |
 | notes/readme.md | topics/grafér | |
@@ -65,16 +68,17 @@ commit.
 | bom.md | empty | |
 | (all others) | — | — |
 
-Per-source totals: 3+5+1+1+1+2+1+1+1 = 16 file edges; 2 ghost edges.
+Per-source totals: 4+5+1+1+1+2+1+1+1 = 17 resolved edges (16 to files, 1 to
+the image); 2 ghost edges.
 
 ## Other expected stats
 
 - Parse warnings: **1** (scratch.md frontmatter)
 - Ambiguous resolutions: **1** (`[[rust]]`)
-- Raw `[[` occurrences in countable files: **23** = 18 edges + 2 code traps
+- Raw `[[` occurrences in countable files: **24** = 19 edges + 2 code traps
   + 2 embeds + 1 dropped self-link (useful cross-check when editing the vault)
-- Depth histogram — dirs: d0×1 (root), d1×4, d2×1 (daily);
-  files: d1×4, d2×7, d3×2
+- Depth histogram — dirs: d0×1 (root), d1×5, d2×1 (daily);
+  files: d1×4, d2×7, d3×2; images: d2×1 (assets/diagram.png)
 
 ## Stress vault
 

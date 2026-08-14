@@ -13,6 +13,9 @@ pub struct NodeId(pub u32);
 pub enum NodeKind {
     Dir,
     File,
+    /// An image file — a leaf like File, but with no body to parse. Its
+    /// `name` keeps the extension (that's how links address it).
+    Image,
     /// A wikilink target that doesn't exist (yet).
     Ghost,
 }
@@ -254,28 +257,59 @@ pub fn build(scan: VaultScan) -> Graph {
         children: Vec::new(),
     });
 
-    // Dir nodes are created only as ancestors of markdown files, so
-    // directories with no markdown descendants are pruned for free.
+    // Dir nodes are created only as ancestors of markdown/image files, so
+    // directories with no such descendants are pruned for free.
     let mut dir_ids: HashMap<String, NodeId> = HashMap::from([(String::new(), g.root)]);
     let mut file_links: Vec<(NodeId, Vec<RawLink>)> = Vec::new();
 
-    for file in scan.files {
-        let parent = ensure_dirs(&mut g, &mut dir_ids, &file.rel_path);
-        let name = file_stem(&file.rel_path);
-        let id = g.push_node(Node {
-            kind: NodeKind::File,
-            path: file.rel_path.clone(),
-            name,
-            title: file.title,
-            aliases: file.aliases,
-            parent: Some(parent),
-            children: Vec::new(),
-        });
-        g.node_mut(parent).children.push(id);
-        if let Some(w) = file.warning {
-            g.warnings.push((file.rel_path, w));
+    // Merge notes and images in sorted rel_path order, so NodeId order keeps
+    // meaning "sorted path order" across every leaf — resolution's ambiguity
+    // winner and the determinism tests both lean on that.
+    let mut files = scan.files.into_iter().peekable();
+    let mut images = scan.images.into_iter().peekable();
+    loop {
+        let take_file = match (files.peek(), images.peek()) {
+            (Some(f), Some(i)) => f.rel_path <= *i,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        if take_file {
+            let file = files.next().unwrap();
+            let parent = ensure_dirs(&mut g, &mut dir_ids, &file.rel_path);
+            let name = file_stem(&file.rel_path);
+            let id = g.push_node(Node {
+                kind: NodeKind::File,
+                path: file.rel_path.clone(),
+                name,
+                title: file.title,
+                aliases: file.aliases,
+                parent: Some(parent),
+                children: Vec::new(),
+            });
+            g.node_mut(parent).children.push(id);
+            if let Some(w) = file.warning {
+                g.warnings.push((file.rel_path, w));
+            }
+            file_links.push((id, file.links));
+        } else {
+            let rel = images.next().unwrap();
+            let parent = ensure_dirs(&mut g, &mut dir_ids, &rel);
+            let name = rel
+                .rsplit_once('/')
+                .map_or(rel.as_str(), |(_, f)| f)
+                .to_string();
+            let id = g.push_node(Node {
+                kind: NodeKind::Image,
+                path: rel,
+                name,
+                title: None,
+                aliases: Vec::new(),
+                parent: Some(parent),
+                children: Vec::new(),
+            });
+            g.node_mut(parent).children.push(id);
         }
-        file_links.push((id, file.links));
     }
 
     sort_children(&mut g);
@@ -333,7 +367,7 @@ fn sort_children(g: &mut Graph) {
     let keys: Vec<(u8, String)> = g
         .nodes
         .iter()
-        .map(|n| (matches!(n.kind, NodeKind::File) as u8, n.name.clone()))
+        .map(|n| (!matches!(n.kind, NodeKind::Dir) as u8, n.name.clone()))
         .collect();
     for node in &mut g.nodes {
         node.children

@@ -46,6 +46,9 @@ pub struct VaultScan {
     /// Parsed files, sorted by `rel_path` — determinism depends on this,
     /// because NodeIds are assigned in this order.
     pub files: Vec<RawFile>,
+    /// Image files (rel paths, sorted). Not parsed — they become Image
+    /// nodes with no links of their own.
+    pub images: Vec<String>,
     /// Files that could not be read; the scan continues past them.
     pub errors: Vec<ScanError>,
 }
@@ -53,6 +56,14 @@ pub struct VaultScan {
 /// Directories skipped regardless of hidden-file handling (belt and
 /// suspenders — the walker's hidden filter already covers dotdirs).
 const SKIPPED_DIRS: &[&str] = &[".obsidian", ".trash"];
+
+/// Raster formats the scan turns into Image nodes. SVG is excluded — the
+/// viewer has no vector rasterizer.
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+fn image_ext(ext: &str) -> bool {
+    IMAGE_EXTS.iter().any(|x| ext.eq_ignore_ascii_case(x))
+}
 
 pub fn scan(root: &Path) -> Result<VaultScan> {
     let root = root
@@ -62,10 +73,11 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         bail!("vault root {} is not a directory", root.display());
     }
 
-    // Collect .md paths. Hidden files/dirs are skipped (.obsidian, .trash,
-    // .git); git-ignore semantics are deliberately disabled — a notes viewer
-    // should show what's on disk, not what git tracks.
+    // Collect .md and image paths. Hidden files/dirs are skipped (.obsidian,
+    // .trash, .git); git-ignore semantics are deliberately disabled — a notes
+    // viewer should show what's on disk, not what git tracks.
     let mut paths: Vec<(String, PathBuf)> = Vec::new();
+    let mut images: Vec<String> = Vec::new();
     let mut errors = Vec::new();
     let walker = ignore::WalkBuilder::new(&root)
         .hidden(true)
@@ -93,12 +105,15 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
             continue;
         }
         let path = entry.into_path();
-        let is_md = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("md"));
-        if is_md && !in_skipped_dir(&root, &path) {
-            paths.push((rel_str(&root, &path), path));
+        let ext = path.extension().and_then(|e| e.to_str());
+        if in_skipped_dir(&root, &path) {
+            continue;
+        }
+        if ext.is_some_and(|e| e.eq_ignore_ascii_case("md")) {
+            let rel = rel_str(&root, &path);
+            paths.push((rel, path));
+        } else if ext.is_some_and(image_ext) {
+            images.push(rel_str(&root, &path));
         }
     }
 
@@ -107,6 +122,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     // means everywhere else (docs, ambiguity resolution). PathBuf's
     // component-wise order differs around '/' vs '.'/'-' in dirnames.
     paths.sort();
+    images.sort();
 
     let mut files = Vec::with_capacity(paths.len());
     for (rel, path) in paths {
@@ -122,6 +138,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     Ok(VaultScan {
         root,
         files,
+        images,
         errors,
     })
 }
@@ -176,9 +193,9 @@ pub fn read_body(path: &Path) -> Result<String> {
 
 /// Should a filesystem event at `p` trigger a vault reload? Hidden
 /// components (.obsidian/.git/.text-graph churn — including our own state
-/// saves) never do; markdown files and extensionless paths (directory
-/// creates/renames) do. The watcher's one filter — a wrong `true` costs a
-/// pointless rebuild, a wrong `false` costs a stale graph.
+/// saves) never do; markdown files, image files, and extensionless paths
+/// (directory creates/renames) do. The watcher's one filter — a wrong
+/// `true` costs a pointless rebuild, a wrong `false` costs a stale graph.
 pub fn watch_relevant(root: &Path, p: &Path) -> bool {
     let rel = p.strip_prefix(root).unwrap_or(p);
     let hidden = rel
@@ -188,7 +205,7 @@ pub fn watch_relevant(root: &Path, p: &Path) -> bool {
         return false;
     }
     match rel.extension().and_then(|e| e.to_str()) {
-        Some(ext) => ext.eq_ignore_ascii_case("md"),
+        Some(ext) => ext.eq_ignore_ascii_case("md") || image_ext(ext),
         None => true, // directory events (creates, renames)
     }
 }
@@ -350,7 +367,9 @@ mod tests {
         assert!(rel("notes/a.md"), "markdown edits reload");
         assert!(rel("a.MD"), "case-insensitive extension");
         assert!(rel("newdir"), "extensionless = dir create/rename");
-        assert!(!rel("assets/pic.png"), "non-md files don't");
+        assert!(rel("assets/pic.png"), "images are nodes now — they reload");
+        assert!(rel("assets/pic.JPEG"), "case-insensitive image extension");
+        assert!(!rel("assets/data.bin"), "other non-md files don't");
         assert!(
             !rel(".text-graph/view"),
             "our own state saves must not loop"

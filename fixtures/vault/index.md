@@ -18,6 +18,8 @@ Embedded image (embed + non-md target, skipped in v1): ![[diagram.png]]
 Embedded note (md-resolvable target — if embed handling regressed, this would
 surface loudly as a ghost node): ![[embedded-note-trap]]
 
+A plain wikilink to an image resolves to its Image node: [[diagram.png]]
+
 ```text
 This fenced block mentions [[trap-link]] and must NOT create an edge.
 ```

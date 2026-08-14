@@ -33,10 +33,15 @@ fn expected_counts() {
     let g = build_fixture();
     let s = stats::compute(&g);
     assert_eq!(s.files, 13, "file nodes");
-    assert_eq!(s.dirs, 6, "dir nodes (assets pruned)");
+    assert_eq!(
+        s.dirs, 7,
+        "dir nodes (misc pruned, assets kept for its image)"
+    );
+    assert_eq!(s.images, 1, "image nodes");
     assert_eq!(s.ghosts, 2, "ghost nodes");
-    assert_eq!(s.contains_edges, 18);
+    assert_eq!(s.contains_edges, 20);
     assert_eq!(s.wiki_to_files, 16);
+    assert_eq!(s.wiki_to_images, 1, "[[diagram.png]] in index.md");
     assert_eq!(s.wiki_to_ghosts, 2);
     assert_eq!(s.warnings, 1, "scratch.md frontmatter");
     assert_eq!(s.errors, 0);
@@ -48,8 +53,16 @@ fn expected_counts() {
 fn depth_histogram() {
     let g = build_fixture();
     let s = stats::compute(&g);
-    let h: Vec<(usize, (usize, usize))> = s.depth_hist.into_iter().collect();
-    assert_eq!(h, vec![(0, (1, 0)), (1, (4, 4)), (2, (1, 7)), (3, (0, 2))]);
+    let h: Vec<(usize, (usize, usize, usize))> = s.depth_hist.into_iter().collect();
+    assert_eq!(
+        h,
+        vec![
+            (0, (1, 0, 0)),
+            (1, (5, 4, 0)),
+            (2, (1, 7, 1)),
+            (3, (0, 2, 0))
+        ]
+    );
 }
 
 #[test]
@@ -130,14 +143,35 @@ fn traps_embeds_and_skip_dirs_leave_no_trace() {
     // surface as ghost nodes if extraction regressed
     assert!(!g.nodes.iter().any(|n| n.path.contains("trap")));
     assert!(!g.nodes.iter().any(|n| n.path.contains("embedded-note")));
-    // the embed target and the asset dir must not exist as nodes
-    assert!(!g.nodes.iter().any(|n| n.path.contains("diagram")));
-    assert!(!g.nodes.iter().any(|n| n.path == "assets"));
+    // non-md, non-image files are not nodes, and their dirs are pruned
+    assert!(!g.nodes.iter().any(|n| n.path.contains("data.csv")));
+    assert!(!g.nodes.iter().any(|n| n.path == "misc"));
     // .trash canary: its [[index]] must not be counted anywhere
     assert!(
         !g.nodes
             .iter()
             .any(|n| n.path.contains(".trash") || n.path.contains(".obsidian"))
+    );
+}
+
+#[test]
+fn image_becomes_a_node_and_its_link_resolves() {
+    let g = build_fixture();
+    let img = find(&g, "assets/diagram.png");
+    assert_eq!(g.node(img).kind, NodeKind::Image);
+    assert_eq!(g.node(img).name, "diagram.png", "name keeps the extension");
+    // the image's dir chain exists and parents it
+    let assets = find(&g, "assets");
+    assert_eq!(g.node(assets).kind, NodeKind::Dir);
+    assert_eq!(g.node(img).parent, Some(assets));
+    // the non-embed [[diagram.png]] in index.md resolves to the Image node —
+    // and must NOT also leave a ghost behind
+    assert!(has_link(&g, "index.md", "assets/diagram.png"));
+    assert!(
+        !g.nodes
+            .iter()
+            .any(|n| n.kind == NodeKind::Ghost && n.path.contains("diagram")),
+        "resolved image target must not ghost"
     );
 }
 
@@ -222,9 +256,9 @@ fn stats_render_snapshot() {
     let text = stats::render(&g, &s);
     let expected = "\
 vault: vault
-nodes: 21 total = 13 files + 6 dirs + 2 ghosts
-edges: 18 contains, 18 wikilinks (16 -> files, 2 -> ghosts)
-depth: d0: 1 dir | d1: 4 dirs + 4 files | d2: 1 dir + 7 files | d3: 2 files
+nodes: 23 total = 13 files + 7 dirs + 1 image + 2 ghosts
+edges: 20 contains, 19 wikilinks (16 -> files, 1 -> images, 2 -> ghosts)
+depth: d0: 1 dir | d1: 5 dirs + 4 files | d2: 1 dir + 7 files + 1 image | d3: 2 files
 largest dirs (direct md files):
     4  <root>
     2  notes
@@ -266,7 +300,7 @@ fn query_layer_backlinks_outlinks_paths_offsets() {
             "topics/rust.md"
         ]
     );
-    // index.md links out to 3 files + 1 ghost, in body order
+    // index.md links out to 3 files + 1 ghost + 1 image, in body order
     let index = g.by_path("index.md").unwrap();
     let outs: Vec<&str> = g
         .outlinks(index)
@@ -278,7 +312,8 @@ fn query_layer_backlinks_outlinks_paths_offsets() {
             "projects/rust-app.md",
             "notes/readme.md",
             "notes/daily/2026-08-14.md",
-            "missing-note"
+            "missing-note",
+            "assets/diagram.png"
         ]
     );
     // offsets index into the BODY (read_body strips BOM + frontmatter),

@@ -10,25 +10,30 @@ use crate::graph::{Graph, LinkKind, NodeId, NodeKind};
 pub struct Stats {
     pub files: usize,
     pub dirs: usize,
+    pub images: usize,
     pub ghosts: usize,
     pub contains_edges: usize,
     pub wiki_to_files: usize,
+    pub wiki_to_images: usize,
     pub wiki_to_ghosts: usize,
     pub warnings: usize,
     pub errors: usize,
     pub ambiguous: usize,
     pub self_links_dropped: usize,
-    /// depth -> (dirs, files); ghosts have no tree position and are excluded.
-    pub depth_hist: BTreeMap<usize, (usize, usize)>,
+    /// depth -> (dirs, files, images); ghosts have no tree position and are
+    /// excluded.
+    pub depth_hist: BTreeMap<usize, (usize, usize, usize)>,
 }
 
 pub fn compute(g: &Graph) -> Stats {
     let mut s = Stats {
         files: 0,
         dirs: 0,
+        images: 0,
         ghosts: 0,
         contains_edges: 0,
         wiki_to_files: 0,
+        wiki_to_images: 0,
         wiki_to_ghosts: 0,
         warnings: g.warnings.len(),
         errors: g.errors.len(),
@@ -40,6 +45,7 @@ pub fn compute(g: &Graph) -> Stats {
         match node.kind {
             NodeKind::File => s.files += 1,
             NodeKind::Dir => s.dirs += 1,
+            NodeKind::Image => s.images += 1,
             NodeKind::Ghost => s.ghosts += 1,
         }
         if node.parent.is_some() {
@@ -51,6 +57,7 @@ pub fn compute(g: &Graph) -> Stats {
             match node.kind {
                 NodeKind::Dir => e.0 += 1,
                 NodeKind::File => e.1 += 1,
+                NodeKind::Image => e.2 += 1,
                 NodeKind::Ghost => {}
             }
         }
@@ -58,6 +65,7 @@ pub fn compute(g: &Graph) -> Stats {
     for l in &g.links {
         match (l.kind, g.node(l.to).kind) {
             (LinkKind::WikiLink, NodeKind::Ghost) => s.wiki_to_ghosts += 1,
+            (LinkKind::WikiLink, NodeKind::Image) => s.wiki_to_images += 1,
             (LinkKind::WikiLink, _) => s.wiki_to_files += 1,
         }
     }
@@ -68,19 +76,31 @@ pub fn render(g: &Graph, s: &Stats) -> String {
     let mut out = String::new();
     let w = &mut out;
     let _ = writeln!(w, "vault: {}", g.node(g.root).name);
+    // image segments appear only when a vault has images, so image-free
+    // vaults render byte-identically to before images existed
+    let img_nodes = if s.images > 0 {
+        format!(" + {} image{}", s.images, plural(s.images))
+    } else {
+        String::new()
+    };
     let _ = writeln!(
         w,
-        "nodes: {} total = {} files + {} dirs + {} ghosts",
-        s.files + s.dirs + s.ghosts,
+        "nodes: {} total = {} files + {} dirs{img_nodes} + {} ghosts",
+        s.files + s.dirs + s.images + s.ghosts,
         s.files,
         s.dirs,
         s.ghosts
     );
+    let img_wiki = if s.wiki_to_images > 0 {
+        format!("{} -> images, ", s.wiki_to_images)
+    } else {
+        String::new()
+    };
     let _ = writeln!(
         w,
-        "edges: {} contains, {} wikilinks ({} -> files, {} -> ghosts)",
+        "edges: {} contains, {} wikilinks ({} -> files, {img_wiki}{} -> ghosts)",
         s.contains_edges,
-        s.wiki_to_files + s.wiki_to_ghosts,
+        s.wiki_to_files + s.wiki_to_images + s.wiki_to_ghosts,
         s.wiki_to_files,
         s.wiki_to_ghosts
     );
@@ -88,13 +108,16 @@ pub fn render(g: &Graph, s: &Stats) -> String {
     let depth_line: Vec<String> = s
         .depth_hist
         .iter()
-        .map(|(d, (dirs, files))| {
+        .map(|(d, (dirs, files, images))| {
             let mut parts = Vec::new();
             if *dirs > 0 {
                 parts.push(format!("{dirs} dir{}", plural(*dirs)));
             }
             if *files > 0 {
                 parts.push(format!("{files} file{}", plural(*files)));
+            }
+            if *images > 0 {
+                parts.push(format!("{images} image{}", plural(*images)));
             }
             format!("d{d}: {}", parts.join(" + "))
         })

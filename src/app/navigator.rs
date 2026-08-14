@@ -219,6 +219,13 @@ impl Viewer {
                                     }
                                 });
                         }
+                        NodeKind::Image => {
+                            if ui.button("open  (Enter / l)").clicked() {
+                                self.open_in_editor(sel);
+                            }
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("image file").weak());
+                        }
                         NodeKind::Ghost => {
                             ui.label("Not written yet. Referenced from:");
                             ui.add_space(4.0);
@@ -241,10 +248,10 @@ impl Viewer {
             let mut entries: Vec<(NodeId, egui::Color32, String)> = Vec::new();
             for id in kids {
                 let n = self.g.node(id);
-                if n.kind == NodeKind::Dir {
-                    entries.push((id, DIR, format!("▸ {}/", n.display_name())));
-                } else {
-                    entries.push((id, FILE, format!("▸ {}", n.display_name())));
+                match n.kind {
+                    NodeKind::Dir => entries.push((id, DIR, format!("▸ {}/", n.display_name()))),
+                    NodeKind::Image => entries.push((id, IMG, format!("▸ {}", n.display_name()))),
+                    _ => entries.push((id, FILE, format!("▸ {}", n.display_name()))),
                 }
             }
             for id in outs {

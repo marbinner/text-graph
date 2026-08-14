@@ -80,12 +80,14 @@ impl Viewer {
             haystacks,
             n_files,
             n_dirs,
+            n_images,
             dir_by_path,
         } = Self::derived(&g);
         self.radius = radius;
         self.haystacks = haystacks;
         self.n_files = n_files;
         self.n_dirs = n_dirs;
+        self.n_images = n_images;
         self.dir_by_path = dir_by_path;
         self.scores = vec![None; g.nodes.len()];
         self.last_query.clear(); // force a re-score against the new nodes

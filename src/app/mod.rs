@@ -42,6 +42,7 @@ const EDGE: Color32 = Color32::from_rgb(0x3a, 0x40, 0x4d);
 const DIR: Color32 = Color32::from_rgb(0x7a, 0xa2, 0xf7);
 const FILE: Color32 = Color32::from_rgb(0xb8, 0xbc, 0xc8);
 const GHOST: Color32 = Color32::from_rgb(0x6b, 0x72, 0x82);
+const IMG: Color32 = Color32::from_rgb(0x9e, 0xce, 0x6a);
 const HOVER: Color32 = Color32::from_rgb(0xff, 0xb4, 0x54);
 const SELECT: Color32 = Color32::from_rgb(0xff, 0x8a, 0x3d);
 const WIKI: Color32 = Color32::from_rgb(0xe0, 0xaf, 0x68);
@@ -98,6 +99,23 @@ fn paint_folder_icon(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
     p.rect_filled(body, r * 0.10, color);
 }
 
+/// Photo silhouette: a punched-out landscape frame with a sun dot and a
+/// mountain wedge back in the disc color.
+fn paint_img_icon(p: &egui::Painter, c: Pos2, r: f32, punch: Color32, disc: Color32) {
+    let w = r * 1.05;
+    let h = r * 0.85;
+    let frame = Rect::from_center_size(c, Vec2::new(w, h));
+    p.rect_filled(frame, r * 0.10, punch);
+    p.circle_filled(frame.min + Vec2::new(w * 0.30, h * 0.32), r * 0.11, disc);
+    let base = frame.max.y - h * 0.16;
+    let pts = vec![
+        Pos2::new(frame.min.x + w * 0.14, base),
+        Pos2::new(frame.min.x + w * 0.55, frame.min.y + h * 0.40),
+        Pos2::new(frame.min.x + w * 0.88, base),
+    ];
+    p.add(egui::Shape::convex_polygon(pts, disc, Stroke::NONE));
+}
+
 /// Dog-eared page. `fill` paints it solid (punch-out on filled discs);
 /// `outline` strokes it instead (hollow ghosts).
 fn paint_doc_icon(
@@ -131,6 +149,7 @@ struct Derived {
     haystacks: Vec<String>,
     n_files: usize,
     n_dirs: usize,
+    n_images: usize,
     dir_by_path: HashMap<String, NodeId>,
 }
 
@@ -184,6 +203,7 @@ struct Viewer {
     fitted: bool,
     n_files: usize,
     n_dirs: usize,
+    n_images: usize,
     // ---- search ----
     matcher: Matcher,
     /// Per-node "name aliases path" string the fuzzy pattern scores against.
@@ -270,6 +290,7 @@ impl Viewer {
             .map(|(n, d)| {
                 let base = match n.kind {
                     NodeKind::Dir => 6.0,
+                    NodeKind::Image => 4.5,
                     NodeKind::File => 3.5,
                     NodeKind::Ghost => 3.0,
                 };
@@ -283,6 +304,7 @@ impl Viewer {
             .collect();
         let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
         let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
+        let n_images = g.nodes.iter().filter(|n| n.kind == NodeKind::Image).count();
         let mut dir_by_path = HashMap::new();
         for (i, n) in g.nodes.iter().enumerate() {
             if n.kind == NodeKind::Dir {
@@ -294,6 +316,7 @@ impl Viewer {
             haystacks,
             n_files,
             n_dirs,
+            n_images,
             dir_by_path,
         }
     }
@@ -305,6 +328,7 @@ impl Viewer {
             haystacks,
             n_files,
             n_dirs,
+            n_images,
             dir_by_path,
         } = Self::derived(&g);
         let n = haystacks.len();
@@ -330,6 +354,7 @@ impl Viewer {
             fitted: cam.is_some(), // a restored camera must not be re-fit away
             n_files,
             n_dirs,
+            n_images,
             matcher: Matcher::new(Config::DEFAULT),
             haystacks,
             search_open: false,
@@ -534,7 +559,7 @@ impl Viewer {
                     match self.g.node(sel).kind {
                         NodeKind::Dir => to = self.g.nav_enter(sel),
                         // key repeat must not spawn an editor per repeat tick
-                        NodeKind::File
+                        NodeKind::File | NodeKind::Image
                             if !ui.input(|i| {
                                 i.events.iter().any(|e| {
                                     matches!(
@@ -1101,6 +1126,12 @@ impl Viewer {
                         paint_doc_icon(&painter, s, r, Some(punch), None);
                     }
                 }
+                NodeKind::Image => {
+                    painter.circle_filled(s, r, dimmed(IMG));
+                    if glyph {
+                        paint_img_icon(&painter, s, r, punch, dimmed(IMG));
+                    }
+                }
             }
             if active == Some(id) {
                 let color = if self.selected == Some(id) {
@@ -1197,9 +1228,14 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
+                    "{} files · {} dirs{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
                     self.n_files,
                     self.n_dirs,
+                    if self.n_images > 0 {
+                        format!(" · {} images", self.n_images)
+                    } else {
+                        String::new()
+                    },
                     self.g.links.len(),
                     if self.sim.active() {
                         " · settling…"
