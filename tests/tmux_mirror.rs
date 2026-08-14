@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, indexed_rgb};
+use text_graph::agents;
 
 fn tmux(socket: &str, args: &[&str]) -> bool {
     Command::new("tmux")
@@ -79,6 +80,43 @@ fn mirrors_a_scripted_session() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(success, "expected styled 'plain RED text'; row 0 was {last_row:?}");
+}
+
+/// Launching agents from the graph: unique tg_ names, correct cwd.
+#[test]
+fn launch_creates_uniquely_named_tg_sessions() {
+    let have_tmux = Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !have_tmux {
+        eprintln!("tmux not installed — skipping");
+        return;
+    }
+
+    let socket = format!("tg-test-launch-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
+    let dir = std::env::temp_dir();
+
+    let first = agents::launch(Some(&socket), &dir, "sh").expect("first launch");
+    assert_eq!(first, "tg_sh");
+    let second = agents::launch(Some(&socket), &dir, "sh").expect("second launch");
+    assert_eq!(second, "tg_sh_2", "name probing must skip the live session");
+
+    // both sessions exist, cwd'd where we asked
+    let out = Command::new("tmux")
+        .args(["-L", &socket, "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}"])
+        .output()
+        .expect("list-panes");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    for name in [&first, &second] {
+        let line = text
+            .lines()
+            .find(|l| l.starts_with(&format!("{name}\t")))
+            .unwrap_or_else(|| panic!("{name} missing from {text:?}"));
+        assert_eq!(line.split('\t').nth(1), dir.to_str(), "cwd of {name}");
+    }
 }
 
 /// Input path end to end: keystrokes sent through the same `keys::` commands

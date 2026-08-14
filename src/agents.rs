@@ -56,6 +56,51 @@ pub fn default_allowlist() -> Vec<String> {
     v
 }
 
+/// Launch `agent` in a new detached `tg_` session cwd'd at `dir`, returning
+/// the session name (`tg_<agent>`, `tg_<agent>_2`, … first free). The
+/// `-x/-y` set the clientless session's size — our control-mode mirror never
+/// sends size hints, so it stays stable until a real terminal attaches. The
+/// session dies with the agent process, which removes the card.
+/// `socket` is for tests (private `-L` server); the GUI passes `None`.
+pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<String> {
+    let tmux = |args: &[&str]| {
+        let mut c = Command::new("tmux");
+        if let Some(l) = socket {
+            c.args(["-L", l]);
+        }
+        c.args(args);
+        c
+    };
+    // keep the slug '_'-free: the Tracker reads the tag as split('_').nth(1)
+    let slug: String = agent
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect();
+    let slug = if slug.is_empty() { "agent".to_string() } else { slug };
+    for n in 1..=99u32 {
+        let name = if n == 1 { format!("tg_{slug}") } else { format!("tg_{slug}_{n}") };
+        // '=' prefix = exact session-name match, not prefix match
+        let taken = tmux(&["has-session", "-t", &format!("={name}")])
+            .output()?
+            .status
+            .success();
+        if taken {
+            continue;
+        }
+        let status = tmux(&["new-session", "-d", "-s", &name, "-x", "90", "-y", "26", "-c"])
+            .arg(dir)
+            .arg(agent)
+            .status()?;
+        return if status.success() {
+            Ok(name)
+        } else {
+            Err(std::io::Error::other(format!("tmux new-session {name} failed")))
+        };
+    }
+    Err(std::io::Error::other("all tg_ session names taken"))
+}
+
 /// One-shot scan of the default tmux server. Returns every pane whose cwd is
 /// inside `vault`; allowlist and stickiness filtering happen in [`Tracker`].
 /// tmux absent or no server running → empty. The path field comes LAST in
