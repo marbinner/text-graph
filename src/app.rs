@@ -364,6 +364,9 @@ struct Viewer {
     agents_seen: Arc<Mutex<Vec<AgentPane>>>,
     agent_panes: Vec<AgentPane>,
     mirrors: HashMap<String, SessionMirror>,
+    /// Sessions whose last mirror attach failed, with the failure time —
+    /// retried after a cooldown instead of at frame rate.
+    attach_backoff: HashMap<String, Instant>,
     /// (session, pane) → converted screen; refreshed per mirror generation.
     term_cache: HashMap<(String, String), CachedPane>,
     term_gen: HashMap<String, u64>,
@@ -500,6 +503,7 @@ impl Viewer {
             agents_seen: Arc::new(Mutex::new(Vec::new())),
             agent_panes: Vec::new(),
             mirrors: HashMap::new(),
+            attach_backoff: HashMap::new(),
             term_cache: HashMap::new(),
             term_gen: HashMap::new(),
             term_activity: HashMap::new(),
@@ -635,14 +639,30 @@ impl Viewer {
             self.agent_panes.iter().map(|a| a.session.clone()).collect();
         for s in &sessions {
             if !self.mirrors.contains_key(s) {
+                // failed attaches back off — retrying at frame rate would
+                // spawn tmux processes 60 times a second
+                if self
+                    .attach_backoff
+                    .get(s)
+                    .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
+                {
+                    continue;
+                }
                 let c = ctx.clone();
                 // Never pass a size for discovered sessions — the user may be
                 // viewing them in a real terminal.
-                if let Ok(m) = SessionMirror::attach(s, None, None, move || c.request_repaint()) {
-                    self.mirrors.insert(s.clone(), m);
+                match SessionMirror::attach(s, None, None, move || c.request_repaint()) {
+                    Ok(m) => {
+                        self.mirrors.insert(s.clone(), m);
+                        self.attach_backoff.remove(s);
+                    }
+                    Err(_) => {
+                        self.attach_backoff.insert(s.clone(), Instant::now());
+                    }
                 }
             }
         }
+        self.attach_backoff.retain(|s, _| sessions.contains(s));
         self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));

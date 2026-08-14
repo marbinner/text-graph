@@ -53,13 +53,14 @@ enum Transport {
 }
 
 impl Transport {
-    fn command(&mut self, cmd: &str) {
+    fn command(&mut self, cmd: &str) -> std::io::Result<()> {
         match self {
-            Transport::Tmux(c) => {
-                let _ = c.command(cmd);
-            }
+            Transport::Tmux(c) => c.command(cmd),
             #[cfg(test)]
-            Transport::Recorded(v) => v.push(cmd.to_string()),
+            Transport::Recorded(v) => {
+                v.push(cmd.to_string());
+                Ok(())
+            }
         }
     }
 }
@@ -105,8 +106,12 @@ impl SessionMirror {
     }
 
     fn send(&mut self, tag: Pending, cmd: &str) {
-        self.pending.push_back(tag);
-        self.client.command(cmd);
+        // Tag only what was actually written: a failed write produces no
+        // reply, and a tag with no reply would desync the FIFO for good.
+        match self.client.command(cmd) {
+            Ok(()) => self.pending.push_back(tag),
+            Err(_) => self.exited = true, // client gone; reader's Exit follows
+        }
     }
 
     fn list_panes(&mut self) {
