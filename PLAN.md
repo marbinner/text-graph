@@ -190,8 +190,9 @@ Audit backlog (external audit, 2026-08):
 - In-GUI diagnostics ✓ done (⚠ badge + health window, app/diag.rs).
 - Query layer core ✓ done (outlinks/backlinks indexes, by_path/by_ident,
   Link.offset preserved) — JSON/headless output still deferred to Phase 2.
-- app decomposition: started (app/ dir; diag split out). Move terminals and the
-  navigator into child modules opportunistically as they're next touched.
+- app decomposition ✓ done: app/{mod,terminals,navigator,actions,reload,diag}.rs,
+  terminal state grouped in terminals::Terminals. mod.rs ~1,200 lines (canvas +
+  keys + search).
 - Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
 - License + release packaging (user decision on license first).
 

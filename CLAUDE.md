@@ -33,9 +33,15 @@
 - `vault.rs` parses per-file with no global state; `resolve.rs` is the only
   place link strings become NodeIds. New edge sources = extractor + resolver
   case + render arm.
-- `layout.rs`, `sim.rs`, `tmux.rs`, `mirror.rs`, `agents.rs`, and `keys.rs`
-  must stay egui-free (headless-testable). `app.rs` is the only module
-  allowed to touch egui.
+- Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
+  `create`, `state`, `graph`, …) must stay egui-free (headless-testable).
+  Only the bin's `app/` tree touches egui. Its layout: `mod.rs` = Viewer +
+  camera/canvas painting + key dispatch + search; `terminals.rs` = the
+  `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
+  lifecycle; `navigator.rs` = the ranger pane; `actions.rs` = right-click
+  menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
+  worker pump + apply + persistence glue; `diag.rs` = health badge. New
+  GUI code goes into the matching child module, not into mod.rs.
 - Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
   never send size hints (`set_size`) or `resize-window` to sessions we
   didn't create (it would reflow the user's real terminal view). The corner
@@ -60,8 +66,8 @@
   `cargo run --example discovery_probe <vault>`.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
   suspend), drag = arrange (world-space offset from anchor in
-  `term_offsets`), Ctrl+Q or click-away = release. Cards win pointer
-  contention over nodes beneath them via last-frame `term_rects`.
+  `terms.offsets`), Ctrl+Q or click-away = release. Cards win pointer
+  contention over nodes beneath them via last-frame `terms.rects`.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
@@ -71,12 +77,12 @@
   vault, same picture. The coincident-node nudge is index-derived, not random.
 - Node bodies are never held in memory; the detail pane reads the selected
   file on demand (`vault::read_body`).
-- Cross-reload identity is `app::Viewer::ident` (ghosts namespaced as
+- Cross-reload identity is `graph::Node::ident` (ghosts namespaced as
   `[[target]]` because their "path" is raw target text).
 - View state persists to `<vault>/.text-graph/view` (state.rs). The dot-dir
   is hidden, so the walker and the reload watcher are blind to it — saves
   can never cause reload loops; keep it that way. Card arrangements are
-  keyed by SESSION NAME and parked in `restore_offsets` when a session is
+  keyed by SESSION NAME and parked in `terms.parked` when a session is
   absent (pane ids change across tmux restarts) — never hard-drop an
   arrangement. Saves are debounced (3s heartbeat repaint keeps them running
   once the sim settles) and the file is sorted for determinism.
