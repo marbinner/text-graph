@@ -445,6 +445,11 @@ struct Viewer {
     term_cycle: usize,
     /// First `g` of a `gg` chord (tree navigation), with its press time.
     pending_g: Option<Instant>,
+    /// Find-in-directory prompt (`f` in tree-nav mode): the query, live.
+    nav_find: Option<String>,
+    nav_find_focus: bool,
+    /// Last applied find query, to jump only when the text changes.
+    nav_find_last: String,
     /// Scroll the navigator's sibling list to the cursor on the next frame
     /// (set by keyboard navigation, not by clicks).
     nav_scroll: bool,
@@ -586,6 +591,9 @@ impl Viewer {
             zoom_to_card: None,
             term_cycle: 0,
             pending_g: None,
+            nav_find: None,
+            nav_find_focus: false,
+            nav_find_last: String::new(),
             nav_scroll: false,
             term_selected: None,
             term_scores: Vec::new(),
@@ -1170,7 +1178,7 @@ impl Viewer {
                 i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
                 i.key_pressed(Key::Escape),
                 i.key_pressed(Key::Enter),
-                !i.modifiers.command && i.key_pressed(Key::F),
+                i.modifiers.is_none() && i.key_pressed(Key::Z),
                 i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
                 i.modifiers.is_none() && i.key_pressed(Key::T),
             )
@@ -1248,7 +1256,7 @@ impl Viewer {
         // repeat); with nothing selected they pan. Esc switches back.
         let tree_nav = self.selected.is_some() && ui.memory(|m| m.focused().is_none());
         if let Some(sel) = self.selected.filter(|_| tree_nav) {
-            let (h, j, k, l, g, sg) = ui.input(|i| {
+            let (h, j, k, l, g, sg, find) = ui.input(|i| {
                 let m = i.modifiers.is_none();
                 (
                     m && i.key_pressed(Key::H),
@@ -1257,8 +1265,15 @@ impl Viewer {
                     m && i.key_pressed(Key::L),
                     m && i.key_pressed(Key::G),
                     i.modifiers.shift_only() && i.key_pressed(Key::G),
+                    m && i.key_pressed(Key::F),
                 )
             });
+            if find {
+                // ranger f: find within the current directory's listing
+                self.nav_find = Some(String::new());
+                self.nav_find_last.clear();
+                self.nav_find_focus = true;
+            }
             let mut to: Option<NodeId> = None;
             if h {
                 to = self.g.node(sel).parent;
@@ -1758,11 +1773,52 @@ impl Viewer {
         }
     }
 
+    /// Live find-in-directory (`f`): when the query changed, jump the
+    /// cursor to the best fuzzy match among the current listing (the
+    /// selection's siblings; the root searches its children).
+    fn nav_find_apply(&mut self) {
+        let Some(q) = self.nav_find.clone() else {
+            return;
+        };
+        if q == self.nav_find_last {
+            return;
+        }
+        self.nav_find_last = q.clone();
+        let Some(sel) = self.selected else { return };
+        if q.is_empty() {
+            return;
+        }
+        let candidates = match self.g.node(sel).parent {
+            Some(p) => self.g.node(p).children.clone(),
+            None => self.g.node(sel).children.clone(),
+        };
+        let pattern = Pattern::parse(&q, CaseMatching::Ignore, Normalization::Smart);
+        let mut buf = Vec::new();
+        let mut best: Option<(u32, NodeId)> = None;
+        for c in candidates {
+            let n = self.g.node(c);
+            let hay = format!("{} {}", n.display_name(), n.name);
+            if let Some(s) = pattern.score(Utf32Str::new(&hay, &mut buf), &mut self.matcher)
+                && best.is_none_or(|(bs, _)| s > bs)
+            {
+                best = Some((s, c));
+            }
+        }
+        if let Some((_, id)) = best
+            && Some(id) != self.selected
+        {
+            self.selected = Some(id);
+            self.frame_node(id);
+            self.nav_scroll = true;
+        }
+    }
+
     /// The ranger-style navigator: breadcrumb, sibling column with the
     /// cursor, preview column. Keyboard walking happens in `handle_keys`
     /// (hjkl / gg / G while a node is selected); this renders the state and
     /// accepts clicks.
     fn detail_pane(&mut self, ui: &mut egui::Ui) {
+        self.nav_find_apply();
         let Some(sel) = self.selected else { return };
         if self.detail.as_ref().map(|(id, _)| *id) != Some(sel) {
             self.detail = Some((sel, self.load_body(sel)));
@@ -1812,6 +1868,25 @@ impl Viewer {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             ui.vertical(|ui| {
                 ui.set_width(150.0);
+                // find-in-directory prompt (f): lives while it has focus
+                let mut close_find = false;
+                if let Some(q) = &mut self.nav_find {
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(q)
+                            .hint_text("find…")
+                            .desired_width(140.0),
+                    );
+                    if self.nav_find_focus {
+                        resp.request_focus();
+                        self.nav_find_focus = false;
+                    } else if resp.lost_focus() {
+                        close_find = true; // Enter, Esc, or a click elsewhere
+                    }
+                }
+                if close_find {
+                    self.nav_find = None;
+                    self.nav_find_last.clear();
+                }
                 egui::ScrollArea::vertical()
                     .id_salt("nav-sibs")
                     .auto_shrink([false, false])
@@ -2370,7 +2445,7 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs · {} links{}   |   / search · f frame · 0 reset · hjkl pan · d/u zoom · t terminals",
+                    "{} files · {} dirs · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
                     self.n_files,
                     self.n_dirs,
                     self.g.links.len(),
@@ -2529,6 +2604,8 @@ impl eframe::App for Viewer {
             egui::Panel::right("detail")
                 .resizable(true)
                 .show(ui, |ui| self.detail_pane(ui));
+        } else {
+            self.nav_find = None; // no navigator, no find prompt
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BG))

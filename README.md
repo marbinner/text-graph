@@ -35,9 +35,9 @@ cheap.
 Selecting a node opens the **navigator**: a ranger-style pane with a
 clickable breadcrumb, the selection's siblings in a cursor column (dirs
 colored, `/`-suffixed), and a preview — rendered markdown for notes, the
-child listing for folders. Walk it with vim keys (`hjkl`, `gg`, `G`); the
-graph camera follows the walk, so the neighborhood you're reading is always
-the neighborhood you're seeing.
+child listing for folders. Walk it with vim keys (`hjkl`, `gg`, `G`, `f`
+to find within the directory); the graph camera follows the walk, so the
+neighborhood you're reading is always the neighborhood you're seeing.
 
 ### Link resolution
 
@@ -73,7 +73,8 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | right-click | context menu for the node under the cursor: **New note…** / **New folder…** / **New terminal** / **Launch agent** in that folder (a file targets its folder, empty space targets the vault root, a terminal card its anchor); on a ghost: **write it** into a real note |
 | right-click a terminal card | additionally: **Attach in terminal…** (a real terminal window on the same session) and **Kill terminal** (confirm submenu) |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals (agent name, session, folder); matches stay lit, `Enter` jumps to the ringed best hit — a winning terminal lands focused, ready to type |
-| `f` | frame the selection |
+| `f` | find in the current directory (node selected): a prompt atop the sibling column, fuzzy-jumping the cursor and camera live as you type; `Enter`/`Esc` closes |
+| `z` | center the view on the selection |
 | `0` / `Home` | reset the view — fit the whole graph |
 | `h` `j` `k` `l` | **selection is the mode**: with a node selected, walk the tree ranger-style — `j`/`k` step siblings, `h` goes to the parent, `l` enters a dir / opens a file — and the camera follows; with nothing selected, pan (hold to glide). `Esc` gets you back to panning |
 | `gg` / `G` | first / last sibling (while a node is selected) |
