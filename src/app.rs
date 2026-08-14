@@ -308,27 +308,17 @@ impl Viewer {
         }
     }
 
-    /// Spawn $VISUAL / $EDITOR (split on whitespace so "code --wait" works),
-    /// falling back to xdg-open. Detached; the viewer stays read-only.
+    /// Open the selected file for editing — always in a NEW window. Terminal
+    /// editors ($EDITOR=nvim etc.) are wrapped in a fresh terminal emulator
+    /// instead of hijacking whatever terminal launched the viewer; GUI
+    /// editors and xdg-open open their own windows anyway.
     fn open_in_editor(&self, id: NodeId) {
         let node = self.g.node(id);
         if node.kind != NodeKind::File {
             return;
         }
         let path = self.root.join(&node.path);
-        let editor = std::env::var("VISUAL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()));
-        let result = match &editor {
-            Some(ed) => {
-                let mut parts = ed.split_whitespace();
-                let prog = parts.next().unwrap_or("xdg-open");
-                std::process::Command::new(prog).args(parts).arg(&path).spawn()
-            }
-            None => std::process::Command::new("xdg-open").arg(&path).spawn(),
-        };
-        if let Err(e) = result {
+        if let Err(e) = spawn_editor(&path) {
             eprintln!("failed to open {}: {e}", path.display());
         }
     }
@@ -730,6 +720,92 @@ impl Viewer {
             TEXT,
         );
     }
+}
+
+/// Editors that run inside a terminal and therefore need one opened for them.
+const TERMINAL_EDITORS: &[&str] =
+    &["vim", "nvim", "vi", "nano", "micro", "hx", "helix", "kak", "vis", "ne"];
+
+fn spawn_editor(file: &Path) -> std::io::Result<()> {
+    let editor = std::env::var("VISUAL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.trim().is_empty()));
+    let Some(editor) = editor else {
+        return detached(std::process::Command::new("xdg-open").arg(file));
+    };
+    // $EDITOR may carry args ("code --wait") — split on whitespace
+    let mut parts = editor.split_whitespace();
+    let prog = parts.next().unwrap_or("xdg-open").to_string();
+    let args: Vec<String> = parts.map(str::to_string).collect();
+    let base = Path::new(&prog)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&prog);
+    if TERMINAL_EDITORS.contains(&base)
+        && let Some(mut term) = new_terminal_window()
+    {
+        term.arg(&prog).args(&args).arg(file);
+        return detached(&mut term);
+    }
+    detached(std::process::Command::new(&prog).args(&args).arg(file))
+}
+
+/// A command that opens a new terminal-emulator window and runs whatever is
+/// appended to it. $TERMINAL wins; otherwise the first emulator on PATH.
+fn new_terminal_window() -> Option<std::process::Command> {
+    let mk = |bin: &str| -> std::process::Command {
+        let mut c = std::process::Command::new(bin);
+        let base = Path::new(bin).file_name().and_then(|s| s.to_str()).unwrap_or(bin);
+        match base {
+            "gnome-terminal" => {
+                c.arg("--");
+            }
+            "wezterm" => {
+                c.args(["start", "--"]);
+            }
+            "kitty" | "foot" => {} // these take the command directly
+            _ => {
+                c.arg("-e"); // the de-facto convention
+            }
+        }
+        c
+    };
+    if let Ok(term) = std::env::var("TERMINAL")
+        && !term.trim().is_empty()
+    {
+        return Some(mk(term.trim()));
+    }
+    [
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "foot",
+        "alacritty",
+        "kitty",
+        "wezterm",
+        "xterm",
+    ]
+    .into_iter()
+    .find(|bin| on_path(bin))
+    .map(mk)
+}
+
+fn on_path(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|d| d.join(bin).is_file()))
+        .unwrap_or(false)
+}
+
+/// Spawn fully detached from our stdio, so even a mis-detected terminal
+/// editor can never take over the terminal the viewer was launched from.
+fn detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
 }
 
 impl eframe::App for Viewer {
