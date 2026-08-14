@@ -160,25 +160,48 @@ and layout snapshots.
 
 ## Milestones
 
-**A — Headless core.** Fixture vault; walk, parse, extract, resolve; typed-edge arena;
-deterministic ordering; `stats` command (node/edge counts by kind, unresolved links,
-depth histogram, biggest dirs). Fully testable with no window and no API key.
+**A — Headless core. ✓ done.** Fixture vault; walk, parse, extract, resolve; typed-edge
+arena; deterministic ordering; `stats` command. Fully tested with no window, no API key.
 
-**B — The window.** Radial layout, pan/zoom-to-cursor, culling, nodes+edges painted,
-dirs vs files rendered distinctly, hover highlight + label, click select, wikilink
-overlay for the active node. The "it works" moment.
+**B — The window. ✓ done.** Force-directed Obsidian-style layout seeded by the radial
+tree (deterministic), node drag with live sim response, hover-dim of non-neighborhood,
+degree-scaled node sizes, alias resolution, ghosts rendered hollow.
 
-**C — Usable.** Detail pane (`egui_commonmark`, body read on demand), fuzzy search
-(`nucleo-matcher`) dimming non-matches, `f` frames selection, open-in-`$EDITOR`,
-`notify` live reload (reparse just the changed file), ghost nodes rendered.
+**C — Daily driver.** One commit per step, in order:
+1. Fuzzy search (`nucleo-matcher`): `/` opens bar; matches name+path+aliases; live
+   dims non-matches; Enter frames + selects best hit; Esc clears.
+2. Detail pane (`egui_commonmark`): selection opens right panel with rendered
+   markdown, body read from disk on demand. Ghost selected → list of referencers.
+3. Open in `$EDITOR` on Enter / double-click. Viewer stays read-only.
+4. Live reload (`notify` 8.x, debounced): full re-scan on change (cheap), sim
+   positions carried over by path + gentle reheat so edits ripple instead of
+   re-settling; selection/camera survive by path.
+5. Navigation: `f` frames selection, `Home` fits all, `Esc` deselects.
 
-**D — Scale & polish.** Label LOD tuning, collapse/expand subtrees (default-collapse
-huge siblings), focus mode (k-hop neighborhood), mesh batching if profiling demands,
-persist viewport per vault.
+Checkpoint after C: daily-drive it against the real vault; annoyances set D's order.
+
+**D — Scale & polish (as needed, not speculatively).** Collapse/expand subtrees
+(default-collapse huge sibling sets), Barnes–Hut repulsion only if a >2k-node vault
+shows up, persist camera/selection per vault under `.text-graph/`, sim-constant tuning
+pass, label collision avoidance if labels annoy.
 
 ---
 
-## Phase 2 (deferred): the LLM layer
+## Phase 2: the intelligence layer
+
+Ordered so each step is useful on its own:
+
+1. **MCP server first** — expose the graph as tools (`search`, `read`, `create`,
+   `append`, `link`, `children`) over stdio. Agents (Claude Code etc.) read/write the
+   vault as shared memory; the viewer shows their work live via C4's reload. No LLM
+   calls inside text-graph yet — agents bring their own.
+2. **Retrieval** — tantivy BM25, incremental via blake3-gated reindex; powers both the
+   MCP `search` tool and, later, the decider's context. Still $0.
+3. **The decider** — `text-graph add`: buffer → retrieve → one structured-output call
+   returning append/create/link actions → apply → write markdown. Ships together with
+   the replay-eval harness (fixture transcripts → graph snapshot → diff).
+4. **Maintenance passes** — split oversized nodes, reattach orphans/ghosts, on idle.
+5. **Adapters** — URL → readability-extract → same pipeline; later mic → STT.
 
 Decisions worth keeping from the original plan, so Phase 1 stays compatible:
 
