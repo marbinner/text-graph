@@ -15,9 +15,10 @@ use std::time::SystemTime;
 use eframe::egui;
 use text_graph::thumb;
 
-/// Longer side of a decoded thumbnail, px. Cards on the canvas cap below
-/// this; the detail pane's preview column fits within it too.
-const THUMB_PX: u32 = 256;
+/// Longer side of a decoded thumbnail, px. Sized for the largest consumer
+/// — the hover preview popup — so canvas cards and the detail pane always
+/// render at or below native.
+const THUMB_PX: u32 = 512;
 
 /// Identity of the bytes a cache entry was built from. Shared with the
 /// text-preview cache (previews.rs), which evicts the same way.

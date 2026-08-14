@@ -200,6 +200,11 @@ struct Viewer {
     /// Screen pixels per world unit.
     zoom: f32,
     hover: Option<NodeId>,
+    /// (node, dwell start, screen anchor) — drives the full hover preview.
+    hover_since: Option<(NodeId, Instant, Pos2)>,
+    /// Body of the hovered file, read on demand (one at a time, like
+    /// `detail`).
+    hover_body: Option<(NodeId, String)>,
     selected: Option<NodeId>,
     drag_node: Option<NodeId>,
     fitted: bool,
@@ -355,6 +360,8 @@ impl Viewer {
             center: cam.map_or(Pos2::ZERO, |(x, y, _)| Pos2::new(x, y)),
             zoom: cam.map_or(1.0, |(_, _, z)| z.clamp(0.02, 50.0)),
             hover: None,
+            hover_since: None,
+            hover_body: None,
             selected: None,
             drag_node: None,
             fitted: cam.is_some(), // a restored camera must not be re-fit away
@@ -1038,6 +1045,21 @@ impl Viewer {
                 }
             }
         }
+        // dwell tracking for the full hover preview: the anchor freezes at
+        // dwell start so the popup doesn't chase the pointer; any drag
+        // (pan, node, card) resets it
+        if response.dragged() {
+            self.hover_since = None;
+        } else {
+            match (self.hover, self.hover_since) {
+                (Some(h), Some((id, ..))) if id == h => {}
+                (Some(h), _) => {
+                    let a = response.hover_pos().unwrap_or_else(|| rect.center());
+                    self.hover_since = Some((h, Instant::now(), a));
+                }
+                (None, _) => self.hover_since = None,
+            }
+        }
         if response.clicked() {
             if let Some(t) = over_card.clone() {
                 // clicking also parks the t-cursor here, so cycling resumes
@@ -1367,6 +1389,9 @@ impl Viewer {
 
         // terminal cards, on top of the graph
         self.paint_terminals(&painter, rect, view);
+
+        // full-content hover preview (dwell to open; tooltip layer)
+        self.hover_preview_ui(ui);
 
         // status line
         if self
