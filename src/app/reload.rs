@@ -84,6 +84,7 @@ impl Viewer {
             .ctx_node
             .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
         self.hover = None;
+        self.conn_cursor = None; // indexes the old graph's link lists
         self.best = None;
 
         let Derived {

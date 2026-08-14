@@ -54,6 +54,16 @@ impl Viewer {
         }
     }
 
+    /// The connections strip's entries in render order: children, then
+    /// outgoing links, then incoming. `]`/`[` walk this list by index, so
+    /// the strip render below must build entries in exactly this order.
+    pub(super) fn connections(&self, id: NodeId) -> Vec<NodeId> {
+        let mut v: Vec<NodeId> = self.g.node(id).children.clone();
+        v.extend(self.g.outlinks(id).map(|l| l.to));
+        v.extend(self.g.backlinks(id).map(|l| l.from));
+        v
+    }
+
     /// The ranger-style navigator: breadcrumb, sibling column with the
     /// cursor, preview column. Keyboard walking happens in `handle_keys`
     /// (hjkl / gg / G while a node is selected); this renders the state and
@@ -225,8 +235,27 @@ impl Viewer {
         });
         // ---- connections strip: everything this node touches, color-coded
         // (blue ▸ child folder, gray ▸ child file, amber → outgoing link,
-        // purple ← incoming link) — all clickable, ] and [ jump the firsts
+        // purple ← incoming link). Clickable; ] / [ walk the highlight,
+        // Enter / l follows it. Entry order MUST match connections().
         if has_conn {
+            let mut entries: Vec<(NodeId, egui::Color32, String)> = Vec::new();
+            for id in kids {
+                let n = self.g.node(id);
+                if n.kind == NodeKind::Dir {
+                    entries.push((id, DIR, format!("▸ {}/", n.display_name())));
+                } else {
+                    entries.push((id, FILE, format!("▸ {}", n.display_name())));
+                }
+            }
+            for id in outs {
+                entries.push((id, WIKI, format!("→ {}", self.g.node(id).display_name())));
+            }
+            for id in backs {
+                entries.push((id, LINK_IN, format!("← {}", self.g.node(id).display_name())));
+            }
+            if self.conn_cursor.is_some_and(|i| i >= entries.len()) {
+                self.conn_cursor = None; // list changed under the cursor
+            }
             ui.separator();
             egui::ScrollArea::vertical()
                 .id_salt("nav-conn")
@@ -235,36 +264,17 @@ impl Viewer {
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
-                        for id in kids {
-                            let n = self.g.node(id);
-                            let (color, label) = if n.kind == NodeKind::Dir {
-                                (DIR, format!("▸ {}/", n.display_name()))
-                            } else {
-                                (FILE, format!("▸ {}", n.display_name()))
-                            };
-                            if ui
-                                .link(egui::RichText::new(label).color(color).small())
-                                .clicked()
-                            {
-                                jump = Some(id);
+                        for (idx, (id, color, label)) in entries.iter().enumerate() {
+                            let is_cur = self.conn_cursor == Some(idx);
+                            let resp = ui.selectable_label(
+                                is_cur,
+                                egui::RichText::new(label).color(*color).small(),
+                            );
+                            if is_cur && self.nav_scroll {
+                                resp.scroll_to_me(Some(egui::Align::Center));
                             }
-                        }
-                        for id in outs {
-                            let label = format!("→ {}", self.g.node(id).display_name());
-                            if ui
-                                .link(egui::RichText::new(label).color(WIKI).small())
-                                .clicked()
-                            {
-                                jump = Some(id);
-                            }
-                        }
-                        for id in backs {
-                            let label = format!("← {}", self.g.node(id).display_name());
-                            if ui
-                                .link(egui::RichText::new(label).color(LINK_IN).small())
-                                .clicked()
-                            {
-                                jump = Some(id);
+                            if resp.clicked() {
+                                jump = Some(*id);
                             }
                         }
                     });
@@ -275,6 +285,7 @@ impl Viewer {
             self.selected = Some(j);
             self.frame_node(j);
             self.nav_scroll = true;
+            self.conn_cursor = None;
         }
     }
 }

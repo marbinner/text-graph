@@ -200,6 +200,8 @@ struct Viewer {
     nav_find_last: String,
     /// Scroll the navigator's sibling list to the cursor next frame.
     nav_scroll: bool,
+    /// Cursor into the connections strip (] / [ step it, Enter/l jumps).
+    conn_cursor: Option<usize>,
     // ---- creation (right-click menu) ----
     /// Node captured at right-click time — the context menu's subject.
     ctx_node: Option<NodeId>,
@@ -324,6 +326,7 @@ impl Viewer {
             nav_find_focus: false,
             nav_find_last: String::new(),
             nav_scroll: false,
+            conn_cursor: None,
             ctx_node: None,
             ctx_card: None,
             create: None,
@@ -412,10 +415,22 @@ impl Viewer {
             self.search_open = true;
             self.search_focus_pending = true;
         } else if esc {
-            // the terminal cursor dismisses first, then node selection
-            if self.terms.cursor.take().is_none() {
+            // dismiss order: link cursor, then terminal cursor, then selection
+            if self.conn_cursor.take().is_none() && self.terms.cursor.take().is_none() {
                 self.selected = None;
             }
+        } else if enter
+            && ui.memory(|m| m.focused().is_none())
+            && let Some(sel) = self.selected
+            && let Some(ci) = self.conn_cursor
+        {
+            // Enter on a highlighted connection = follow it
+            if let Some(t) = self.connections(sel).get(ci).copied() {
+                self.selected = Some(t);
+                self.frame_node(t);
+                self.nav_scroll = true;
+            }
+            self.conn_cursor = None;
         } else if enter
             && ui.memory(|m| m.focused().is_none())
             && let Some(k) = self.terms.cursor.clone()
@@ -478,34 +493,49 @@ impl Viewer {
             } else if k {
                 to = self.g.nav_sibling(sel, -1);
             } else if l {
-                match self.g.node(sel).kind {
-                    NodeKind::Dir => to = self.g.nav_enter(sel),
-                    // key repeat must not spawn an editor per repeat tick
-                    NodeKind::File
-                        if !ui.input(|i| {
-                            i.events.iter().any(|e| {
-                                matches!(
-                                    e,
-                                    egui::Event::Key {
-                                        key: Key::L,
-                                        pressed: true,
-                                        repeat: true,
-                                        ..
-                                    }
-                                )
-                            })
-                        }) =>
-                    {
-                        self.open_in_editor(sel);
+                if let Some(ci) = self.conn_cursor {
+                    // l on a highlighted connection = follow it
+                    to = self.connections(sel).get(ci).copied();
+                    self.conn_cursor = None;
+                } else {
+                    match self.g.node(sel).kind {
+                        NodeKind::Dir => to = self.g.nav_enter(sel),
+                        // key repeat must not spawn an editor per repeat tick
+                        NodeKind::File
+                            if !ui.input(|i| {
+                                i.events.iter().any(|e| {
+                                    matches!(
+                                        e,
+                                        egui::Event::Key {
+                                            key: Key::L,
+                                            pressed: true,
+                                            repeat: true,
+                                            ..
+                                        }
+                                    )
+                                })
+                            }) =>
+                        {
+                            self.open_in_editor(sel);
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
-            } else if out_jump {
-                // ] follows the note's first outgoing wikilink
-                to = self.g.outlinks(sel).next().map(|l| l.to);
-            } else if back_jump {
-                // [ jumps to the first note linking here
-                to = self.g.backlinks(sel).next().map(|l| l.from);
+            } else if out_jump || back_jump {
+                // ] / [ walk a highlight through the connections strip
+                // (children, then outgoing, then incoming); Enter or l
+                // follows the highlighted one
+                let len = self.connections(sel).len() as isize;
+                if len > 0 {
+                    let cur = self.conn_cursor.map(|i| i as isize);
+                    let next = if out_jump {
+                        cur.map_or(0, |i| (i + 1).min(len - 1))
+                    } else {
+                        cur.map_or(len - 1, |i| (i - 1).max(0))
+                    };
+                    self.conn_cursor = Some(next as usize);
+                    self.nav_scroll = true;
+                }
             } else if sg {
                 to = self.g.nav_sibling_end(sel, true);
             } else if g {
@@ -523,10 +553,14 @@ impl Viewer {
             if (h || j || k || l || sg || out_jump || back_jump) && !g {
                 self.pending_g = None;
             }
+            if h || j || k || sg {
+                self.conn_cursor = None; // tree moves dismiss the link cursor
+            }
             if let Some(t) = to {
                 self.selected = Some(t);
                 self.frame_node(t); // the camera follows the walk
                 self.nav_scroll = true; // and the sibling list follows too
+                self.conn_cursor = None;
             }
         }
 

@@ -81,7 +81,7 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 | `0` / `Home` | reset the view — fit the whole graph |
 | `h` `j` `k` `l` | **selection is the mode**: with a node selected, walk the tree ranger-style — `j`/`k` step siblings, `h` goes to the parent, `l` enters a dir / opens a file — and the camera follows; with nothing selected, pan (hold to glide). `Esc` gets you back to panning |
 | `gg` / `G` | first / last sibling (while a node is selected) |
-| `]` / `[` | follow the note's first outgoing wikilink / jump to the first note linking here — the full clickable lists live in the connections strip at the pane's bottom |
+| `]` / `[` | walk a highlight forward / backward through the **connections strip** (children, then outgoing `→`, then incoming `←`); `Enter` or `l` follows the highlighted one, `Esc` dismisses, tree moves clear it |
 | `u` / `d` | zoom in / out (both modes) |
 | `t` | hop the terminal cursor from card to card (flies to each); `Enter` starts typing into the highlighted one, `Esc` dismisses |
 | `Esc` | close search, else deselect |
