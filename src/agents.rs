@@ -108,27 +108,40 @@ fn launch_named(
         if let Some(cmd) = cmd {
             c.arg(cmd);
         }
-        let status = c.status()?;
-        return if status.success() {
-            Ok(name)
-        } else {
-            Err(std::io::Error::other(format!("tmux new-session {name} failed")))
-        };
+        if c.status()?.success() {
+            return Ok(name);
+        }
+        // probe→create isn't atomic: if the name was claimed in between
+        // (another viewer instance), move on to the next; anything else is
+        // a real failure
+        let lost_race = tmux(&["has-session", "-t", &format!("={name}")])
+            .output()?
+            .status
+            .success();
+        if !lost_race {
+            return Err(std::io::Error::other(format!("tmux new-session {name} failed")));
+        }
     }
     Err(std::io::Error::other("all tg_ session names taken"))
 }
 
+/// Separator for scan records: ASCII unit separator. Session names may
+/// legally contain tabs (tmux rewrites only `.` and `:`), so tab-separated
+/// records could be sheared by a hostile-but-legal name; 0x1f appears in
+/// neither names nor paths in practice.
+const SEP: char = '\u{1f}';
+
 /// One-shot scan of the default tmux server. Returns every pane whose cwd is
 /// inside `vault`; allowlist and stickiness filtering happen in [`Tracker`].
-/// tmux absent or no server running → empty. The path field comes LAST in
-/// the format so a tab inside a path (legal in POSIX) can't shear the record.
+/// tmux absent or no server running → empty. The path field still comes
+/// LAST as defense in depth.
 pub fn scan(vault: &Path) -> Vec<PaneInfo> {
     let out = Command::new("tmux")
         .args([
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
+            "#{session_name}\u{1f}#{pane_id}\u{1f}#{pane_pid}\u{1f}#{pane_current_command}\u{1f}#{pane_current_path}",
         ])
         .output();
     let Ok(out) = out else { return Vec::new() };
@@ -141,7 +154,7 @@ pub fn scan(vault: &Path) -> Vec<PaneInfo> {
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
     text.lines()
         .filter_map(|l| {
-            let mut f = l.splitn(5, '\t');
+            let mut f = l.splitn(5, SEP);
             let (Some(session), Some(pane), Some(pid), Some(command), Some(cwd)) =
                 (f.next(), f.next(), f.next(), f.next(), f.next())
             else {
@@ -165,8 +178,11 @@ pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
 /// Stateful filter applying the tg_/allowlist rule with the grace period.
 #[derive(Default)]
 pub struct Tracker {
-    /// (session, pane) → (last time it matched, agent name it matched as)
-    last_ok: HashMap<(String, String), (Instant, String)>,
+    /// (session, pane) → (last seen, agent name, pane root pid). The pid
+    /// pins identity to the actual pane: pane ids restart at %0 on a new
+    /// tmux server, so (session, pane) alone could revive a remembered
+    /// agent onto an unrelated pane created within the grace window.
+    last_ok: HashMap<(String, String), (Instant, String, u32)>,
 }
 
 impl Tracker {
@@ -195,16 +211,25 @@ impl Tracker {
                 } else {
                     cmd_base.to_string()
                 };
-                self.last_ok.insert(key.clone(), (now, agent));
-            } else if let Some(e) = self.last_ok.get_mut(&key) {
-                e.0 = now; // refresh last-seen for sticky entries
+                self.last_ok.insert(key.clone(), (now, agent, p.pid));
+            } else {
+                // same key but a different root process = a new pane reusing
+                // the id (fresh tmux server) — forget, don't revive
+                let stale = self.last_ok.get(&key).is_some_and(|e| e.2 != p.pid);
+                if stale {
+                    self.last_ok.remove(&key);
+                } else if let Some(e) = self.last_ok.get_mut(&key) {
+                    e.0 = now; // refresh last-seen for sticky entries
+                }
             }
             // Sticky: once a pane has been an agent, it stays one while the
             // pane exists — pane_current_command reads bash/python for the
             // whole duration of a tool call (which can far outlast any grace
             // window), and dropping the mirror mid-call would blank the card
             // and steal typing focus at the worst possible moment.
-            if let Some((_, agent)) = self.last_ok.get(&key) {
+            if let Some((_, agent, pid)) = self.last_ok.get(&key)
+                && *pid == p.pid
+            {
                 out.push(AgentPane {
                     session: p.session.clone(),
                     pane: p.pane.clone(),
@@ -217,7 +242,7 @@ impl Tracker {
         }
         // forget identities only once the pane itself is gone past the
         // (scan-flicker) grace
-        self.last_ok.retain(|k, (t, _)| {
+        self.last_ok.retain(|k, (t, _, _)| {
             now.duration_since(*t) <= GRACE
                 || panes
                     .iter()
@@ -233,9 +258,9 @@ mod tests {
 
     #[test]
     fn parse_filters_to_vault() {
-        let text = "work\t%1\t100\tclaude\t/v/notes\n\
-                    other\t%2\t200\tclaude\t/elsewhere\n\
-                    tg_pi_1\t%3\t300\tpi\t/v/notes/topics\n\
+        let text = "work\u{1f}%1\u{1f}100\u{1f}claude\u{1f}/v/notes\n\
+                    other\u{1f}%2\u{1f}200\u{1f}claude\u{1f}/elsewhere\n\
+                    tg_pi_1\u{1f}%3\u{1f}300\u{1f}pi\u{1f}/v/notes/topics\n\
                     bad-line\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 2);
@@ -244,20 +269,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_survives_tabs_in_paths() {
-        // path is the last field, so an embedded tab stays part of the path
-        let text = "work\t%1\t100\tclaude\t/v/notes/weird\tdir\n";
+    fn parse_survives_tabs_in_names_and_paths() {
+        // tabs are legal in session names AND paths — the 0x1f separator
+        // keeps both intact
+        let text = "we\tird\u{1f}%1\u{1f}100\u{1f}claude\u{1f}/v/notes/weird\tdir\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].session, "we\tird");
         assert_eq!(panes[0].cwd, PathBuf::from("/v/notes/weird\tdir"));
         assert_eq!(panes[0].command, "claude");
     }
 
     fn pane(session: &str, command: &str) -> PaneInfo {
+        pane_pid(session, command, 42)
+    }
+
+    fn pane_pid(session: &str, command: &str, pid: u32) -> PaneInfo {
         PaneInfo {
             session: session.into(),
             pane: "%1".into(),
-            pid: 42,
+            pid,
             cwd: PathBuf::from("/v"),
             command: command.into(),
         }
@@ -286,6 +317,21 @@ mod tests {
         let t3 = t2 + Duration::from_secs(1);
         let active = tr.update(&[pane("work", "bash")], &allow, t3);
         assert!(active.is_empty(), "closed pane's identity must not revive");
+    }
+
+    #[test]
+    fn pane_id_reuse_on_a_new_server_does_not_revive_identity() {
+        let allow = vec!["claude".to_string()];
+        let mut tr = Tracker::new();
+        let t0 = Instant::now();
+        assert_eq!(tr.update(&[pane_pid("work", "claude", 42)], &allow, t0).len(), 1);
+
+        // tmux server restarted: same session name, pane ids start over at
+        // %1, but the root process differs — the remembered identity must
+        // not attach to this unrelated pane
+        let t1 = t0 + Duration::from_secs(2); // well inside GRACE
+        let active = tr.update(&[pane_pid("work", "vim", 999)], &allow, t1);
+        assert!(active.is_empty(), "revived onto a new server's pane");
     }
 
     #[test]

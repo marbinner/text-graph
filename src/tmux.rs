@@ -87,13 +87,18 @@ struct ReaderState {
 fn reader_loop(stdout: ChildStdout, tx: Sender<TmuxEvent>, wake: impl Fn()) {
     let mut reader = BufReader::new(stdout);
     let mut state = ReaderState::default();
-    let mut line = String::new();
+    let mut buf = Vec::new();
     loop {
-        line.clear();
-        match reader.read_line(&mut line) {
+        buf.clear();
+        // Bytes, not read_line: tmux only octal-escapes < 0x20 and '\\' in
+        // %output, so raw 0x80..=0xFF from a pane (binary spew, Latin-1)
+        // reaches us verbatim. read_line would Err on invalid UTF-8 and
+        // kill the whole mirror; lossy conversion just mangles that cell.
+        match reader.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
+        let line = String::from_utf8_lossy(&buf);
         if let Some(ev) = parse_line(line.trim_end_matches(['\r', '\n']), &mut state) {
             if tx.send(ev).is_err() {
                 break;
