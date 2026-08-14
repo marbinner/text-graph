@@ -544,13 +544,24 @@ impl Viewer {
             self.focused_term = None;
             return;
         }
+        let frame_mods = ui.ctx().input(|i| i.modifiers);
         let events = ui.ctx().input_mut(|i| std::mem::take(&mut i.events));
         let mut keep: Vec<egui::Event> = Vec::with_capacity(events.len());
         let mut cmds: Vec<String> = Vec::new();
         for ev in events {
             match ev {
                 egui::Event::Text(ref t) if !t.is_empty() => {
-                    cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
+                    // Alt+letter chords (readline word motion) arrive as BOTH
+                    // a Text event and a Key event on X11; the Key arm sends
+                    // the ESC-prefixed chord, so drop the bare text — but
+                    // only for ASCII alphanumerics, so AltGr-composed chars
+                    // (€, ñ — non-ASCII) still type normally.
+                    let alt_chord = frame_mods.alt
+                        && !frame_mods.ctrl
+                        && t.chars().all(|c| c.is_ascii_alphanumeric());
+                    if !alt_chord {
+                        cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
+                    }
                 }
                 egui::Event::Paste(ref t) if !t.is_empty() => {
                     cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
@@ -558,9 +569,6 @@ impl Viewer {
                 egui::Event::Copy => cmds.push(keys::hex_cmd(&pane, &[0x03])), // Ctrl+C
                 egui::Event::Cut => cmds.push(keys::hex_cmd(&pane, &[0x18])),  // Ctrl+X
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                    if modifiers.ctrl && modifiers.shift && key == Key::Q {
-                        continue; // the release chord, handled in ui()
-                    }
                     let mods = Mods {
                         ctrl: modifiers.ctrl,
                         alt: modifiers.alt,
@@ -568,7 +576,7 @@ impl Viewer {
                     };
                     if let Some(sp) = map_key(key) {
                         cmds.push(keys::special_cmd(&pane, sp, mods));
-                    } else if mods.ctrl
+                    } else if (mods.ctrl || mods.alt)
                         && let Some(c) = key_char(key)
                         && let Some(cmd) = keys::chord_cmd(&pane, c, mods)
                     {
@@ -679,6 +687,16 @@ impl Viewer {
             .is_some_and(|(s, p)| !self.agent_panes.iter().any(|a| &a.session == s && &a.pane == p))
         {
             self.term_selected = None;
+        }
+        // A focused pane killed externally (session survives) must release
+        // the keyboard — otherwise every keystroke drains into a dead
+        // target while all graph keybinds stay suspended.
+        if self
+            .focused_term
+            .as_ref()
+            .is_some_and(|(s, p)| !self.agent_panes.iter().any(|a| &a.session == s && &a.pane == p))
+        {
+            self.focused_term = None;
         }
 
         for (s, m) in &mut self.mirrors {
@@ -2084,8 +2102,9 @@ fn spawn_editor(file: &Path) -> std::io::Result<()> {
 /// A command that opens a new terminal-emulator window and runs whatever is
 /// appended to it. $TERMINAL wins; otherwise the first emulator on PATH.
 fn new_terminal_window() -> Option<std::process::Command> {
-    let mk = |bin: &str| -> std::process::Command {
+    let mk = |bin: &str, extra: &[&str]| -> std::process::Command {
         let mut c = std::process::Command::new(bin);
+        c.args(extra); // user-supplied flags go before the command separator
         let base = Path::new(bin).file_name().and_then(|s| s.to_str()).unwrap_or(bin);
         match base {
             "gnome-terminal" => {
@@ -2101,10 +2120,12 @@ fn new_terminal_window() -> Option<std::process::Command> {
         }
         c
     };
-    if let Ok(term) = std::env::var("TERMINAL")
-        && !term.trim().is_empty()
-    {
-        return Some(mk(term.trim()));
+    if let Ok(term) = std::env::var("TERMINAL") {
+        // "$TERMINAL" may carry flags ("foot -a floating"), like $EDITOR
+        let mut words = term.split_whitespace();
+        if let Some(bin) = words.next() {
+            return Some(mk(bin, &words.collect::<Vec<_>>()));
+        }
     }
     [
         "x-terminal-emulator",
@@ -2118,7 +2139,7 @@ fn new_terminal_window() -> Option<std::process::Command> {
     ]
     .into_iter()
     .find(|bin| on_path(bin))
-    .map(mk)
+    .map(|bin| mk(bin, &[]))
 }
 
 fn on_path(bin: &str) -> bool {
@@ -2162,8 +2183,10 @@ impl eframe::App for Viewer {
         if release {
             self.focused_term = None;
         }
-        if self.focused_term.is_some() {
-            // keyboard belongs to the terminal; graph keybinds are suspended
+        if self.focused_term.is_some() && self.create.is_none() {
+            // keyboard belongs to the terminal; graph keybinds are suspended.
+            // The create dialog outranks it — otherwise clicking a card with
+            // the dialog open would drain its keystrokes into the pane.
             self.forward_input(ui);
         } else {
             self.handle_keys(ui);
