@@ -279,6 +279,11 @@ struct Viewer {
     focused_term: Option<(String, String)>,
     /// Card hit-boxes from the last paint (screen space).
     term_rects: Vec<(String, String, Rect)>,
+    /// User-arranged card positions: world-space offset of the card's min
+    /// corner from its anchor node. Absent = automatic outward placement.
+    term_offsets: HashMap<(String, String), Vec2>,
+    /// Card currently being dragged.
+    drag_card: Option<(String, String)>,
 }
 
 impl Viewer {
@@ -363,6 +368,8 @@ impl Viewer {
             term_activity: HashMap::new(),
             focused_term: None,
             term_rects: Vec::new(),
+            term_offsets: HashMap::new(),
+            drag_card: None,
         }
     }
 
@@ -460,6 +467,7 @@ impl Viewer {
         self.mirrors.retain(|s, m| !m.exited && sessions.contains(s));
         self.term_cache.retain(|(s, _), _| sessions.contains(s));
         self.term_gen.retain(|s, _| sessions.contains(s));
+        self.term_offsets.retain(|(s, _), _| sessions.contains(s));
         let focus_dead = self
             .focused_term
             .as_ref()
@@ -538,31 +546,38 @@ impl Viewer {
                     c.rows.len() as f32 * line_h + title_h + pad * 2.0,
                 )
             };
-            // Place the card outward from the graph center relative to its
-            // anchor (jittered so several cards fan out), past the node's
-            // radius in screen space — the tether points inward and the card
-            // never sits on top of the cluster it's attached to.
-            let jitter = (hash_angle(&a.session, &a.pane, i) - std::f32::consts::PI) * 0.25;
-            let base = if anchor_w.to_vec2().length() > 1.0 {
-                anchor_w.to_vec2().angle()
+            // User-arranged cards keep their world-space offset from the
+            // anchor; otherwise place outward from the graph center relative
+            // to the anchor (jittered so several cards fan out), past the
+            // node's radius in screen space — the tether points inward and
+            // the card never sits on top of the cluster it's attached to.
+            let (card, tether_to) = if let Some(off) = self.term_offsets.get(&key) {
+                let card = Rect::from_min_size(anchor_s + *off * self.zoom, size);
+                (card, card.center())
             } else {
-                hash_angle(&a.session, &a.pane, i)
+                let jitter = (hash_angle(&a.session, &a.pane, i) - std::f32::consts::PI) * 0.25;
+                let base = if anchor_w.to_vec2().length() > 1.0 {
+                    anchor_w.to_vec2().angle()
+                } else {
+                    hash_angle(&a.session, &a.pane, i)
+                };
+                let dir = Vec2::angled(base + jitter);
+                let anchor_r = (self.radius[anchor.0 as usize] * self.zoom).clamp(1.5, 16.0);
+                let p = anchor_s + dir * (anchor_r + 22.0);
+                let min = Pos2::new(
+                    if dir.x >= 0.0 { p.x } else { p.x - size.x },
+                    if dir.y >= 0.0 { p.y } else { p.y - size.y },
+                );
+                (Rect::from_min_size(min, size), p)
             };
-            let dir = Vec2::angled(base + jitter);
-            let anchor_r = (self.radius[anchor.0 as usize] * self.zoom).clamp(1.5, 16.0);
-            let p = anchor_s + dir * (anchor_r + 22.0);
-            let min = Pos2::new(
-                if dir.x >= 0.0 { p.x } else { p.x - size.x },
-                if dir.y >= 0.0 { p.y } else { p.y - size.y },
-            );
-            let card = Rect::from_min_size(min, size);
             if !view.intersects(card) {
                 continue;
             }
             self.term_rects.push((a.session.clone(), a.pane.clone(), card));
 
+            // drawn before the card, so it vanishes cleanly behind its edge
             painter.extend(egui::Shape::dashed_line(
-                &[anchor_s, p],
+                &[anchor_s, tether_to],
                 Stroke::new(1.0, EDGE),
                 6.0,
                 4.0,
@@ -1004,13 +1019,48 @@ impl Viewer {
         self.sync_terminals(&ctx);
 
         // ---- input ----
-        // drag_started uses last frame's hover — standard immediate-mode lag,
+        // Cards sit on top and win pointer contention. over_card and hover
+        // use last frame's geometry — standard immediate-mode lag,
         // imperceptible at interactive frame rates.
+        let over_card: Option<(String, String)> = response.hover_pos().and_then(|c| {
+            self.term_rects
+                .iter()
+                .find(|(_, _, r)| r.contains(c))
+                .map(|(s, p, _)| (s.clone(), p.clone()))
+        });
         if response.drag_started() {
-            self.drag_node = self.hover;
+            if let Some(t) = over_card.clone() {
+                // seed the override from where the card currently is, so the
+                // first dragged frame doesn't jump
+                let cur_min = self
+                    .term_rects
+                    .iter()
+                    .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
+                    .map(|(_, _, r)| r.min);
+                let anchor_s = self
+                    .agent_panes
+                    .iter()
+                    .find(|a| a.session == t.0 && a.pane == t.1)
+                    .map(|a| {
+                        let id = self.anchor_for(&a.cwd);
+                        self.to_screen(rect, self.world_pos(id.0 as usize))
+                    });
+                if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
+                    self.term_offsets.insert(t.clone(), (min - anchor_s) / self.zoom);
+                }
+                self.drag_card = Some(t);
+            } else {
+                self.drag_node = self.hover;
+            }
         }
         if response.dragged() {
-            if let (Some(id), Some(cur)) = (self.drag_node, response.interact_pointer_pos()) {
+            if let Some(t) = self.drag_card.clone() {
+                if let Some(off) = self.term_offsets.get_mut(&t) {
+                    *off += response.drag_delta() / self.zoom;
+                }
+                ui.ctx().request_repaint();
+            } else if let (Some(id), Some(cur)) = (self.drag_node, response.interact_pointer_pos())
+            {
                 let w = self.to_world(rect, cur);
                 self.sim.pin(id.0, w.x, w.y);
                 ui.ctx().request_repaint();
@@ -1021,6 +1071,7 @@ impl Viewer {
         if response.drag_stopped() {
             self.sim.unpin();
             self.drag_node = None;
+            self.drag_card = None;
         }
         let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
         let factor = pinch * (scroll * 0.0025).exp();
@@ -1045,13 +1096,7 @@ impl Viewer {
             visible.push((NodeId(i as u32), s, r));
         }
 
-        // ---- hover / select (terminal cards sit on top and win) ----
-        let over_card: Option<(String, String)> = response.hover_pos().and_then(|c| {
-            self.term_rects
-                .iter()
-                .find(|(_, _, r)| r.contains(c))
-                .map(|(s, p, _)| (s.clone(), p.clone()))
-        });
+        // ---- hover / select ----
         if let Some(id) = self.drag_node {
             self.hover = Some(id);
         } else {
