@@ -962,15 +962,21 @@ impl Viewer {
         let mut visible: Vec<(NodeId, Pos2, f32)> = Vec::new();
         for i in 0..self.g.nodes.len() {
             let s = self.to_screen(rect, self.world_pos(i));
-            if !view.contains(s) {
-                continue;
-            }
             // images render as thumbnails, so their "radius" is the box
             // half-height with a much larger cap — hover targets, rings, and
-            // label anchors all follow it
+            // label anchors all follow it. Their cull test must cover the
+            // box extent (half-width ≤ 1.5r), or a picture straddling the
+            // viewport edge pops in and out while panning.
             let r = if self.g.nodes[i].kind == NodeKind::Image {
-                (self.radius[i] * 2.0 * self.zoom).clamp(1.5, 110.0)
+                let r = (self.radius[i] * 2.0 * self.zoom).clamp(1.5, 110.0);
+                if !view.expand2(Vec2::new(r * 1.5, r)).contains(s) {
+                    continue;
+                }
+                r
             } else {
+                if !view.contains(s) {
+                    continue;
+                }
                 (self.radius[i] * self.zoom).clamp(1.5, 16.0)
             };
             visible.push((NodeId(i as u32), s, r));
@@ -987,7 +993,17 @@ impl Viewer {
                 let mut best = f32::INFINITY;
                 for &(id, s, r) in &visible {
                     let d = s.distance(cursor);
-                    if d < r + 4.0 && d < best {
+                    // a thumbnail box is wider than its nominal radius —
+                    // hover anywhere on the picture, not a circle around
+                    // its center (the mismatch made hover flicker at the
+                    // corners of wide images)
+                    let hit = if self.g.node(id).kind == NodeKind::Image && r >= Self::IMG_BOX_MIN_R
+                    {
+                        self.image_box(id, s, r).expand(4.0).contains(cursor)
+                    } else {
+                        d < r + 4.0
+                    };
+                    if hit && d < best {
                         best = d;
                         self.hover = Some(id);
                     }
@@ -1162,13 +1178,18 @@ impl Viewer {
                         self.thumbs
                             .request(ui.ctx(), &node.path, self.root.join(&node.path));
                         let bx = self.image_box(id, s, r);
-                        let tint = if on {
-                            Color32::WHITE
-                        } else {
-                            Color32::WHITE.gamma_multiply(DIM)
-                        };
+                        // dim/undim FADES for pictures: the neighborhood
+                        // dim snapping a photo between bright and near-black
+                        // on every hover change read as flicker
+                        let target = if on { 1.0 } else { DIM };
+                        let t = ui.ctx().animate_value_with_time(
+                            egui::Id::new(("img-tint", &node.path)),
+                            target,
+                            0.15,
+                        );
+                        let tint = Color32::WHITE.gamma_multiply(t);
                         match self.thumbs.cache.get(&node.path) {
-                            Some(images::ThumbState::Ready(tex)) => {
+                            Some(images::ThumbState::Ready { tex, .. }) => {
                                 painter.image(
                                     tex.id(),
                                     bx,

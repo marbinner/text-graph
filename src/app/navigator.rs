@@ -228,7 +228,7 @@ impl Viewer {
                             let ctx = ui.ctx().clone();
                             self.thumbs.request(&ctx, &key, self.root.join(&key));
                             match self.thumbs.cache.get(&key) {
-                                Some(images::ThumbState::Ready(tex)) => {
+                                Some(images::ThumbState::Ready { tex, .. }) => {
                                     let size = tex.size_vec2();
                                     let w = ui.available_width().min(size.x.max(96.0));
                                     let h = w * size.y / size.x.max(1.0);
