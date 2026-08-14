@@ -142,8 +142,16 @@ impl Sim {
             // pairwise repulsion (symmetric)
             for i in 0..n {
                 for j in (i + 1)..n {
-                    let dx = self.x[i] - self.x[j];
-                    let dy = self.y[i] - self.y[j];
+                    let mut dx = self.x[i] - self.x[j];
+                    let mut dy = self.y[i] - self.y[j];
+                    if dx * dx + dy * dy < 1e-6 {
+                        // exactly coincident nodes have no direction to repel
+                        // along and would stay stuck — nudge them apart on a
+                        // deterministic index-derived angle
+                        let ang = (i * 31 + j) as f32;
+                        dx = ang.cos();
+                        dy = ang.sin();
+                    }
                     let d2 = (dx * dx + dy * dy).max(64.0);
                     let inv = a / d2;
                     self.vx[i] += dx * inv * self.charge[j];
@@ -249,5 +257,16 @@ mod tests {
         };
         // a→ghost are spring-linked; b→ghost are not
         assert!(d(1, 3) < d(2, 3), "linked pair should sit closer");
+    }
+
+    #[test]
+    fn coincident_nodes_separate() {
+        let g = synth();
+        let mut s = Sim::new(&g);
+        s.x[2] = s.x[1]; // force exact overlap
+        s.y[2] = s.y[1];
+        s.tick(100);
+        let d = ((s.x[1] - s.x[2]).powi(2) + (s.y[1] - s.y[2]).powi(2)).sqrt();
+        assert!(d > 10.0, "overlapping nodes must separate, got {d}");
     }
 }
