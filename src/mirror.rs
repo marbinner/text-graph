@@ -31,6 +31,9 @@ pub struct TermGrid {
     pub cells: Vec<TermCell>,
     /// (row, col); None while the application hides the cursor.
     pub cursor: Option<(u16, u16)>,
+    /// The application requested bracketed paste (DECSET 2004) — pasted
+    /// text should be wrapped in ESC[200~ / ESC[201~ markers.
+    pub bracketed_paste: bool,
 }
 
 enum Pending {
@@ -324,6 +327,7 @@ fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
         rows,
         cells,
         cursor: if s.hide_cursor() { None } else { Some(s.cursor_position()) },
+        bracketed_paste: s.bracketed_paste(),
     }
 }
 
@@ -454,6 +458,13 @@ mod tests {
         assert_eq!(g.cells[0].ch, 'h');
         assert_eq!(g.cells[20].ch, 't'); // row 1, col 0 (cols = 20)
         assert_eq!(g.cursor, Some((1, 5)));
+    }
+
+    #[test]
+    fn bracketed_paste_mode_is_tracked() {
+        assert!(!grid(b"plain").bracketed_paste);
+        assert!(grid(b"\x1b[?2004h").bracketed_paste, "DECSET 2004 enables it");
+        assert!(!grid(b"\x1b[?2004h\x1b[?2004l").bracketed_paste, "DECRST disables");
     }
 
     #[test]

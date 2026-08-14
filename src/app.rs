@@ -135,6 +135,8 @@ struct CachedPane {
     total_rows: u16,
     rows: Vec<Vec<Run>>, // trailing blank rows trimmed
     cursor: Option<(u16, u16)>,
+    /// Pane app requested bracketed paste — pastes get ESC[200~ markers.
+    bracketed_paste: bool,
 }
 
 fn brighten(c: Color32) -> Color32 {
@@ -202,7 +204,13 @@ fn build_cached(grid: &TermGrid) -> CachedPane {
         }
         rows.push(runs);
     }
-    CachedPane { cols: grid.cols, total_rows: grid.rows, rows, cursor: grid.cursor }
+    CachedPane {
+        cols: grid.cols,
+        total_rows: grid.rows,
+        rows,
+        cursor: grid.cursor,
+        bracketed_paste: grid.bracketed_paste,
+    }
 }
 
 fn hash_angle(session: &str, pane: &str, index: usize) -> f32 {
@@ -570,7 +578,21 @@ impl Viewer {
                     }
                 }
                 egui::Event::Paste(ref t) if !t.is_empty() => {
-                    cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
+                    // Bracketed paste when the pane app asked for it: without
+                    // the markers, every newline in a multiline paste reads
+                    // as Enter — a REPL or agent prompt submits mid-paste.
+                    let bracketed = self
+                        .term_cache
+                        .get(&(session.clone(), pane.clone()))
+                        .is_some_and(|c| c.bracketed_paste);
+                    if bracketed {
+                        let mut bytes = b"\x1b[200~".to_vec();
+                        bytes.extend_from_slice(t.as_bytes());
+                        bytes.extend_from_slice(b"\x1b[201~");
+                        cmds.push(keys::hex_cmd(&pane, &bytes));
+                    } else {
+                        cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
+                    }
                 }
                 egui::Event::Copy => cmds.push(keys::hex_cmd(&pane, &[0x03])), // Ctrl+C
                 egui::Event::Cut => cmds.push(keys::hex_cmd(&pane, &[0x18])),  // Ctrl+X

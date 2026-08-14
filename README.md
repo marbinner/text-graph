@@ -165,7 +165,8 @@ v1 input limits: `Ctrl+Q` is reserved by the viewer (it releases focus, so
 it never reaches the pane), Shift+Enter sends Enter, no mouse-into-terminal,
 no in-graph scrollback — attach externally (right-click the card, or
 `tmux attach -t work`) when you need those. Alt chords (Alt+b/f word
-motion, Alt+digit args) work.
+motion, Alt+digit args) work, and multiline paste is bracketed-paste
+aware — pasting into claude doesn't submit on every newline.
 
 ## Determinism
 
