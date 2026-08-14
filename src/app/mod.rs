@@ -14,7 +14,7 @@ mod terminals;
 
 use actions::CreateDialog;
 use reload::ReloadMsg;
-use terminals::{CachedPane, ResizeDrag, TERM_BG, resize_handle};
+use terminals::{ResizeDrag, TERM_BG, resize_handle};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -181,62 +181,27 @@ struct Viewer {
     // ---- terminals in the graph ----
     /// Dir path → node, for anchoring agent panes at their cwd.
     dir_by_path: HashMap<String, NodeId>,
-    /// Written by the scanner thread, snapshotted each frame.
-    agents_seen: Arc<Mutex<Vec<AgentPane>>>,
-    agent_panes: Vec<AgentPane>,
-    mirrors: HashMap<String, SessionMirror>,
-    /// Sessions whose last mirror attach failed, with the failure time —
-    /// retried after a cooldown instead of at frame rate.
-    attach_backoff: HashMap<String, Instant>,
-    /// (session, pane) → converted screen; refreshed per mirror generation.
-    term_cache: HashMap<(String, String), CachedPane>,
-    term_gen: HashMap<String, u64>,
-    term_activity: HashMap<String, Instant>,
-    /// Keyboard goes to this pane instead of the graph.
-    focused_term: Option<(String, String)>,
-    /// Card hit-boxes from the last paint (screen space).
-    term_rects: Vec<(String, String, Rect)>,
-    /// User-arranged card positions: world-space offset of the card's min
-    /// corner from its anchor node. Absent = automatic outward placement.
-    term_offsets: HashMap<(String, String), Vec2>,
-    /// Parked arrangements (from disk, or from sessions that went away),
-    /// keyed by session name: reclaimed when a matching session reappears.
-    restore_offsets: HashMap<String, Vec<(String, Vec2)>>,
+    /// Everything terminal-card related — see terminals::Terminals.
+    terms: terminals::Terminals,
+    // ---- view-state persistence ----
     /// View state as last written to `.text-graph/view` (skip no-op saves).
     saved_state: Option<state::ViewState>,
     last_save: Instant,
     save_warned: bool,
-    /// Card currently being dragged.
-    drag_card: Option<(String, String)>,
-    /// Corner-grip resize in progress (tg_ sessions only — native resize).
-    resize_term: Option<ResizeDrag>,
-    /// Set on double-click: next paint recenters the view on this card.
-    zoom_to_card: Option<(String, String)>,
-    /// Position of the `t` (cycle terminals) key, modulo the pane count.
-    term_cycle: usize,
-    /// First `g` of a `gg` chord (tree navigation), with its press time.
+    // ---- tree navigation ----
+    /// First `g` of a `gg` chord, with its press time.
     pending_g: Option<Instant>,
     /// Find-in-directory prompt (`f` in tree-nav mode): the query, live.
     nav_find: Option<String>,
     nav_find_focus: bool,
     /// Last applied find query, to jump only when the text changes.
     nav_find_last: String,
-    /// Scroll the navigator's sibling list to the cursor on the next frame
-    /// (set by keyboard navigation, not by clicks).
+    /// Scroll the navigator's sibling list to the cursor next frame.
     nav_scroll: bool,
-    /// The card the terminal cursor is on: highlighted, Enter focuses it.
-    /// Unlike `focused_term`, the keyboard still belongs to the graph.
-    term_selected: Option<(String, String)>,
-    /// Fuzzy-search scores for agent panes (aligned with `agent_panes`,
-    /// re-scored every frame while searching — the pane list is live).
-    term_scores: Vec<Option<u32>>,
-    /// Best terminal hit: index at scoring time PLUS its key, so consumers
-    /// can survive the pane list shifting underneath the index.
-    term_best: Option<(usize, (String, String))>,
     // ---- creation (right-click menu) ----
     /// Node captured at right-click time — the context menu's subject.
     ctx_node: Option<NodeId>,
-    /// Card captured at right-click time (its lifecycle actions lead the menu).
+    /// Card captured at right-click time (lifecycle actions lead the menu).
     ctx_card: Option<(String, String)>,
     /// Open "new note/folder" dialog, if any.
     create: Option<CreateDialog>,
@@ -244,8 +209,6 @@ struct Viewer {
     flash: Option<(String, Instant)>,
     /// Select and frame this rel path once a reload turns it into a node.
     pending_select: Option<String>,
-    /// tmux presence, probed once at startup — gates "Launch agent".
-    tmux_ok: bool,
 }
 
 impl Viewer {
@@ -350,42 +313,20 @@ impl Viewer {
             reload_error: None,
             diag_open: false,
             dir_by_path,
-            agents_seen: Arc::new(Mutex::new(Vec::new())),
-            agent_panes: Vec::new(),
-            mirrors: HashMap::new(),
-            attach_backoff: HashMap::new(),
-            term_cache: HashMap::new(),
-            term_gen: HashMap::new(),
-            term_activity: HashMap::new(),
-            focused_term: None,
-            term_rects: Vec::new(),
-            term_offsets: HashMap::new(),
-            restore_offsets,
+            terms: terminals::Terminals::new(restore_offsets),
             saved_state: None,
             last_save: Instant::now(),
             save_warned: false,
-            drag_card: None,
-            resize_term: None,
-            zoom_to_card: None,
-            term_cycle: 0,
             pending_g: None,
             nav_find: None,
             nav_find_focus: false,
             nav_find_last: String::new(),
             nav_scroll: false,
-            term_selected: None,
-            term_scores: Vec::new(),
-            term_best: None,
             ctx_node: None,
             ctx_card: None,
             create: None,
             flash: None,
             pending_select: None,
-            tmux_ok: std::process::Command::new("tmux")
-                .arg("-V")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false),
         }
     }
 
@@ -442,26 +383,26 @@ impl Viewer {
                 // and lands focused, ready to type
                 let node_score = self.best.and_then(|id| self.scores[id.0 as usize]);
                 let term_score = self
-                    .term_best
+                    .terms
+                    .best
                     .as_ref()
-                    .and_then(|(i, _)| self.term_scores.get(*i).copied().flatten());
+                    .and_then(|(i, _)| self.terms.scores.get(*i).copied().flatten());
                 if term_score > node_score
-                    && let Some((_, bk)) = self.term_best.clone()
+                    && let Some((_, bk)) = self.terms.best.clone()
                     // resolve by key, not index: the pane list may have
                     // shifted since the scores were computed
-                    && let Some(i) = self
-                        .agent_panes
+                    && let Some(i) = self.terms.panes
                         .iter()
                         .position(|a| a.session == bk.0 && a.pane == bk.1)
                 {
-                    self.term_cycle = i + 1;
-                    self.term_selected = Some(bk.clone());
-                    self.focused_term = Some(bk.clone());
+                    self.terms.cycle = i + 1;
+                    self.terms.cursor = Some(bk.clone());
+                    self.terms.focused = Some(bk.clone());
                     self.fly_to_card(bk);
                 } else if let Some(best) = self.best {
                     self.selected = Some(best);
                     self.frame_node(best);
-                    self.term_selected = None; // Enter must not later hijack
+                    self.terms.cursor = None; // Enter must not later hijack
                 }
                 self.close_search();
             }
@@ -470,15 +411,15 @@ impl Viewer {
             self.search_focus_pending = true;
         } else if esc {
             // the terminal cursor dismisses first, then node selection
-            if self.term_selected.take().is_none() {
+            if self.terms.cursor.take().is_none() {
                 self.selected = None;
             }
         } else if enter
             && ui.memory(|m| m.focused().is_none())
-            && let Some(k) = self.term_selected.clone()
+            && let Some(k) = self.terms.cursor.clone()
         {
             // Enter on the terminal cursor = start typing into it
-            self.focused_term = Some(k);
+            self.terms.focused = Some(k);
         } else if enter
             // if an egui widget (e.g. the detail pane's button, tab-focused)
             // has focus, Enter already activates it — don't also fire here,
@@ -491,14 +432,14 @@ impl Viewer {
             self.frame_node(sel);
         } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
-        } else if term_key && ui.memory(|m| m.focused().is_none()) && !self.agent_panes.is_empty() {
+        } else if term_key && ui.memory(|m| m.focused().is_none()) && !self.terms.panes.is_empty() {
             // hop the terminal cursor to the next card — keyboard stays on
             // the graph so repeated t keeps hopping; Enter dives in
-            let i = self.term_cycle % self.agent_panes.len();
-            self.term_cycle += 1;
-            let a = &self.agent_panes[i];
+            let i = self.terms.cycle % self.terms.panes.len();
+            self.terms.cycle += 1;
+            let a = &self.terms.panes[i];
             let key = (a.session.clone(), a.pane.clone());
-            self.term_selected = Some(key.clone());
+            self.terms.cursor = Some(key.clone());
             self.fly_to_card(key);
         }
 
@@ -628,8 +569,8 @@ impl Viewer {
                 self.scores.fill(None);
                 self.best = None;
             }
-            self.term_scores.clear();
-            self.term_best = None;
+            self.terms.scores.clear();
+            self.terms.best = None;
             return;
         }
         // Terminals re-score every frame (cheap: a handful of panes) — the
@@ -637,8 +578,9 @@ impl Viewer {
         let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
         let mut buf = Vec::new();
         let mut tbest: Option<(u32, usize)> = None;
-        self.term_scores = self
-            .agent_panes
+        self.terms.scores = self
+            .terms
+            .panes
             .iter()
             .enumerate()
             .map(|(i, a)| {
@@ -657,8 +599,8 @@ impl Viewer {
                 score
             })
             .collect();
-        self.term_best = tbest.map(|(_, i)| {
-            let a = &self.agent_panes[i];
+        self.terms.best = tbest.map(|(_, i)| {
+            let a = &self.terms.panes[i];
             (i, (a.session.clone(), a.pane.clone()))
         });
         if self.query == self.last_query {
@@ -748,7 +690,8 @@ impl Viewer {
         let over_card: Option<(String, String)> = response.hover_pos().and_then(|c| {
             // reverse: cards are painted in order, so the LAST rect containing
             // the cursor is the one visibly on top
-            self.term_rects
+            self.terms
+                .rects
                 .iter()
                 .rev()
                 .find(|(_, _, r)| r.contains(c))
@@ -763,14 +706,16 @@ impl Viewer {
                 let on_handle = response
                     .hover_pos()
                     .zip(
-                        self.term_rects
+                        self.terms
+                            .rects
                             .iter()
                             .rev()
                             .find(|(s, p, _)| (s, p) == (&t.0, &t.1)),
                     )
                     .is_some_and(|(pos, (_, _, r))| resize_handle(*r).contains(pos));
                 let ours = self
-                    .agent_panes
+                    .terms
+                    .panes
                     .iter()
                     .find(|a| a.session == t.0 && a.pane == t.1)
                     .is_some_and(|a| a.ours);
@@ -781,7 +726,7 @@ impl Viewer {
                 if on_handle
                     && ours
                     && !compact
-                    && let Some(c) = self.term_cache.get(&t)
+                    && let Some(c) = self.terms.cache.get(&t)
                     && let Some(pos) = response.hover_pos()
                 {
                     let f = (6.0 * self.zoom).clamp(2.5, 16.0);
@@ -791,7 +736,7 @@ impl Viewer {
                         Color32::WHITE,
                     );
                     let cur = (c.cols, c.total_rows);
-                    self.resize_term = Some(ResizeDrag {
+                    self.terms.resize = Some(ResizeDrag {
                         key: t,
                         cols0: cur.0 as f32,
                         rows0: cur.1 as f32,
@@ -806,12 +751,14 @@ impl Viewer {
                     // seed the override from where the card currently is, so
                     // the first dragged frame doesn't jump
                     let cur_min = self
-                        .term_rects
+                        .terms
+                        .rects
                         .iter()
                         .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
                         .map(|(_, _, r)| r.min);
                     let anchor_s = self
-                        .agent_panes
+                        .terms
+                        .panes
                         .iter()
                         .find(|a| a.session == t.0 && a.pane == t.1)
                         .map(|a| {
@@ -819,19 +766,20 @@ impl Viewer {
                             self.to_screen(rect, self.world_pos(id.0 as usize))
                         });
                     if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
-                        self.term_offsets
+                        self.terms
+                            .offsets
                             .insert(t.clone(), (min - anchor_s) / self.zoom);
                     }
-                    self.drag_card = Some(t);
+                    self.terms.drag_card = Some(t);
                 }
             } else {
                 self.drag_node = self.hover;
             }
         }
         if response.dragged() {
-            if self.resize_term.is_some() {
+            if self.terms.resize.is_some() {
                 if let (Some(rz), Some(cur)) =
-                    (self.resize_term.as_mut(), response.interact_pointer_pos())
+                    (self.terms.resize.as_mut(), response.interact_pointer_pos())
                 {
                     let cols = (rz.cols0 + (cur.x - rz.start.x) / rz.adv).round();
                     let rows = (rz.rows0 + (cur.y - rz.start.y) / rz.line_h).round();
@@ -842,14 +790,14 @@ impl Viewer {
                         let sess = rz.key.0.clone();
                         rz.sent = rz.want;
                         rz.last_sent = Instant::now();
-                        if let Some(m) = self.mirrors.get_mut(&sess) {
+                        if let Some(m) = self.terms.mirrors.get_mut(&sess) {
                             m.command(&cmd);
                         }
                     }
                 }
                 ui.ctx().request_repaint();
-            } else if let Some(t) = self.drag_card.clone() {
-                if let Some(off) = self.term_offsets.get_mut(&t) {
+            } else if let Some(t) = self.terms.drag_card.clone() {
+                if let Some(off) = self.terms.offsets.get_mut(&t) {
                     *off += response.drag_delta() / self.zoom;
                 }
                 ui.ctx().request_repaint();
@@ -865,10 +813,10 @@ impl Viewer {
         if response.drag_stopped() {
             self.sim.unpin();
             self.drag_node = None;
-            self.drag_card = None;
-            if let Some(rz) = self.resize_term.take()
+            self.terms.drag_card = None;
+            if let Some(rz) = self.terms.resize.take()
                 && rz.want != rz.sent
-                && let Some(m) = self.mirrors.get_mut(&rz.key.0)
+                && let Some(m) = self.terms.mirrors.get_mut(&rz.key.0)
             {
                 // flush the debounced tail so the final size always lands
                 m.command(&format!(
@@ -923,19 +871,20 @@ impl Viewer {
                 // clicking also parks the t-cursor here, so cycling resumes
                 // from this card
                 if let Some(i) = self
-                    .agent_panes
+                    .terms
+                    .panes
                     .iter()
                     .position(|a| a.session == t.0 && a.pane == t.1)
                 {
-                    self.term_cycle = i + 1;
+                    self.terms.cycle = i + 1;
                 }
-                self.term_selected = Some(t.clone());
-                self.focused_term = Some(t);
+                self.terms.cursor = Some(t.clone());
+                self.terms.focused = Some(t);
                 self.close_search();
-            } else if self.focused_term.is_some() {
-                self.focused_term = None; // click-away releases; click again to select
+            } else if self.terms.focused.is_some() {
+                self.terms.focused = None; // click-away releases; click again to select
             } else {
-                self.term_selected = None;
+                self.terms.cursor = None;
                 self.selected = self.hover;
             }
         }
@@ -951,7 +900,8 @@ impl Viewer {
             // node; on empty space, the vault root (ctx_node = None)
             self.ctx_card = over_card.clone();
             self.ctx_node = if let Some(t) = &over_card {
-                self.agent_panes
+                self.terms
+                    .panes
                     .iter()
                     .find(|a| a.session == t.0 && a.pane == t.1)
                     .map(|a| self.anchor_for(&a.cwd))
@@ -1127,11 +1077,11 @@ impl Viewer {
         }
         let status = if let Some((msg, _)) = &self.flash {
             msg.clone()
-        } else if let Some((s, p)) = &self.focused_term {
+        } else if let Some((s, p)) = &self.terms.focused {
             format!("typing into {s} {p} — Ctrl+Q or click away releases")
         } else if searching {
             let count = self.scores.iter().filter(|s| s.is_some()).count();
-            let tcount = self.term_scores.iter().flatten().count();
+            let tcount = self.terms.scores.iter().flatten().count();
             let terms = if tcount > 0 {
                 format!(" + {tcount} terminals")
             } else {
@@ -1142,7 +1092,7 @@ impl Viewer {
                 if count == 1 { "" } else { "es" }
             )
         } else if active.is_none()
-            && let Some((s, p)) = &self.term_selected
+            && let Some((s, p)) = &self.terms.cursor
         {
             format!("{s} {p} — Enter types into it · t next · Esc dismisses")
         } else {
@@ -1183,9 +1133,9 @@ impl eframe::App for Viewer {
         self.pump_reload(ui.ctx());
         let release = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q));
         if release {
-            self.focused_term = None;
+            self.terms.focused = None;
         }
-        if self.focused_term.is_some() && self.create.is_none() {
+        if self.terms.focused.is_some() && self.create.is_none() {
             // keyboard belongs to the terminal; graph keybinds are suspended.
             // The create dialog outranks it — otherwise clicking a card with
             // the dialog open would drain its keystrokes into the pane.

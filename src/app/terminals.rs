@@ -3,6 +3,78 @@
 //! (launch / kill / external attach).
 
 use super::actions::{detached, new_terminal_window};
+
+/// All terminal-card state, grouped: discovery, mirrors, screen caches,
+/// focus/cursor, arrangement, gestures, and search scores.
+pub(super) struct Terminals {
+    /// Written by the scanner thread, snapshotted each frame.
+    pub(super) seen: Arc<Mutex<Vec<AgentPane>>>,
+    pub(super) panes: Vec<AgentPane>,
+    pub(super) mirrors: HashMap<String, SessionMirror>,
+    /// Sessions whose last mirror attach failed, with the failure time —
+    /// retried after a cooldown instead of at frame rate.
+    pub(super) attach_backoff: HashMap<String, Instant>,
+    /// (session, pane) → converted screen; refreshed per mirror generation.
+    pub(super) cache: HashMap<(String, String), CachedPane>,
+    pub(super) mirror_gen: HashMap<String, u64>,
+    pub(super) activity: HashMap<String, Instant>,
+    /// Keyboard goes to this pane instead of the graph.
+    pub(super) focused: Option<(String, String)>,
+    /// Card hit-boxes from the last paint (screen space).
+    pub(super) rects: Vec<(String, String, Rect)>,
+    /// User-arranged card positions: world-space offset of the card's min
+    /// corner from its anchor node. Absent = automatic outward placement.
+    pub(super) offsets: HashMap<(String, String), Vec2>,
+    /// Parked arrangements (from disk, or from sessions that went away),
+    /// keyed by session name: reclaimed when the session reappears.
+    pub(super) parked: HashMap<String, Vec<(String, Vec2)>>,
+    /// Card currently being dragged.
+    pub(super) drag_card: Option<(String, String)>,
+    /// Corner-grip resize in progress (tg_ sessions only — native resize).
+    pub(super) resize: Option<ResizeDrag>,
+    /// Set on double-click / t: next paint recenters the view on this card.
+    pub(super) fly_to: Option<(String, String)>,
+    /// Position of the t (cycle terminals) key, modulo the pane count.
+    pub(super) cycle: usize,
+    /// The card the terminal cursor is on: highlighted, Enter focuses it.
+    pub(super) cursor: Option<(String, String)>,
+    /// Fuzzy-search scores for panes (aligned with `panes`).
+    pub(super) scores: Vec<Option<u32>>,
+    /// Best terminal hit: index at scoring time plus its key.
+    pub(super) best: Option<(usize, (String, String))>,
+    /// tmux presence, probed once at startup.
+    pub(super) tmux_ok: bool,
+}
+
+impl Terminals {
+    pub(super) fn new(parked: HashMap<String, Vec<(String, Vec2)>>) -> Self {
+        Terminals {
+            seen: Arc::new(Mutex::new(Vec::new())),
+            panes: Vec::new(),
+            mirrors: HashMap::new(),
+            attach_backoff: HashMap::new(),
+            cache: HashMap::new(),
+            mirror_gen: HashMap::new(),
+            activity: HashMap::new(),
+            focused: None,
+            rects: Vec::new(),
+            offsets: HashMap::new(),
+            parked,
+            drag_card: None,
+            resize: None,
+            fly_to: None,
+            cycle: 0,
+            cursor: None,
+            scores: Vec::new(),
+            best: None,
+            tmux_ok: std::process::Command::new("tmux")
+                .arg("-V")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+        }
+    }
+}
 use super::*;
 
 /// Zoom level a double-clicked card flies to — full styled screen, readable.
@@ -257,11 +329,11 @@ impl Viewer {
     /// egui-winit as clipboard events with NO Key event, so they're handled
     /// as Copy/Cut — without that, an agent can't be interrupted.
     pub(super) fn forward_input(&mut self, ui: &egui::Ui) {
-        let Some((session, pane)) = self.focused_term.clone() else {
+        let Some((session, pane)) = self.terms.focused.clone() else {
             return;
         };
-        if !self.mirrors.contains_key(&session) {
-            self.focused_term = None;
+        if !self.terms.mirrors.contains_key(&session) {
+            self.terms.focused = None;
             return;
         }
         let frame_mods = ui.ctx().input(|i| i.modifiers);
@@ -288,7 +360,8 @@ impl Viewer {
                     // the markers, every newline in a multiline paste reads
                     // as Enter — a REPL or agent prompt submits mid-paste.
                     let bracketed = self
-                        .term_cache
+                        .terms
+                        .cache
                         .get(&(session.clone(), pane.clone()))
                         .is_some_and(|c| c.bracketed_paste);
                     if bracketed {
@@ -332,7 +405,7 @@ impl Viewer {
             i.events = keep;
         });
         if !cmds.is_empty()
-            && let Some(m) = self.mirrors.get_mut(&session)
+            && let Some(m) = self.terms.mirrors.get_mut(&session)
         {
             for c in &cmds {
                 m.command(c);
@@ -343,7 +416,7 @@ impl Viewer {
     /// Poll tmux for agent panes anchored in this vault (default server),
     /// publish diffs, wake the UI.
     pub(super) fn start_agent_scan(&self, ctx: egui::Context) {
-        let shared = self.agents_seen.clone();
+        let shared = self.terms.seen.clone();
         let root = self.root.clone();
         std::thread::spawn(move || {
             let allow = agents::default_allowlist();
@@ -366,15 +439,16 @@ impl Viewer {
     /// Snapshot discovery, keep mirrors in sync with it, pump events, and
     /// refresh converted screens per mirror generation.
     pub(super) fn sync_terminals(&mut self, ctx: &egui::Context) {
-        self.agent_panes = self.agents_seen.lock().unwrap().clone();
+        self.terms.panes = self.terms.seen.lock().unwrap().clone();
 
         let sessions: HashSet<String> =
-            self.agent_panes.iter().map(|a| a.session.clone()).collect();
+            self.terms.panes.iter().map(|a| a.session.clone()).collect();
         for s in &sessions {
-            if !self.mirrors.contains_key(s) {
+            if !self.terms.mirrors.contains_key(s) {
                 // failed attaches back off — retrying at frame rate would
                 // spawn tmux processes 60 times a second
                 if self
+                    .terms
                     .attach_backoff
                     .get(s)
                     .is_some_and(|t| t.elapsed() < Duration::from_secs(2))
@@ -386,74 +460,79 @@ impl Viewer {
                 // viewing them in a real terminal.
                 match SessionMirror::attach(s, None, None, move || c.request_repaint()) {
                     Ok(m) => {
-                        self.mirrors.insert(s.clone(), m);
-                        self.attach_backoff.remove(s);
+                        self.terms.mirrors.insert(s.clone(), m);
+                        self.terms.attach_backoff.remove(s);
                     }
                     Err(_) => {
-                        self.attach_backoff.insert(s.clone(), Instant::now());
+                        self.terms.attach_backoff.insert(s.clone(), Instant::now());
                     }
                 }
             }
         }
-        self.attach_backoff.retain(|s, _| sessions.contains(s));
-        self.mirrors
+        self.terms
+            .attach_backoff
+            .retain(|s, _| sessions.contains(s));
+        self.terms
+            .mirrors
             .retain(|s, m| !m.exited && sessions.contains(s));
-        self.term_cache.retain(|(s, _), _| sessions.contains(s));
-        self.term_gen.retain(|s, _| sessions.contains(s));
+        self.terms.cache.retain(|(s, _), _| sessions.contains(s));
+        self.terms.mirror_gen.retain(|s, _| sessions.contains(s));
         // Arrangements are never dropped, only parked by session name and
         // reclaimed when a session with that name reappears (exact pane
         // first, then any spot) — including across viewer restarts via
         // .text-graph/view. Logic lives in state.rs, where it's unit-tested.
-        state::park_absent(&mut self.term_offsets, &mut self.restore_offsets, &sessions);
+        state::park_absent(&mut self.terms.offsets, &mut self.terms.parked, &sessions);
         let pane_keys: Vec<(String, String)> = self
-            .agent_panes
+            .terms
+            .panes
             .iter()
             .map(|a| (a.session.clone(), a.pane.clone()))
             .collect();
-        state::claim(
-            &mut self.term_offsets,
-            &mut self.restore_offsets,
-            &pane_keys,
-        );
+        state::claim(&mut self.terms.offsets, &mut self.terms.parked, &pane_keys);
         let focus_dead = self
-            .focused_term
+            .terms
+            .focused
             .as_ref()
-            .is_some_and(|(s, _)| !self.mirrors.contains_key(s));
+            .is_some_and(|(s, _)| !self.terms.mirrors.contains_key(s));
         if focus_dead {
-            self.focused_term = None;
+            self.terms.focused = None;
         }
-        if self.term_selected.as_ref().is_some_and(|(s, p)| {
+        if self.terms.cursor.as_ref().is_some_and(|(s, p)| {
             !self
-                .agent_panes
+                .terms
+                .panes
                 .iter()
                 .any(|a| &a.session == s && &a.pane == p)
         }) {
-            self.term_selected = None;
+            self.terms.cursor = None;
         }
         // A focused pane killed externally (session survives) must release
         // the keyboard — otherwise every keystroke drains into a dead
         // target while all graph keybinds stay suspended.
-        if self.focused_term.as_ref().is_some_and(|(s, p)| {
+        if self.terms.focused.as_ref().is_some_and(|(s, p)| {
             !self
-                .agent_panes
+                .terms
+                .panes
                 .iter()
                 .any(|a| &a.session == s && &a.pane == p)
         }) {
-            self.focused_term = None;
+            self.terms.focused = None;
         }
 
-        for (s, m) in &mut self.mirrors {
+        for (s, m) in &mut self.terms.mirrors {
             if m.pump() {
-                self.term_activity.insert(s.clone(), Instant::now());
+                self.terms.activity.insert(s.clone(), Instant::now());
             }
             let mgen = m.generation();
-            if self.term_gen.get(s).copied() != Some(mgen) {
-                self.term_gen.insert(s.clone(), mgen);
+            if self.terms.mirror_gen.get(s).copied() != Some(mgen) {
+                self.terms.mirror_gen.insert(s.clone(), mgen);
                 let grids = m.grids();
-                self.term_cache
+                self.terms
+                    .cache
                     .retain(|(cs, cp), _| cs != s || grids.iter().any(|(p, _)| p == cp));
                 for (pane, grid) in grids {
-                    self.term_cache
+                    self.terms
+                        .cache
                         .insert((s.clone(), pane), build_cached(&grid));
                 }
             }
@@ -461,7 +540,8 @@ impl Viewer {
 
         // glow fades need a few follow-up frames
         if self
-            .term_activity
+            .terms
+            .activity
             .values()
             .any(|t| t.elapsed() < Duration::from_secs(2))
         {
@@ -470,10 +550,10 @@ impl Viewer {
     }
 
     pub(super) fn paint_terminals(&mut self, painter: &egui::Painter, rect: Rect, view: Rect) {
-        self.term_rects.clear();
+        self.terms.rects.clear();
         // one shot per double-click, whether or not the card still exists
-        let recenter = self.zoom_to_card.take();
-        if self.agent_panes.is_empty() {
+        let recenter = self.terms.fly_to.take();
+        if self.terms.panes.is_empty() {
             return;
         }
         let f = (6.0 * self.zoom).clamp(2.5, 16.0);
@@ -485,12 +565,12 @@ impl Viewer {
         let title_h = 16.0;
         let pad = 6.0;
 
-        for (i, a) in self.agent_panes.iter().enumerate() {
+        for (i, a) in self.terms.panes.iter().enumerate() {
             let key = (a.session.clone(), a.pane.clone());
-            let Some(c) = self.term_cache.get(&key) else {
+            let Some(c) = self.terms.cache.get(&key) else {
                 continue;
             };
-            let focused = self.focused_term.as_ref() == Some(&key);
+            let focused = self.terms.focused.as_ref() == Some(&key);
             let anchor = self.anchor_for(&a.cwd);
             let anchor_w = self.world_pos(anchor.0 as usize);
             let anchor_s = self.to_screen(rect, anchor_w);
@@ -507,7 +587,7 @@ impl Viewer {
             // to the anchor (jittered so several cards fan out), past the
             // node's radius in screen space — the tether points inward and
             // the card never sits on top of the cluster it's attached to.
-            let (card, tether_to) = if let Some(off) = self.term_offsets.get(&key) {
+            let (card, tether_to) = if let Some(off) = self.terms.offsets.get(&key) {
                 let card = Rect::from_min_size(anchor_s + *off * self.zoom, size);
                 (card, card.center())
             } else {
@@ -536,7 +616,8 @@ impl Viewer {
             if !view.intersects(card) {
                 continue;
             }
-            self.term_rects
+            self.terms
+                .rects
                 .push((a.session.clone(), a.pane.clone(), card));
 
             // drawn before the card, so it vanishes cleanly behind its edge
@@ -548,13 +629,14 @@ impl Viewer {
             ));
 
             let hot = self
-                .term_activity
+                .terms
+                .activity
                 .get(&a.session)
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
             let searching = self.search_open && !self.query.is_empty();
-            let smatch = searching && self.term_scores.get(i).copied().flatten().is_some();
-            let sbest = searching && self.term_best.as_ref().is_some_and(|(_, bk)| bk == &key);
-            let cursor = self.term_selected.as_ref() == Some(&key);
+            let smatch = searching && self.terms.scores.get(i).copied().flatten().is_some();
+            let sbest = searching && self.terms.best.as_ref().is_some_and(|(_, bk)| bk == &key);
+            let cursor = self.terms.cursor.as_ref() == Some(&key);
             let (border, bw) = if focused {
                 (SELECT, 2.5)
             } else if sbest {
@@ -598,7 +680,7 @@ impl Viewer {
 
             if compact {
                 // metadata beats a TUI's bottom status bar for glanceability
-                let state = match self.term_activity.get(&a.session) {
+                let state = match self.terms.activity.get(&a.session) {
                     Some(t) if t.elapsed() < Duration::from_secs(3) => "active".to_string(),
                     Some(t) => {
                         let s = t.elapsed().as_secs();
@@ -665,7 +747,8 @@ impl Viewer {
     /// next paint (which knows the card's rect at the new zoom).
     pub(super) fn fly_to_card(&mut self, t: (String, String)) {
         if let Some(id) = self
-            .agent_panes
+            .terms
+            .panes
             .iter()
             .find(|a| a.session == t.0 && a.pane == t.1)
             .map(|a| self.anchor_for(&a.cwd))
@@ -673,7 +756,7 @@ impl Viewer {
             self.center = self.world_pos(id.0 as usize);
         }
         self.zoom = CARD_ZOOM;
-        self.zoom_to_card = Some(t);
+        self.terms.fly_to = Some(t);
     }
 
     /// Open a real terminal window attached to the card's session, landed on
@@ -711,11 +794,12 @@ impl Viewer {
             .unwrap_or(false);
         if ok {
             if self
-                .focused_term
+                .terms
+                .focused
                 .as_ref()
                 .is_some_and(|(fs, fp)| fs == session && fp == pane)
             {
-                self.focused_term = None;
+                self.terms.focused = None;
             }
             self.set_flash(format!("killed {session} {pane}"));
         } else {

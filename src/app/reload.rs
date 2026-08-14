@@ -122,7 +122,8 @@ impl Viewer {
     /// deterministic file.
     pub(super) fn snapshot_state(&self) -> state::ViewState {
         let mut cards: Vec<state::CardPos> = self
-            .term_offsets
+            .terms
+            .offsets
             .iter()
             .map(|((s, p), off)| state::CardPos {
                 session: s.clone(),
@@ -131,7 +132,7 @@ impl Viewer {
                 dy: off.y,
             })
             .collect();
-        for (s, list) in &self.restore_offsets {
+        for (s, list) in &self.terms.parked {
             for (p, off) in list {
                 cards.push(state::CardPos {
                     session: s.clone(),

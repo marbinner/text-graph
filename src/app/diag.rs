@@ -16,7 +16,7 @@ impl Viewer {
             + self.g.ambiguities.len()
             + usize::from(self._watcher.is_none())
             + usize::from(self.reload_error.is_some())
-            + self.attach_backoff.len()
+            + self.terms.attach_backoff.len()
     }
 
     /// Badge + expandable health window, drawn over the canvas corner.
@@ -60,7 +60,7 @@ impl Viewer {
                             .color(TEXT),
                     );
                 }
-                for s in self.attach_backoff.keys() {
+                for s in self.terms.attach_backoff.keys() {
                     ui.colored_label(BAD, format!("can't mirror tmux session {s} (retrying)"));
                 }
                 if !self.g.errors.is_empty() {

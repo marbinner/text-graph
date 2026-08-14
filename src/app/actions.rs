@@ -147,7 +147,7 @@ impl Viewer {
         ui.set_min_width(170.0);
         if let Some((s, p)) = self.ctx_card.clone()
             // only while the pane is still alive
-            && self.agent_panes.iter().any(|a| a.session == s && a.pane == p)
+            && self.terms.panes.iter().any(|a| a.session == s && a.pane == p)
         {
             if ui.button("Attach in terminal…").clicked() {
                 self.attach_external(&s, &p);
@@ -192,7 +192,7 @@ impl Viewer {
         if ui.button("New folder…").clicked() {
             self.open_create(true, dir.clone(), label.clone());
         }
-        if self.tmux_ok {
+        if self.terms.tmux_ok {
             ui.separator();
             if ui.button("New terminal").clicked() {
                 let path = self.ctx_path(&dir);
@@ -221,7 +221,7 @@ impl Viewer {
     }
 
     pub(super) fn open_create(&mut self, folder: bool, dir: String, label: String) {
-        self.focused_term = None; // the dialog owns the keyboard now
+        self.terms.focused = None; // the dialog owns the keyboard now
         self.close_search();
         self.create = Some(CreateDialog {
             folder,
