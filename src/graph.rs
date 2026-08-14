@@ -118,6 +118,42 @@ impl Graph {
         self.nodes.push(node);
         id
     }
+
+    // ---- ranger-style tree walking (keyboard navigation) ----
+    // All in the deterministic sorted child order, so the navigator list,
+    // the graph layout, and the key stepping always agree.
+
+    /// (parent, index of `id` within its children). None for root/ghosts.
+    fn sibling_index(&self, id: NodeId) -> Option<(NodeId, usize)> {
+        let parent = self.node(id).parent?;
+        let i = self.node(parent).children.iter().position(|c| *c == id)?;
+        Some((parent, i))
+    }
+
+    /// The sibling `delta` steps away, clamped at the ends; None when the
+    /// move goes nowhere (already at an end, or no parent).
+    pub fn nav_sibling(&self, id: NodeId, delta: isize) -> Option<NodeId> {
+        let (parent, i) = self.sibling_index(id)?;
+        let sibs = &self.node(parent).children;
+        let j = (i as isize + delta).clamp(0, sibs.len() as isize - 1) as usize;
+        (j != i).then(|| sibs[j])
+    }
+
+    /// First or last sibling (vim gg / G).
+    pub fn nav_sibling_end(&self, id: NodeId, last: bool) -> Option<NodeId> {
+        let (parent, _) = self.sibling_index(id)?;
+        let sibs = &self.node(parent).children;
+        if last {
+            sibs.last().copied()
+        } else {
+            sibs.first().copied()
+        }
+    }
+
+    /// Enter a directory: its first child (ranger `l`).
+    pub fn nav_enter(&self, id: NodeId) -> Option<NodeId> {
+        self.node(id).children.first().copied()
+    }
 }
 
 /// Build the full graph from a scan: Contains tree, then link resolution.
@@ -251,6 +287,51 @@ mod tests {
             parent: None,
             children: Vec::new(),
         }
+    }
+
+    /// A tiny hand-wired tree: root -> [a/, z.md], a/ -> [b.md, c.md].
+    fn tree() -> Graph {
+        let mut g = Graph {
+            nodes: Vec::new(),
+            links: Vec::new(),
+            root: NodeId(0),
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            ambiguities: Vec::new(),
+            self_links_dropped: 0,
+        };
+        g.push_node(node(NodeKind::Dir, "")); // 0 root
+        g.push_node(node(NodeKind::Dir, "a")); // 1
+        g.push_node(node(NodeKind::File, "z.md")); // 2
+        g.push_node(node(NodeKind::File, "a/b.md")); // 3
+        g.push_node(node(NodeKind::File, "a/c.md")); // 4
+        g.nodes[0].children = vec![NodeId(1), NodeId(2)];
+        g.nodes[1].parent = Some(NodeId(0));
+        g.nodes[2].parent = Some(NodeId(0));
+        g.nodes[1].children = vec![NodeId(3), NodeId(4)];
+        g.nodes[3].parent = Some(NodeId(1));
+        g.nodes[4].parent = Some(NodeId(1));
+        g
+    }
+
+    #[test]
+    fn tree_walk_steps_clamps_and_enters() {
+        let g = tree();
+        let (a, z, b, c) = (NodeId(1), NodeId(2), NodeId(3), NodeId(4));
+        // j/k between siblings, clamped at the ends
+        assert_eq!(g.nav_sibling(b, 1), Some(c));
+        assert_eq!(g.nav_sibling(c, 1), None, "clamped at last");
+        assert_eq!(g.nav_sibling(c, -1), Some(b));
+        assert_eq!(g.nav_sibling(b, -1), None, "clamped at first");
+        // gg / G
+        assert_eq!(g.nav_sibling_end(c, false), Some(b));
+        assert_eq!(g.nav_sibling_end(b, true), Some(c));
+        // l enters a dir; h is just .parent
+        assert_eq!(g.nav_enter(a), Some(b));
+        assert_eq!(g.nav_enter(z), None, "files have no children");
+        // root has no parent, no siblings
+        assert_eq!(g.nav_sibling(g.root, 1), None);
+        assert_eq!(g.node(a).parent, Some(g.root));
     }
 
     /// The cross-reload identity invariant: a ghost whose raw target text
