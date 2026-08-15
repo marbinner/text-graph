@@ -273,7 +273,7 @@ fn launch_named(
 /// pathological) shifts the pid field, fails its numeric parse, and drops
 /// that line safely — the degradation is a missing card, never a
 /// mis-parsed one.
-pub fn scan(vault: &Path) -> Vec<PaneInfo> {
+pub fn scan(vault: &Path) -> Result<Vec<PaneInfo>, String> {
     let out = Command::new("tmux")
         .args([
             "list-panes",
@@ -282,11 +282,26 @@ pub fn scan(vault: &Path) -> Vec<PaneInfo> {
             "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_anchor}\t#{pane_current_path}",
         ])
         .output();
-    let Ok(out) = out else { return Vec::new() };
+    let Ok(out) = out else {
+        return Ok(Vec::new()); // no tmux binary — the feature is absent
+    };
     if !out.status.success() {
-        return Vec::new();
+        let err = String::from_utf8_lossy(&out.stderr);
+        if no_server(&err) {
+            return Ok(Vec::new()); // the normal "no agents anywhere" state
+        }
+        // server present but the scan errored (dying/wedged server): a
+        // FAILURE, so the caller can keep its last snapshot instead of
+        // tearing down every card and mirror over one bad poll
+        return Err(err.trim().to_string());
     }
-    parse_scan(&String::from_utf8_lossy(&out.stdout), vault)
+    Ok(parse_scan(&String::from_utf8_lossy(&out.stdout), vault))
+}
+
+/// A non-zero `list-panes` exit that just means "no server on this
+/// socket" — tmux phrases it both ways depending on version/state.
+fn no_server(stderr: &str) -> bool {
+    stderr.contains("no server running") || stderr.contains("error connecting")
 }
 
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
@@ -483,6 +498,16 @@ mod tests {
         let t1 = t0 + Duration::from_secs(2); // well inside GRACE
         let active = tr.update(&[pane_pid("work", "vim", 999)], &allow, t1);
         assert!(active.is_empty(), "revived onto a new server's pane");
+    }
+
+    #[test]
+    fn no_server_stderr_is_not_a_failure() {
+        assert!(no_server(
+            "error connecting to /tmp/tmux-1000/default (No such file or directory)"
+        ));
+        assert!(no_server("no server running on /tmp/tmux-1000/default"));
+        assert!(!no_server("server exited unexpectedly"));
+        assert!(!no_server("protocol version mismatch"));
     }
 
     #[test]

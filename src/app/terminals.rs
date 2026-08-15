@@ -525,14 +525,29 @@ impl Viewer {
         std::thread::spawn(move || {
             let allow = agents::default_allowlist();
             let mut tracker = agents::Tracker::new();
+            let mut failing_since: Option<Instant> = None;
             loop {
-                let panes = agents::scan(&root);
-                let active = tracker.update(&panes, &allow, Instant::now());
-                {
+                let publish = |active: Vec<agents::AgentPane>| {
                     let mut s = shared.lock().unwrap();
                     if *s != active {
                         *s = active;
                         ctx.request_repaint();
+                    }
+                };
+                match agents::scan(&root) {
+                    Ok(panes) => {
+                        failing_since = None;
+                        publish(tracker.update(&panes, &allow, Instant::now()));
+                    }
+                    // a transient scan failure (server dying/wedged) keeps
+                    // the LAST snapshot — one bad poll must not blank every
+                    // card and drop terminal focus. Persist past GRACE and
+                    // we stop showing cards we can no longer verify.
+                    Err(_) => {
+                        let since = *failing_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() > agents::GRACE {
+                            publish(Vec::new());
+                        }
                     }
                 }
                 std::thread::sleep(Duration::from_millis(1500));
