@@ -299,6 +299,8 @@ struct Viewer {
     n_images: usize,
     n_assets: usize,
     n_webs: usize,
+    /// Web nodes visible (the `w` toggle; persisted inverted as hide_web).
+    show_web: bool,
     // ---- search ----
     matcher: Matcher,
     /// Per-node "name aliases path" string the fuzzy pattern scores against.
@@ -442,6 +444,7 @@ impl Viewer {
         let (reload_tx, reload_rx) = std::sync::mpsc::channel();
         let vs = state::load(&root);
         let cam = vs.camera;
+        let show_web = !vs.hide_web;
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
         for c in vs.cards {
             restore_offsets
@@ -471,6 +474,7 @@ impl Viewer {
             n_images,
             n_assets,
             n_webs,
+            show_web,
             matcher: Matcher::new(Config::DEFAULT),
             haystacks,
             search_open: false,
@@ -546,7 +550,7 @@ impl Viewer {
         if self.create.is_some() {
             return; // the create dialog owns the keyboard
         }
-        let (open_key, esc, enter, frame_key, reset, term_key) = ui.input(|i| {
+        let (open_key, esc, enter, frame_key, reset, term_key, web_key) = ui.input(|i| {
             (
                 i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
                 i.key_pressed(Key::Escape),
@@ -554,6 +558,7 @@ impl Viewer {
                 i.modifiers.is_none() && i.key_pressed(Key::Z),
                 i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
                 i.modifiers.is_none() && i.key_pressed(Key::T),
+                i.modifiers.is_none() && i.key_pressed(Key::W),
             )
         });
         if self.search_open {
@@ -625,6 +630,18 @@ impl Viewer {
             self.frame_node(sel);
         } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
+        } else if web_key && ui.memory(|m| m.focused().is_none()) {
+            // toggle web (cited-URL) nodes — the sim keeps simulating them,
+            // so this never reflows the layout
+            self.show_web = !self.show_web;
+            self.set_flash(
+                if self.show_web {
+                    "web links shown — w hides them"
+                } else {
+                    "web links hidden — w brings them back"
+                }
+                .into(),
+            );
         } else if term_key && ui.memory(|m| m.focused().is_none()) && !self.terms.panes.is_empty() {
             // hop the terminal cursor to the next card — keyboard stays on
             // the graph so repeated t keeps hopping; Enter dives in
@@ -1144,6 +1161,11 @@ impl Viewer {
         let view = rect.expand(60.0);
         let mut visible: Vec<(NodeId, Pos2, f32)> = Vec::new();
         for i in 0..self.g.nodes.len() {
+            // hidden web nodes are skipped at render/hit-test only — the
+            // sim keeps simulating them, so toggling never reflows
+            if !self.show_web && self.g.nodes[i].kind == NodeKind::Web {
+                continue;
+            }
             let s = self.to_screen(rect, self.world_pos(i));
             // images render as thumbnails, so their "radius" is the box
             // half-height with a much larger cap — hover targets, rings, and
@@ -1340,6 +1362,9 @@ impl Viewer {
         // wikilink edges — always visible as faint curves, bright when they
         // touch the active node
         for l in &self.g.links {
+            if l.kind == LinkKind::External && !self.show_web {
+                continue;
+            }
             let sa = self.to_screen(rect, self.world_pos(l.from.0 as usize));
             let sb = self.to_screen(rect, self.world_pos(l.to.0 as usize));
             if !view.intersects(Rect::from_two_pos(sa, sb)) {
@@ -1654,7 +1679,7 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs{}{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
+                    "{} files · {} dirs{}{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · w web · 0 reset",
                     self.n_files,
                     self.n_dirs,
                     if self.n_images > 0 {

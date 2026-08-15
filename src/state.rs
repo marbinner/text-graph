@@ -17,6 +17,9 @@ pub struct ViewState {
     pub cards: Vec<CardPos>,
     /// (session, pane) cards pinned open — expanded at any zoom.
     pub pins: Vec<(String, String)>,
+    /// Web nodes hidden by the `w` toggle. Stored inverted so the derived
+    /// Default (false) means the default view: webs visible.
+    pub hide_web: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,6 +46,9 @@ pub fn to_text(s: &ViewState) -> String {
     }
     for (session, pane) in &s.pins {
         out.push_str(&format!("pin\t{pane}\t{session}\n"));
+    }
+    if s.hide_web {
+        out.push_str("hide_web\n");
     }
     out
 }
@@ -72,6 +78,7 @@ pub fn from_text(text: &str) -> ViewState {
                     });
                 }
             }
+            Some("hide_web") => s.hide_web = true,
             Some("pin") => {
                 let fields: Vec<&str> = line.splitn(3, '\t').collect();
                 if let [_, pane, session] = fields[..] {
@@ -187,6 +194,7 @@ mod tests {
                 ("tg_claude".to_string(), "%4".to_string()),
                 ("work".to_string(), "%0".to_string()),
             ],
+            hide_web: true,
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }
@@ -197,6 +205,7 @@ mod tests {
             camera: None,
             cards: vec![card("weird\tname", "%1", 1.0, 2.0)],
             pins: vec![("weird\tname".to_string(), "%1".to_string())],
+            hide_web: false,
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }

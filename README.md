@@ -30,8 +30,10 @@ graph live-reloads when you save.
 | **Asset node** | every other visible file — code, config, data, binaries. Text-classified assets get previews; all are linkable by full name (`[[data.csv]]`) |
 | **Dir node** | every directory with files somewhere beneath it |
 | **Ghost node** | a `[[target]]` that resolves to nothing — a note you've referenced but not written; drawn hollow |
+| **Web node** | every external URL cited anywhere — ONE cyan globe per normalized URL however many notes cite it, so shared sources become visible bridges between their citers; `w` toggles them, Enter/double-click opens the browser |
 | **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton |
 | **WikiLink edge** | `[[...]]` in note bodies; drawn as faint curves, bright on the hovered node |
+| **External edge** | note → cited URL; fainter cyan curves — context, not structure |
 
 Big enough to read, every node paints as its **file-type icon** (Nerd Font
 glyphs bundled in `assets/icons.ttf`): the python logo on `.py`, the css
@@ -105,6 +107,7 @@ the agent until `Ctrl+Q`.
 | drag a node | move it — pins to the cursor, the simulation responds live |
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
+| `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals; matches stay lit, `Enter` jumps to the ringed best hit (a winning terminal lands focused, ready to type), `Esc` closes |
 
 ### Navigator (a node is selected)

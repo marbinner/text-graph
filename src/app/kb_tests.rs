@@ -106,6 +106,16 @@ fn structure_identical_reload_keeps_sim_still_and_dwell_alive() {
 }
 
 #[test]
+fn w_toggles_web_nodes() {
+    let mut h = harness();
+    assert!(h.state().show_web, "webs visible by default");
+    press(&mut h, Key::W);
+    assert!(!h.state().show_web);
+    press(&mut h, Key::W);
+    assert!(h.state().show_web);
+}
+
+#[test]
 fn hjkl_walks_the_tree_when_a_node_is_selected() {
     let mut h = harness();
     // root's files in sorted order: bom, empty, frontmatter-only, index

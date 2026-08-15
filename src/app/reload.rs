@@ -191,6 +191,7 @@ impl Viewer {
             camera: Some((self.center.x, self.center.y, self.zoom)),
             cards,
             pins,
+            hide_web: !self.show_web,
         }
     }
 

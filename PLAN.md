@@ -317,7 +317,7 @@ MCP stays deferred to Phase 2 as a thin adapter over the same files. No
 sockets, no daemons: message latency is dominated by agent thinking time,
 and every layer stays inspectable as plain files.
 
-**G — external web links as nodes (planned 2026-08-15).** URLs cited in
+**G — external web links as nodes (✓ done 2026-08-15, same day).** URLs cited in
 notes become first-class leaf nodes, modeled on ghosts: no tree parent,
 seeded near the first referencer, identity = the normalized URL (can never
 collide with a path — paths don't contain `://`). Deduplication is the
