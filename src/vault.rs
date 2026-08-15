@@ -155,6 +155,10 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     paths.sort();
     images.sort();
     assets.sort();
+    // walk errors too: the walker yields them in raw readdir order, and
+    // g.errors flows verbatim into stats output and the diag window (read
+    // errors, appended below, already follow sorted path order)
+    errors.sort_by(|a: &ScanError, b| (&a.rel_path, &a.message).cmp(&(&b.rel_path, &b.message)));
 
     let mut files = Vec::with_capacity(paths.len());
     for (rel, path) in paths {
@@ -453,6 +457,33 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Walk errors must come out sorted — readdir order is not stable
+    /// across filesystems/runs, and errors print verbatim in stats and the
+    /// diag window. (Skips quietly where permissions can't fail, e.g. root.)
+    #[test]
+    fn walk_errors_are_sorted_not_readdir_ordered() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = std::env::temp_dir().join(format!("tg-walkerr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for name in ["b-locked", "a-locked"] {
+            let sub = d.join(name);
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let scan = scan(&d).unwrap();
+        for name in ["b-locked", "a-locked"] {
+            let _ = std::fs::set_permissions(d.join(name), std::fs::Permissions::from_mode(0o755));
+        }
+        let _ = std::fs::remove_dir_all(&d);
+        if scan.errors.len() < 2 {
+            return; // running as root — unreadable dirs read fine
+        }
+        let msgs: Vec<&String> = scan.errors.iter().map(|e| &e.message).collect();
+        let mut sorted = msgs.clone();
+        sorted.sort();
+        assert_eq!(msgs, sorted, "error order must not depend on readdir");
+    }
 
     #[test]
     fn watch_relevance_rules() {
