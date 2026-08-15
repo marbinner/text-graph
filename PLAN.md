@@ -1,6 +1,6 @@
 # text-graph — Plan
 
-*Last updated 2026-08-15 (v0.3.0, 139 tests). Where to pick up: milestone F
+*Last updated 2026-08-15 (v0.3.0, 146 tests). Where to pick up: milestone F
 (agents talk) is fully spec'd below — design converged, NO code yet; start at
 slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
 step 0, the audit backlog under D. The 2026-08-15 feature wave: asset
@@ -17,7 +17,7 @@ unpin revert, and 8 hardening lows), 4 accepted — see "Audit
 2026-08-15" below.*
 
 **Phase 1 (current):** a fast native GUI over a markdown vault. Point it at a folder of
-`.md` files and it renders an interactive graph. One static Rust binary — egui, no
+`.md` files and it renders an interactive graph. One native Rust binary — egui, no
 webview, no JS, no runtime.
 
 ```
@@ -33,21 +33,23 @@ bottom. Phase-1 architecture is chosen so Phase 2 bolts on without a rewrite.
 ## Data model
 
 Nodes are directories and files; edges are typed and come from multiple sources that
-coexist rather than competing:
+coexist rather than competing. As shipped (grown from the original
+`{Dir, File, Ghost}` / `{Contains, WikiLink}` design):
 
 ```rust
-enum NodeKind { Dir, File, Image, Ghost } // Ghost = referenced but nonexistent target;
-                                          // Image = raster file, rendered as a thumbnail
-enum EdgeKind { Contains, WikiLink }      // later: MdLink, Tag, Embed, Frontmatter
-
-struct Edge { from: NodeId, to: NodeId, kind: EdgeKind }
+enum NodeKind { Dir, File, Image, Asset, Ghost, Web }
+// Ghost = referenced but nonexistent target; Image = raster, rendered as
+// its picture; Asset = any other visible file; Web = a cited URL
+enum LinkKind { WikiLink, External }   // overlay edges; later: Tag, Embed…
+// Contains is the tree itself (per-node children), not an overlay edge
 ```
 
 - **`Contains`** — from the filesystem. A true tree *by construction* (every file has
   exactly one parent dir, no cycles, total coverage). This is the layout spine; no
   cycle-breaking or provenance heuristics needed to trust it.
-- **`WikiLink`** — `[[...]]` references, an overlay on top of the spine. Rendered only
-  for the hovered/selected node.
+- **`WikiLink`** — `[[...]]` references, an overlay on top of the spine — always
+  visible as faint arrowheaded curves, bright on the hovered node;
+  **`External`** (note → cited URL) fainter still.
 - **Memory:** nodes store metadata + extracted links only. Bodies are parsed and
   discarded at ingest; the detail pane (C) reads the selected file on demand.
 
@@ -61,8 +63,9 @@ struct Edge { from: NodeId, to: NodeId, kind: EdgeKind }
 A new edge source later = one extractor function + one match arm in the renderer.
 
 Resolution implements Obsidian semantics and gets its own module + tests: `[[note]]`,
-`[[note|alias]]`, `[[note#heading]]`, `[[note#^block]]`, `[[dir/note]]`;
-shortest-unique-path matching; case-insensitive. Parsing goes through `pulldown-cmark`
+`[[note|alias]]`, `[[note#heading]]`, `[[note#^block]]`, `[[dir/note]]`
+(path-component suffix match); case-insensitive; ambiguity goes to the
+first in sorted path order and is flagged. Parsing goes through `pulldown-cmark`
 events so a `[[link]]` inside a code fence never becomes an edge. Unresolved targets
 become `Ghost` nodes — in the model from A, rendered from C.
 
@@ -74,16 +77,16 @@ become `Ghost` nodes — in the model from A, rendered from C.
   `Asset` node (code/config/data — the viewer runs over code projects with
   agents, not just notes). Build/dependency dirs (`node_modules/`,
   `target/`, `__pycache__/`) are skipped like dotdirs.
-- `![[embeds]]` are skipped. A plain `[[pic.png]]` link resolves to the Image
-  node when the image exists; links to *missing* assets are skipped, not
-  ghosted.
+- `![[embeds]]` are skipped *as edges* (previews render them inline). A plain
+  `[[pic.png]]` link resolves to the Image node when the image exists; links
+  to *missing* assets are skipped, not ghosted.
 - A flat vault (everything in one folder) degrades to a single ring around the root —
   acceptable, not a bug; hover cross-links still make it useful.
 
 ### Robustness on real vaults
 
-Skip `.obsidian/` and `.trash/` explicitly (the walker knows `.gitignore`, not Obsidian
-conventions). Tolerate per-file read/parse errors without aborting the walk. Handle
+Skip `.obsidian/` and `.trash/` explicitly (the walker's hidden-file rules,
+not git's — gitignore semantics are deliberately off). Tolerate per-file read/parse errors without aborting the walk. Handle
 BOM and CRLF. Don't follow symlinks (walker default).
 
 ---
@@ -142,38 +145,26 @@ force layout.
 
 ## Crates
 
-Milestone A (headless core) — keep it to exactly this:
-
-```toml
-[dependencies]
-anyhow         = "1"
-ignore         = "0.4"     # ripgrep's ignore-aware walker
-pulldown-cmark = { version = "0.13", default-features = false }
-serde_yaml_ng  = "0.10"    # frontmatter (serde_yaml is unmaintained)
-```
-
-Added at the milestone that needs them, not before: `eframe`/`egui` 0.36 (B),
-`egui_commonmark` (C — verify egui compat then), `nucleo-matcher` (C), `notify` pinned
-to stable 8.x (C — 9.x is RC). `serde` derive returns when something needs serializing
-— frontmatter reads go through `serde_yaml_ng::Value`, so real vaults' numeric titles
-and arbitrary extra fields don't warn. No `rayon` (`ignore` walks in parallel itself).
-No clap yet — two CLI forms hand-parse; add it if the CLI grows.
+The rule: dependencies are added at the milestone that needs them, never
+before (milestone A shipped on exactly four: anyhow, ignore,
+pulldown-cmark, serde_yaml_ng). Cargo.toml is the current list, each
+entry annotated with why it's there and what was trimmed (glow instead
+of wgpu, loaders-only egui_extras, decoder-scoped image features).
+`serde` derive returns only when something needs serializing —
+frontmatter reads go through `serde_yaml_ng::Value`, so real vaults'
+numeric titles and arbitrary extra fields don't warn. No `rayon`
+(`ignore` walks in parallel itself). No clap — the CLI forms hand-parse;
+add it if the CLI grows.
 
 ---
 
 ## Repo layout
 
-```
-src/
-  vault/     walk + frontmatter/markdown parse + wikilink extraction (string targets)
-  resolve/   Obsidian link resolution: name index, unique-path, case rules. Own tests.
-  graph/     arena, typed edges, queries. Clean public API (Phase 2 depends on it).
-  layout/    pure: graph -> positions. No egui dependency. Snapshot tests.
-  app/       eframe shell: transform, input, painting, panels.
-  main.rs
-fixtures/
-  vault/     synthetic test vault (see below)
-```
+README's *Project layout* section is the maintained map of `src/`
+(fifteen modules now — the original five-module sketch lived here until
+it drifted hopelessly). The invariant that outlasts any listing: every
+lib module stays egui-free and headless-testable; only the bin's `app/`
+tree touches egui.
 
 **Fixture vault is the first commit of milestone A.** It covers: every wikilink variant,
 a `[[link]]` inside a code fence (must not edge), unresolved targets, CRLF/BOM/unicode
@@ -215,7 +206,7 @@ Audit backlog (external audit, 2026-08):
 - Query layer core ✓ done (outlinks/backlinks indexes, by_path/by_ident,
   Link.offset preserved) — JSON/headless output still deferred to Phase 2.
 - app decomposition ✓ done: app/{mod,terminals,navigator,actions,reload,diag}.rs,
-  terminal state grouped in terminals::Terminals. mod.rs ~1,200 lines (canvas +
+  terminal state grouped in terminals::Terminals. mod.rs ~2,100 lines (canvas +
   keys + search).
 - Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
 - License + release packaging (user decision on license first).

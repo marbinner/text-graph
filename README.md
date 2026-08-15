@@ -18,7 +18,7 @@ The vault is the database: nodes are your `.md` files and directories, edges
 come from the directory structure and `[[wikilinks]]`. text-graph never
 edits your notes — it writes only the empty file or folder you explicitly
 create from the right-click menu, plus a small hidden `.text-graph/` state
-dir (camera + card arrangement). Editing happens in your own editor, and the
+dir (camera, card arrangements, pins, theme and agent settings). Editing happens in your own editor, and the
 graph live-reloads when you save.
 
 ## The graph model
@@ -142,7 +142,7 @@ instead of snapping, and never changes your zoom.
 | `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
 | `t` | new **terminal** card at this node's folder, focused and ready to type |
 | `a` | launch the **default agent** (⚙ settings) at this node's folder, focused when it appears |
-| `Esc` | dismiss the link cursor, then deselect — back to camera mode |
+| `Esc` | dismiss whatever is transient first — find prompt, link cursor — then deselect, back to camera mode |
 
 ### Terminal cards
 
@@ -315,7 +315,7 @@ src/
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
-  keys.rs     keyboard → send-keys commands (tmux names + raw hex)
+  keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
   app/        egui shell: transform, input, painting, search, navigator,
               reload worker, terminal cards + focus; images.rs = thumbnail
               textures, previews.rs = text previews + hover popup,
@@ -338,7 +338,7 @@ agents can read/write the graph, then LLM-assisted ingest).
 ## Development
 
 ```
-cargo test      # unit + integration; integration asserts fixtures/EXPECTED.md
+cargo test --all-targets   # unit + integration (asserts fixtures/EXPECTED.md exactly)
 cargo clippy --all-targets
 ```
 
