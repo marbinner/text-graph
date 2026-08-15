@@ -3,11 +3,14 @@
 *Last updated 2026-08-15 (v0.3.0, 127 tests). Where to pick up: milestone F
 (agents talk) is fully spec'd below — design converged, NO code yet; start at
 slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
-step 0, the audit backlog under D. The 2026-08-15 wave (v0.3.0): asset
-nodes + file-type icons, metadata hover popups everywhere, Obsidian-flavored
-previews, milestone G (web nodes), directed/tapered edges + depth-scaled
-hierarchy, camera glides, edit-in-graph cards (@tg_anchor), and the
-launch-PATH + busy-agent-hover fixes.*
+step 0, the audit backlog under D. The 2026-08-15 wave (v0.3.0, 128
+tests): asset nodes + file-type icons, metadata hover popups everywhere,
+Obsidian-flavored previews, milestone G (web nodes), directed/tapered
+edges + depth-scaled hierarchy, camera glides, edit-in-graph cards
+(@tg_anchor), ⚙ settings (dark/light Theme, default agent), launch
+keybinds (e/t/a at the selection, auto-focused cards), and the
+launch-PATH (server + client + rescue bin dirs) + busy-agent-hover
+fixes.*
 
 **Phase 1 (current):** a fast native GUI over a markdown vault. Point it at a folder of
 `.md` files and it renders an interactive graph. One static Rust binary — egui, no

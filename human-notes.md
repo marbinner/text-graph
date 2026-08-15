@@ -31,9 +31,9 @@
 - make it so I can drag and drop files and paste shit into the gui.
 
 # in progress
-- when I start a new terminal/agent it should be focused by default. also I wanna start adding more keybindngs. For example when I have a folder focused and I press 'a' then the default agent pane should open in that folder. When I press t a terminal pane should open. (remove the existing keybinding that says t shoudl jump between panes. we don't need that). when I press e it should open the node in my default editor, whether it is a text file or a folder.
 
 # done
+- when I start a new terminal/agent it should be focused by default. also I wanna start adding more keybindngs. For example when I have a folder focused and I press 'a' then the default agent pane should open in that folder. When I press t a terminal pane should open. (remove the existing keybinding that says t shoudl jump between panes. we don't need that). when I press e it should open the node in my default editor, whether it is a text file or a folder.
 - have a menu for settings.
     - light mode vs. dark mode
     - default agent and then when I click the launch agent button without selecting a specific one it launches the default one. Pi should be the default for now.

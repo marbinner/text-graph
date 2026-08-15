@@ -217,6 +217,25 @@ fn paint_glyph_node(
 const LABEL_RAMP_DIR: (f32, f32) = (2.0, 3.2);
 const LABEL_RAMP: (f32, f32) = (2.6, 4.2);
 
+/// Was `key` pressed this frame as a FRESH press (key repeat excluded)?
+/// Launch-style keybinds must not fire per repeat tick — holding e/t/a
+/// would otherwise spawn a session per tick.
+fn pressed_fresh(ui: &egui::Ui, key: Key) -> bool {
+    ui.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Key {
+                    key: k,
+                    pressed: true,
+                    repeat: false,
+                    ..
+                } if *k == key
+            )
+        })
+    })
+}
+
 /// 0 below the ramp, 1 above it — how strongly a node's label shows at
 /// this screen radius.
 fn label_lod(kind: NodeKind, r: f32) -> f32 {
@@ -716,20 +735,22 @@ impl Viewer {
         if self.create.is_some() {
             return; // the create dialog owns the keyboard
         }
-        let (open_key, esc, enter, frame_key, reset, term_key, web_key, edit_key, agent_key) = ui
-            .input(|i| {
-                (
-                    i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
-                    i.key_pressed(Key::Escape),
-                    i.key_pressed(Key::Enter),
-                    i.modifiers.is_none() && i.key_pressed(Key::Z),
-                    i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
-                    i.modifiers.is_none() && i.key_pressed(Key::T),
-                    i.modifiers.is_none() && i.key_pressed(Key::W),
-                    i.modifiers.is_none() && i.key_pressed(Key::E),
-                    i.modifiers.is_none() && i.key_pressed(Key::A),
-                )
-            });
+        let (open_key, esc, enter, frame_key, reset) = ui.input(|i| {
+            (
+                i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
+                i.key_pressed(Key::Escape),
+                i.key_pressed(Key::Enter),
+                i.modifiers.is_none() && i.key_pressed(Key::Z),
+                i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
+            )
+        });
+        let no_mods = ui.input(|i| i.modifiers.is_none());
+        let (term_key, web_key, edit_key, agent_key) = (
+            no_mods && pressed_fresh(ui, Key::T),
+            no_mods && pressed_fresh(ui, Key::W),
+            no_mods && pressed_fresh(ui, Key::E),
+            no_mods && pressed_fresh(ui, Key::A),
+        );
         if self.search_open {
             if esc {
                 self.close_search();
@@ -746,11 +767,12 @@ impl Viewer {
                     && let Some((_, bk)) = self.terms.best.clone()
                     // resolve by key, not index: the pane list may have
                     // shifted since the scores were computed
-                    && let Some(i) = self.terms.panes
+                    && self
+                        .terms
+                        .panes
                         .iter()
-                        .position(|a| a.session == bk.0 && a.pane == bk.1)
+                        .any(|a| a.session == bk.0 && a.pane == bk.1)
                 {
-                    let _ = i;
                     self.terms.cursor = Some(bk.clone());
                     self.terms.focused = Some(bk.clone());
                     self.fly_to_card(bk);

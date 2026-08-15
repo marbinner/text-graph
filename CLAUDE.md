@@ -127,11 +127,18 @@
 - Card tethers fill a reserved shape slot among the edges (under node
   icons); the hovered node's label paints last, on a backdrop.
 - Agent launches (`agents::launch`) wrap the command as
-  `PATH='<server-global>:<client>' exec <agent>` — the viewer may run with
-  an IDE-stripped PATH and tmux seeds new-session env from its client, so
-  without this the pane dies unfindable in ~25ms and the session vanishes
-  before discovery's scan (`-e PATH=` does NOT reach the initial pane —
-  tested). A 2.5s watchdog flashes when a launched session is already gone.
+  `PATH='<merged>' exec <agent>`, where merged = server global PATH +
+  client PATH + well-known user bin dirs that exist on disk (the rescue
+  for a FRESH server started by an IDE-launched viewer — there is no
+  healthy PATH to borrow then). Without this the pane dies unfindable in
+  ~25ms and the session vanishes before discovery's scan (`-e PATH=` does
+  NOT reach the initial pane — tested). A 2.5s watchdog flashes when a
+  launched session is already gone. Launched sessions auto-focus via
+  `terms.focus_pending` (deadline-guarded) when discovery first shows
+  them.
+- Launch-style keybinds (e/t/a — and l's editor open) must exclude key
+  REPEAT (`pressed_fresh`): a held key would otherwise spawn a session
+  per repeat tick.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
