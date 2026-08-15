@@ -18,6 +18,8 @@ const TEXT_EXTS: &[&str] = &[
     "rs",
     "py",
     "js",
+    "mjs",
+    "cjs",
     "jsx",
     "ts",
     "tsx",
@@ -235,6 +237,9 @@ mod tests {
     fn text_classification() {
         assert!(is_text("src/main.rs"));
         assert!(is_text("style.CSS"));
+        // module JS got the JS icon but was classed binary — no preview/edit
+        assert!(is_text("lib/util.mjs"));
+        assert!(is_text("lib/util.cjs"));
         assert!(is_text("misc/data.csv"));
         assert!(is_text("Makefile"));
         assert!(is_text("docs/LICENSE"));
