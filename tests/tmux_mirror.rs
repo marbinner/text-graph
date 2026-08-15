@@ -216,6 +216,51 @@ fn launch_creates_uniquely_named_tg_sessions() {
     }
 }
 
+/// tmux format-expands the `new-session -c` start-directory, so a literal
+/// `#` in a launch dir must be doubled by launch_named. Regression: a
+/// folder named `#Home` expanded `#H` to the hostname, the pane fell back
+/// to $HOME outside the vault, and its card silently never appeared —
+/// while `x##y` collapsed to the WRONG existing directory `x#y`.
+#[test]
+fn launch_survives_hash_in_directory_names() {
+    let have_tmux = Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !have_tmux {
+        eprintln!("tmux not installed — skipping");
+        return;
+    }
+
+    let socket = format!("tg-test-hash-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
+    let base = std::env::temp_dir().join(format!("tg-hash-{}", std::process::id()));
+    let dir = base.join("#Home");
+    std::fs::create_dir_all(&dir).expect("create #Home dir");
+
+    let name = agents::launch_shell(Some(&socket), &dir).expect("launch into #Home");
+    let out = Command::new("tmux")
+        .args([
+            "-L",
+            &socket,
+            "display-message",
+            "-p",
+            "-t",
+            &name,
+            "#{pane_current_path}",
+        ])
+        .output()
+        .expect("display-message");
+    let cwd = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let _ = std::fs::remove_dir_all(&base);
+    assert_eq!(
+        cwd,
+        dir.to_string_lossy(),
+        "pane must start in the literal '#'-containing directory"
+    );
+}
+
 /// Input path end to end: keystrokes sent through the same `keys::` commands
 /// the GUI uses must come back through the mirror (tty echo of `cat`).
 #[test]

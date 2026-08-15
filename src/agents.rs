@@ -228,7 +228,11 @@ fn launch_named(
             "26",
             "-c",
         ]);
-        c.arg(dir);
+        // tmux format-expands the `-c` start-directory (same machinery as
+        // the `-c "#{pane_current_path}"` idiom — verified against a real
+        // server), so a literal `#` must be doubled or `#H`-style aliases
+        // mangle the cwd and `#(cmd)` even runs a format job.
+        c.arg(dir.to_string_lossy().replace('#', "##"));
         if let Some(cmd) = cmd {
             c.arg(path_cmd(good_path.as_deref(), cmd));
         }

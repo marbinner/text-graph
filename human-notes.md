@@ -29,6 +29,7 @@
     - tags
 - fuzzy search across the entire graph including contents of the text files.
 - make it so I can drag and drop files and paste shit into the gui.
+- for opening an agent with 'a' or editor with 'e' or most other bindings like these, we should only have to hover over a node with the cursor, we shouldn't have to click on it first. So I shoudl be able to just hover over a node, press 'e' and then it opens up in the editor. Or I shoudl be able to do the same with 'a' and it opens up the default agent in the corresponding folder.
 
 # in progress
 
