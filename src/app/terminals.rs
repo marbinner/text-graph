@@ -184,10 +184,13 @@ pub(super) struct CachedPane {
     pub(super) cursor: Option<(u16, u16)>,
     /// Pane app requested bracketed paste — pastes get ESC[200~ markers.
     pub(super) bracketed_paste: bool,
-    /// The last screen line with real content — a TUI's status line, a
+    /// The last few screen lines with real content — a TUI's status line, a
     /// shell's last output. Shown on compact cards as "what it's doing".
-    pub(super) summary: Option<String>,
+    pub(super) tail: Vec<String>,
 }
+
+/// How many tail lines a compact card shows.
+pub(super) const TAIL_LINES: usize = 3;
 
 pub(super) fn brighten(c: Color32) -> Color32 {
     Color32::from_rgb(
@@ -254,14 +257,14 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
         }
         rows.push(runs);
     }
-    let summary = text_graph::mirror::summary_line(grid);
+    let tail = text_graph::mirror::tail_lines(grid, TAIL_LINES);
     CachedPane {
         cols: grid.cols,
         total_rows: grid.rows,
         rows,
         cursor: grid.cursor,
         bracketed_paste: grid.bracketed_paste,
-        summary,
+        tail,
     }
 }
 
@@ -687,7 +690,7 @@ impl Viewer {
             let anchor_w = self.world_pos(anchor.0 as usize);
             let anchor_s = self.to_screen(rect, anchor_w);
             let size = if compact {
-                Vec2::new(230.0, 54.0)
+                Vec2::new(260.0, 82.0)
             } else {
                 Vec2::new(
                     c.cols as f32 * adv + pad * 2.0,
@@ -806,18 +809,24 @@ impl Viewer {
 
             if compact {
                 // metadata beats a TUI's bottom status bar for glanceability
-                let state = match self.terms.activity.get(&a.session) {
-                    Some(t) if t.elapsed() < Duration::from_secs(3) => "active".to_string(),
+                let (state, dot) = match self.terms.activity.get(&a.session) {
+                    Some(t) if t.elapsed() < Duration::from_secs(3) => {
+                        ("active".to_string(), AGENT)
+                    }
                     Some(t) => {
                         let s = t.elapsed().as_secs();
-                        if s < 60 {
+                        let label = if s < 60 {
                             format!("idle {s}s")
                         } else {
                             format!("idle {}m", s / 60)
-                        }
+                        };
+                        (label, TEXT)
                     }
-                    None => "quiet".to_string(),
+                    None => ("quiet".to_string(), GHOST),
                 };
+                // status dot in the top-right corner: the one-glance answer
+                // to "which of my agents are doing something right now"
+                cp.circle_filled(Pos2::new(card.max.x - 10.0, card.min.y + 10.0), 3.5, dot);
                 let meta = format!("in {}/ · {}", self.g.node(anchor).display_name(), state);
                 cp.text(
                     card.left_top() + Vec2::new(pad, 20.0),
@@ -826,14 +835,21 @@ impl Viewer {
                     FontId::proportional(10.5),
                     Color32::from_rgb(TERM_FG_T.0, TERM_FG_T.1, TERM_FG_T.2),
                 );
-                // the pane's own last status/output line: what it's doing
-                if let Some(s) = &c.summary {
+                // the pane's last few real lines: what it's actually doing,
+                // newest brightest
+                let n = c.tail.len();
+                for (ti, line) in c.tail.iter().enumerate() {
+                    let color = if ti + 1 == n {
+                        WIKI
+                    } else {
+                        TEXT.gamma_multiply(0.8)
+                    };
                     cp.text(
-                        card.left_top() + Vec2::new(pad, 35.0),
+                        card.left_top() + Vec2::new(pad, 34.0 + ti as f32 * 13.0),
                         Align2::LEFT_TOP,
-                        s,
+                        line,
                         FontId::monospace(9.5),
-                        WIKI,
+                        color,
                     );
                 }
                 continue; // compact cards: no grip — resize is gated off too

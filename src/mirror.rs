@@ -299,11 +299,19 @@ pub fn indexed_rgb(i: u8) -> (u8, u8, u8) {
 /// stripped: for a TUI that's its status line ("✳ Deliberating…"), for a
 /// shell the last output line — an honest "what is it doing right now".
 pub fn summary_line(g: &TermGrid) -> Option<String> {
+    tail_lines(g, 1).pop()
+}
+
+/// The last `n` screen lines with real content, top-to-bottom — compact
+/// cards show them as "what this agent is doing". Box-drawing borders are
+/// trimmed so a TUI frame doesn't read as content.
+pub fn tail_lines(g: &TermGrid, n: usize) -> Vec<String> {
     let cols = g.cols as usize;
-    if cols == 0 {
-        return None;
+    if cols == 0 || n == 0 {
+        return Vec::new();
     }
-    (0..g.rows as usize).rev().find_map(|r| {
+    let mut out: Vec<String> = Vec::new();
+    for r in (0..g.rows as usize).rev() {
         let text: String = g.cells[r * cols..(r + 1) * cols]
             .iter()
             .map(|c| c.ch)
@@ -312,8 +320,15 @@ pub fn summary_line(g: &TermGrid) -> Option<String> {
             .trim()
             .trim_matches(|ch: char| "│┃┆┇╎╏╰╯╭╮─━┄┈┐└┘┌├┤".contains(ch))
             .trim();
-        t.chars().any(char::is_alphanumeric).then(|| t.to_string())
-    })
+        if t.chars().any(char::is_alphanumeric) {
+            out.push(t.to_string());
+            if out.len() == n {
+                break;
+            }
+        }
+    }
+    out.reverse();
+    out
 }
 
 fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
@@ -520,6 +535,19 @@ mod tests {
             None,
             "control-only screen"
         );
+    }
+
+    #[test]
+    fn tail_lines_are_the_last_content_top_to_bottom() {
+        let g = grid(b"one\r\ntwo\r\nthree");
+        assert_eq!(tail_lines(&g, 2), vec!["two", "three"]);
+        assert_eq!(
+            tail_lines(&g, 9),
+            vec!["one", "two", "three"],
+            "asking for more than exists returns what's there"
+        );
+        assert!(tail_lines(&grid(b""), 3).is_empty());
+        assert!(tail_lines(&g, 0).is_empty());
     }
 
     #[test]
