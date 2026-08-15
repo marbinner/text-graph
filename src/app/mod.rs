@@ -1396,6 +1396,11 @@ impl Viewer {
             ));
         }
 
+        // Card tethers belong with the edges — UNDER node icons — but their
+        // endpoints are only known once paint_terminals lays the cards out.
+        // Reserve a slot here; paint_terminals fills it.
+        let tether_slot = painter.add(egui::Shape::Noop);
+
         // nodes
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
@@ -1632,8 +1637,9 @@ impl Viewer {
             );
         }
 
-        // terminal cards, on top of the graph
-        self.paint_terminals(&painter, rect, view);
+        // terminal cards, on top of the graph (their tethers fill the
+        // reserved under-node slot)
+        self.paint_terminals(&painter, rect, view, tether_slot);
 
         // full-content hover preview (dwell to open; tooltip layer)
         self.hover_preview_ui(ui);

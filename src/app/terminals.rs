@@ -652,7 +652,16 @@ impl Viewer {
         }
     }
 
-    pub(super) fn paint_terminals(&mut self, painter: &egui::Painter, rect: Rect, view: Rect) {
+    pub(super) fn paint_terminals(
+        &mut self,
+        painter: &egui::Painter,
+        rect: Rect,
+        view: Rect,
+        tether_slot: egui::layers::ShapeIdx,
+    ) {
+        // tethers accumulate here and land in the reserved slot at the end
+        // — with the edges, under node icons, still behind the cards
+        let mut tethers: Vec<egui::Shape> = Vec::new();
         self.terms.rects.clear();
         // one shot per double-click, whether or not the card still exists
         let recenter = self.terms.fly_to.take();
@@ -752,8 +761,7 @@ impl Viewer {
                 .rects
                 .push((a.session.clone(), a.pane.clone(), card));
 
-            // drawn before the card, so it vanishes cleanly behind its edge
-            painter.extend(egui::Shape::dashed_line(
+            tethers.extend(egui::Shape::dashed_line(
                 &[anchor_s, tether_to],
                 Stroke::new(1.0, EDGE),
                 6.0,
@@ -878,6 +886,7 @@ impl Viewer {
                 paint_resize_grip(&cp, card, border);
             }
         }
+        painter.set(tether_slot, egui::Shape::Vec(tethers));
     }
 
     /// Peek popup: dwell on a COMPACT card and its full screen renders at a

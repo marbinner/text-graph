@@ -23,14 +23,14 @@
 - when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to.
 - make it so I can drag and drop files and paste shit into the gui.
 - make it so the focused pane/terminal is always on top of the non-focused one. Currently other terminals appear on top of the focues one.
-- make graph edges directed and make folder edges more noticable..
-- make it so node icons render on top of edges. Currently the terminal edges going from a folder to a terminal with the dotted eges goes on top of the folder icon which is wrong.
 
 # in progress
-- external web links
+- make graph edges directed and make folder edges more noticable..
 
 
 # done
+- make it so node icons render on top of edges. Currently the terminal edges going from a folder to a terminal with the dotted eges goes on top of the folder icon which is wrong.
+- external web links
 - Make the ranger style navigator and file viewer in the side bar prettier. Currently we don't have good icons for files or folders, and also we need to render the markdown files well and take into account obsidian style references to stuff like [[ref]] and also for external links and images. 
 - when I click to expand a terminal pane / agent pane it should expand so the the preview is in the center of the entire terminal. Currently the preview is like the top left part, but this is unintuitive because I place the preview at the place where I want the terminal to expand not wehre I want the top-leftt to expand from. DOes that make sense? Do you understand what i mean? 
 - when hovering over a node I should be able to see metadata like, when it was created, when it was last edited, how long it is, how many ingoing and outgoing references it has and how many of those are to files in the vault and which ones are external links. I should be able to see size of the file too. Same when hovering over a folder. I should be able to see various stats like  number of files in the folder, 1 layer deep and all layers deep. How many outgoing links it has in total etc.
