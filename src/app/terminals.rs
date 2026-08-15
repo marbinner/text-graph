@@ -407,6 +407,16 @@ pub(super) fn key_char(key: Key) -> Option<char> {
 }
 
 impl Viewer {
+    /// The node a card tethers to: an explicit `@tg_anchor` binding (edit
+    /// sessions pin to their FILE) when it resolves in the current graph,
+    /// else the nearest dir at the pane's cwd.
+    pub(super) fn card_anchor(&self, a: &AgentPane) -> NodeId {
+        a.anchor
+            .as_deref()
+            .and_then(|p| self.g.by_path(p))
+            .unwrap_or_else(|| self.anchor_for(&a.cwd))
+    }
+
     /// Forward this frame's keyboard input to the focused pane, DRAINING the
     /// keyboard events so egui's own focus/shortcut machinery never sees
     /// them — otherwise Tab moves widget focus to a detail-pane button and
@@ -717,7 +727,7 @@ impl Viewer {
                 (font_base.clone(), adv_base, line_h_base)
             };
             let compact = compact_base && !expanded;
-            let anchor = self.anchor_for(&a.cwd);
+            let anchor = self.card_anchor(a);
             let anchor_w = self.world_pos(anchor.0 as usize);
             let anchor_s = self.to_screen(rect, anchor_w);
             let size = if compact {
@@ -992,7 +1002,7 @@ impl Viewer {
             .panes
             .iter()
             .find(|a| a.session == t.0 && a.pane == t.1)
-            .map(|a| self.anchor_for(&a.cwd))
+            .map(|a| self.card_anchor(a))
         {
             self.center = self.world_pos(id.0 as usize);
         }
@@ -1048,34 +1058,73 @@ impl Viewer {
         }
     }
 
+    /// Instant-death watchdog: a command that exits immediately (binary
+    /// not on the pane's PATH, bad flags) takes its session down before
+    /// discovery's next scan — without this a success flash would be the
+    /// only, false, feedback.
+    fn watch_instant_death(&self, ctx: &egui::Context, name: String, what: String) {
+        let sink = self.terms.bg_flash.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(2500));
+            let alive = std::process::Command::new("tmux")
+                .args(["has-session", "-t", &format!("={name}")])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                sink.lock().unwrap().push(format!(
+                    "{what} exited immediately — session {name} is gone (is `{what}` installed?)"
+                ));
+                ctx.request_repaint();
+            }
+        });
+    }
+
     pub(super) fn launch_agent(&mut self, ctx: &egui::Context, dir: &str, agent: &str) {
         let path = self.ctx_path(dir);
         match agents::launch(None, &path, agent) {
             Ok(name) => {
                 self.set_flash(format!("launched {agent} — session {name}"));
-                // Instant-death watchdog: a command that exits immediately
-                // (binary not on the pane's PATH, bad flags) takes its
-                // session down before discovery's next scan — without this
-                // the success flash is the only, false, feedback.
-                let sink = self.terms.bg_flash.clone();
-                let ctx = ctx.clone();
-                let agent = agent.to_string();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(2500));
-                    let alive = std::process::Command::new("tmux")
-                        .args(["has-session", "-t", &format!("={name}")])
-                        .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false);
-                    if !alive {
-                        sink.lock().unwrap().push(format!(
-                            "{agent} exited immediately — session {name} is gone (is `{agent}` installed?)"
-                        ));
-                        ctx.request_repaint();
-                    }
-                });
+                self.watch_instant_death(ctx, name, agent.to_string());
             }
             Err(e) => self.set_flash(format!("launch failed: {e}")),
+        }
+    }
+
+    /// Is this a node "Edit here" applies to — markdown, or a text asset?
+    pub(super) fn editable(&self, id: NodeId) -> bool {
+        let node = self.g.node(id);
+        match node.kind {
+            NodeKind::File => true,
+            NodeKind::Asset => text_graph::filetype::is_text(&node.path),
+            _ => false,
+        }
+    }
+
+    /// Open `id`'s file in the user's terminal editor inside a tg_edit
+    /// tmux session — a live card in the graph, tethered to the FILE node
+    /// itself (via the session's @tg_anchor option, so the binding
+    /// survives viewer restarts). The card dies when the editor exits.
+    pub(super) fn edit_in_graph_terminal(&mut self, ctx: &egui::Context, id: NodeId) {
+        let node = self.g.node(id);
+        let rel = node.path.clone();
+        let abs = self.root.join(&rel);
+        let dir = abs
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.clone());
+        let editor = super::actions::terminal_editor();
+        let cmd = format!(
+            "{editor} '{}'",
+            abs.display().to_string().replace('\'', r"'\''")
+        );
+        match agents::launch_edit(None, &dir, &cmd, &rel) {
+            Ok(name) => {
+                self.set_flash(format!("editing {rel} — session {name}"));
+                self.watch_instant_death(ctx, name, editor);
+            }
+            Err(e) => self.set_flash(format!("edit launch failed: {e}")),
         }
     }
 }

@@ -131,6 +131,7 @@ browser.
 | `f` | find in this directory — fuzzy-jumps the cursor live as you type |
 | `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
+| `e` | **edit in the graph**: the file opens in your terminal editor inside a live `tg_edit` card, tethered to the file's own node (also on right-click); the card dies when the editor exits |
 | `Esc` | dismiss the link cursor, then deselect — back to camera mode |
 
 ### Terminal cards

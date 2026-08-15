@@ -49,6 +49,35 @@ pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
     detached(std::process::Command::new(&prog).args(&args).arg(file))
 }
 
+/// The user's terminal editor: $VISUAL/$EDITOR when it names one, else the
+/// first of hx/nvim/vim/nano/vi on PATH. For editing INSIDE a graph
+/// terminal card — GUI editors ($EDITOR=code) would exit instantly there.
+pub(super) fn terminal_editor() -> String {
+    let env = std::env::var("VISUAL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        });
+    if let Some(ed) = env {
+        let base = ed.split_whitespace().next().unwrap_or("");
+        let base = Path::new(base)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(base);
+        if TERMINAL_EDITORS.contains(&base) {
+            return ed;
+        }
+    }
+    ["hx", "nvim", "vim", "nano"]
+        .into_iter()
+        .find(|b| on_path(b))
+        .unwrap_or("vi")
+        .to_string()
+}
+
 /// A command that opens a new terminal-emulator window and runs whatever is
 /// appended to it. $TERMINAL wins; otherwise the first emulator on PATH.
 pub(super) fn new_terminal_window() -> Option<std::process::Command> {
@@ -162,6 +191,17 @@ impl Viewer {
                     self.kill_pane(&s, &p);
                 }
             });
+            ui.separator();
+        }
+        // a text file: edit it right in the graph, card tethered to the node
+        if let Some(id) = self.ctx_node
+            && self.terms.tmux_ok
+            && self.editable(id)
+        {
+            if ui.button("Edit here (terminal card)").clicked() {
+                let ctx = ui.ctx().clone();
+                self.edit_in_graph_terminal(&ctx, id);
+            }
             ui.separator();
         }
         // a ghost is a referenced-but-unwritten note: offer to make it real

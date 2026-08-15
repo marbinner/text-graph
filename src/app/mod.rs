@@ -631,7 +631,7 @@ impl Viewer {
         if self.create.is_some() {
             return; // the create dialog owns the keyboard
         }
-        let (open_key, esc, enter, frame_key, reset, term_key, web_key) = ui.input(|i| {
+        let (open_key, esc, enter, frame_key, reset, term_key, web_key, edit_key) = ui.input(|i| {
             (
                 i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
                 i.key_pressed(Key::Escape),
@@ -640,6 +640,7 @@ impl Viewer {
                 i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
                 i.modifiers.is_none() && i.key_pressed(Key::T),
                 i.modifiers.is_none() && i.key_pressed(Key::W),
+                i.modifiers.is_none() && i.key_pressed(Key::E),
             )
         });
         if self.search_open {
@@ -711,6 +712,15 @@ impl Viewer {
             self.frame_node(sel);
         } else if reset {
             self.fitted = false; // canvas re-fits on the next frame
+        } else if edit_key
+            && ui.memory(|m| m.focused().is_none())
+            && let Some(sel) = self.selected
+            && self.editable(sel)
+            && self.terms.tmux_ok
+        {
+            // e = edit the selected text file in a graph terminal card
+            let ctx = ui.ctx().clone();
+            self.edit_in_graph_terminal(&ctx, sel);
         } else if web_key && ui.memory(|m| m.focused().is_none()) {
             // toggle web (cited-URL) nodes — the sim keeps simulating them,
             // so this never reflows the layout
@@ -1178,7 +1188,7 @@ impl Viewer {
                         .iter()
                         .find(|a| a.session == t.0 && a.pane == t.1)
                         .map(|a| {
-                            let id = self.anchor_for(&a.cwd);
+                            let id = self.card_anchor(a);
                             self.to_screen(rect, self.world_pos(id.0 as usize))
                         });
                     if let (Some(center), Some(anchor_s)) = (cur_center, anchor_s) {
@@ -1393,7 +1403,7 @@ impl Viewer {
                     .panes
                     .iter()
                     .find(|a| a.session == t.0 && a.pane == t.1)
-                    .map(|a| self.anchor_for(&a.cwd))
+                    .map(|a| self.card_anchor(a))
             } else {
                 self.hover
             };

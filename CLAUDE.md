@@ -93,7 +93,11 @@
   tmux octal-escapes non-printables in FORMAT output (`-F` with a 0x1f
   separator comes back as literal "\037" text; tab passes raw) — any scan
   format change must be verified against a real server, e.g. with
-  `cargo run --example discovery_probe <vault>`.
+  `cargo run --example discovery_probe <vault>`. Cards tether via
+  `card_anchor`: the session's `@tg_anchor` tmux user option (a
+  vault-relative path — edit sessions pin to their FILE node; the binding
+  lives in tmux so it survives viewer restarts) when it resolves, else the
+  nearest dir at the pane's cwd.
 - Card interaction contract: click = focus (keyboard → pane, graph keybinds
   suspend), Ctrl+click = toggle pin (📌 expanded at any zoom, several at
   once, never touches focus; persisted and parked/claimed by session like

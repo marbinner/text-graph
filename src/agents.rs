@@ -24,6 +24,10 @@ pub struct PaneInfo {
     pub pid: u32,
     pub cwd: PathBuf,
     pub command: String,
+    /// The session's `@tg_anchor` user option — a vault-relative path the
+    /// card tethers to (edit sessions pin to their file). Stored IN tmux,
+    /// so it survives viewer restarts and dies with the session.
+    pub anchor: Option<String>,
 }
 
 /// A pane the graph should show as an agent terminal.
@@ -37,6 +41,8 @@ pub struct AgentPane {
     pub agent: String,
     /// True for `tg_*` sessions launched from the graph.
     pub ours: bool,
+    /// See [`PaneInfo::anchor`].
+    pub anchor: Option<String>,
 }
 
 pub fn default_allowlist() -> Vec<String> {
@@ -76,13 +82,25 @@ pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<
     } else {
         slug
     };
-    launch_named(socket, dir, &slug, Some(agent))
+    launch_named(socket, dir, &slug, Some(agent), None)
 }
 
 /// Launch a plain interactive terminal (tmux's default-shell) in a
 /// `tg_term` session at `dir` — a shell card in the graph, no agent.
 pub fn launch_shell(socket: Option<&str>, dir: &Path) -> std::io::Result<String> {
-    launch_named(socket, dir, "term", None)
+    launch_named(socket, dir, "term", None, None)
+}
+
+/// Launch `cmd` (an editor on a file) in a `tg_edit` session cwd'd at
+/// `dir`, with its card pinned to `anchor` (a vault-relative path) via the
+/// session's `@tg_anchor` user option. The session dies with the editor.
+pub fn launch_edit(
+    socket: Option<&str>,
+    dir: &Path,
+    cmd: &str,
+    anchor: &str,
+) -> std::io::Result<String> {
+    launch_named(socket, dir, "edit", Some(cmd), Some(anchor))
 }
 
 /// The PATH a launched agent should resolve against: the server's global
@@ -129,6 +147,7 @@ fn launch_named(
     dir: &Path,
     slug: &str,
     cmd: Option<&str>,
+    anchor: Option<&str>,
 ) -> std::io::Result<String> {
     let tmux = |args: &[&str]| {
         let mut c = Command::new("tmux");
@@ -169,6 +188,13 @@ fn launch_named(
             c.arg(path_cmd(good_path.as_deref(), cmd));
         }
         if c.status()?.success() {
+            if let Some(a) = anchor {
+                // best-effort: a failed set-option just means the card
+                // falls back to its cwd's dir node. NOTE: set-option
+                // rejects the `=` exact-match prefix (has-session takes
+                // it) — plain name, which we just created, so it's exact.
+                let _ = tmux(&["set-option", "-t", &name, "@tg_anchor", a]).status();
+            }
             return Ok(name);
         }
         // probe→create isn't atomic: if the name was claimed in between
@@ -204,7 +230,7 @@ pub fn scan(vault: &Path) -> Vec<PaneInfo> {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}",
+            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_anchor}\t#{pane_current_path}",
         ])
         .output();
     let Ok(out) = out else { return Vec::new() };
@@ -217,9 +243,9 @@ pub fn scan(vault: &Path) -> Vec<PaneInfo> {
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
     text.lines()
         .filter_map(|l| {
-            let mut f = l.splitn(5, '\t');
-            let (Some(session), Some(pane), Some(pid), Some(command), Some(cwd)) =
-                (f.next(), f.next(), f.next(), f.next(), f.next())
+            let mut f = l.splitn(6, '\t');
+            let (Some(session), Some(pane), Some(pid), Some(command), Some(anchor), Some(cwd)) =
+                (f.next(), f.next(), f.next(), f.next(), f.next(), f.next())
             else {
                 return None;
             };
@@ -233,6 +259,7 @@ pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
                 pid: pid.parse().ok()?,
                 cwd,
                 command: command.to_string(),
+                anchor: (!anchor.is_empty()).then(|| anchor.to_string()),
             })
         })
         .collect()
@@ -300,6 +327,7 @@ impl Tracker {
                     cwd: p.cwd.clone(),
                     agent: agent.clone(),
                     ours,
+                    anchor: p.anchor.clone(),
                 });
             }
         }
@@ -319,28 +347,31 @@ mod tests {
 
     #[test]
     fn parse_filters_to_vault() {
-        let text = "work\t%1\t100\tclaude\t/v/notes\n\
-                    other\t%2\t200\tclaude\t/elsewhere\n\
-                    tg_pi_1\t%3\t300\tpi\t/v/notes/topics\n\
+        let text = "work\t%1\t100\tclaude\t\t/v/notes\n\
+                    other\t%2\t200\tclaude\t\t/elsewhere\n\
+                    tg_pi_1\t%3\t300\tpi\t\t/v/notes/topics\n\
+                    tg_edit\t%4\t400\thx\tnotes/a.md\t/v/notes\n\
                     bad-line\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
-        assert_eq!(panes.len(), 2);
+        assert_eq!(panes.len(), 3);
         assert_eq!(panes[0].session, "work");
+        assert_eq!(panes[0].anchor, None, "unset @tg_anchor reads empty");
         assert_eq!(panes[1].pane, "%3");
+        assert_eq!(panes[2].anchor.as_deref(), Some("notes/a.md"));
     }
 
     #[test]
     fn parse_survives_tabs_in_paths_and_drops_tabbed_names_safely() {
         // path is the last field, so an embedded tab stays part of the path
-        let text = "work\t%1\t100\tclaude\t/v/notes/weird\tdir\n";
+        let text = "work\t%1\t100\tclaude\t\t/v/notes/weird\tdir\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].cwd, PathBuf::from("/v/notes/weird\tdir"));
         assert_eq!(panes[0].command, "claude");
         // a tab inside a session name shifts the pid field; the numeric
         // parse fails and the record is DROPPED — never mis-assigned
-        let sheared = "we\tird\t%1\t100\tclaude\t/v/notes\n\
-                       work\t%2\t200\tclaude\t/v/notes\n";
+        let sheared = "we\tird\t%1\t100\tclaude\t\t/v/notes\n\
+                       work\t%2\t200\tclaude\t\t/v/notes\n";
         let panes = parse_scan(sheared, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].session, "work");
@@ -357,6 +388,7 @@ mod tests {
             pid,
             cwd: PathBuf::from("/v"),
             command: command.into(),
+            anchor: None,
         }
     }
 

@@ -1,6 +1,10 @@
 # notes made by human, don't take seriously
 
 # todo
+- how to treat agent context
+    - we want each agent to in essance have their context be a text file that we can search through.
+    - a standard text summarization of an agents history can be fed to any agent harness to have it continue where it left off.
+    - we need to figure out how this should work by default. When we open an agent pane in a folder, what happens to the history? With pi there's probably some easy solution here.
 - sub-agents and agent-to-agent communication.
     - currently planning for this to be tmux based with utils implemented as a lean cli that supports:
     - roster: shows all active agent tmux sessions open in the graph, what their status is, how long they've been running, etc. hopefully some live updating status of what they're doing.
@@ -21,10 +25,8 @@
     - 
 - fuzzy search across the entire graph including contents of the text files.
 - make it so I can drag and drop files and paste shit into the gui.
-- there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
-
-
 # in progress
+- there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
 
 # done
 - when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to. And also make it maintain the same zoom the camera already has, but the camera just refocuses location.

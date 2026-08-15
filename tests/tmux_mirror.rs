@@ -168,6 +168,31 @@ fn launch_creates_uniquely_named_tg_sessions() {
     assert_eq!(second, "tg_sh_2", "name probing must skip the live session");
     let shell = agents::launch_shell(Some(&socket), &dir).expect("shell launch");
     assert_eq!(shell, "tg_term");
+    // edit sessions carry their node binding IN tmux (@tg_anchor), and the
+    // scan format must read it back — verified against a real server, per
+    // the format-change house rule
+    let edit = agents::launch_edit(Some(&socket), &dir, "cat", "notes/x.md").expect("edit launch");
+    assert_eq!(edit, "tg_edit");
+    let out = Command::new("tmux")
+        .args([
+            "-L",
+            &socket,
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{@tg_anchor}",
+        ])
+        .output()
+        .expect("list-panes");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.lines().any(|l| l == "tg_edit\tnotes/x.md"),
+        "@tg_anchor must round-trip through the format: {text:?}"
+    );
+    assert!(
+        text.lines().any(|l| l == "tg_term\t"),
+        "sessions without an anchor read as empty: {text:?}"
+    );
 
     // all sessions exist, cwd'd where we asked
     let out = Command::new("tmux")
