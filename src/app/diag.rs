@@ -49,73 +49,88 @@ impl Viewer {
             .resizable(false)
             .default_width(340.0)
             .show(ctx, |ui| {
-                if self._watcher.is_none() {
-                    ui.colored_label(BAD, "live reload OFF — the file watcher failed to start");
-                }
-                if let Some(e) = &self.reload_error {
-                    ui.colored_label(BAD, format!("last reload failed: {e}"));
-                    ui.label(
-                        RichText::new("showing the previous graph until a save succeeds")
-                            .small()
-                            .color(self.theme.text),
-                    );
-                }
-                // sorted: HashMap order would shuffle the rows between
-                // frames whenever an insert/remove rehashes — reordering
-                // the list under the user's cursor
-                let mut backoff: Vec<&String> = self.terms.attach_backoff.keys().collect();
-                backoff.sort();
-                for s in backoff {
-                    ui.colored_label(BAD, format!("can't mirror tmux session {s} (retrying)"));
-                }
-                if !self.g.errors.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new("unreadable files").strong());
-                    for (path, msg) in &self.g.errors {
-                        ui.colored_label(BAD, format!("{path}: {msg}"));
-                    }
-                }
-                if !self.g.warnings.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new("parse warnings").strong());
-                    for (path, msg) in &self.g.warnings {
-                        if ui
-                            .link(RichText::new(path).color(self.theme.select))
-                            .clicked()
-                        {
-                            jump = self.g.by_path(path);
+                // scrollable: a vault with hundreds of errors/warnings must
+                // not grow the window past the screen and hide its own tail
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        if self._watcher.is_none() {
+                            ui.colored_label(
+                                BAD,
+                                "live reload OFF — the file watcher failed to start",
+                            );
                         }
-                        ui.label(RichText::new(msg).small().color(self.theme.text));
-                    }
-                }
-                if !self.g.ambiguities.is_empty() {
-                    ui.separator();
-                    ui.label(RichText::new("ambiguous links").strong());
-                    for a in &self.g.ambiguities {
-                        let src = self.g.node(a.source).path.clone();
-                        if ui
-                            .link(
+                        if let Some(e) = &self.reload_error {
+                            ui.colored_label(BAD, format!("last reload failed: {e}"));
+                            ui.label(
+                                RichText::new("showing the previous graph until a save succeeds")
+                                    .small()
+                                    .color(self.theme.text),
+                            );
+                        }
+                        // sorted: HashMap order would shuffle the rows between
+                        // frames whenever an insert/remove rehashes — reordering
+                        // the list under the user's cursor
+                        let mut backoff: Vec<&String> = self.terms.attach_backoff.keys().collect();
+                        backoff.sort();
+                        for s in backoff {
+                            ui.colored_label(
+                                BAD,
+                                format!("can't mirror tmux session {s} (retrying)"),
+                            );
+                        }
+                        if !self.g.errors.is_empty() {
+                            ui.separator();
+                            ui.label(RichText::new("unreadable files").strong());
+                            for (path, msg) in &self.g.errors {
+                                ui.colored_label(BAD, format!("{path}: {msg}"));
+                            }
+                        }
+                        if !self.g.warnings.is_empty() {
+                            ui.separator();
+                            ui.label(RichText::new("parse warnings").strong());
+                            for (path, msg) in &self.g.warnings {
+                                if ui
+                                    .link(RichText::new(path).color(self.theme.select))
+                                    .clicked()
+                                {
+                                    jump = self.g.by_path(path);
+                                }
+                                ui.label(RichText::new(msg).small().color(self.theme.text));
+                            }
+                        }
+                        if !self.g.ambiguities.is_empty() {
+                            ui.separator();
+                            ui.label(RichText::new("ambiguous links").strong());
+                            for a in &self.g.ambiguities {
+                                let src = self.g.node(a.source).path.clone();
+                                if ui
+                                    .link(
+                                        RichText::new(format!(
+                                            "{src}: [[{}]] → {}",
+                                            a.target,
+                                            self.g.node(a.chosen).path
+                                        ))
+                                        .color(self.theme.wiki),
+                                    )
+                                    .clicked()
+                                {
+                                    jump = Some(a.source);
+                                }
+                            }
+                        }
+                        if let Some(t) = self.last_reload {
+                            ui.separator();
+                            ui.label(
                                 RichText::new(format!(
-                                    "{src}: [[{}]] → {}",
-                                    a.target,
-                                    self.g.node(a.chosen).path
+                                    "last reload {}s ago",
+                                    t.elapsed().as_secs()
                                 ))
-                                .color(self.theme.wiki),
-                            )
-                            .clicked()
-                        {
-                            jump = Some(a.source);
+                                .small()
+                                .color(self.theme.text),
+                            );
                         }
-                    }
-                }
-                if let Some(t) = self.last_reload {
-                    ui.separator();
-                    ui.label(
-                        RichText::new(format!("last reload {}s ago", t.elapsed().as_secs()))
-                            .small()
-                            .color(self.theme.text),
-                    );
-                }
+                    });
             });
         if let Some(id) = jump {
             self.selected = Some(id);
