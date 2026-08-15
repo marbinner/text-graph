@@ -83,19 +83,21 @@ fn popup_pivot(anchor: Pos2, screen: Rect) -> Align2 {
     }
 }
 
+/// Cap on the raw-text hover preview for Asset files (logs can be huge).
+const ASSET_POPUP_CAP: u64 = 32 * 1024;
+/// Cap on listed entries in Dir / Ghost popups.
+const LIST_CAP: usize = 30;
+
 impl Viewer {
-    /// The full-content hover preview: linger on a File node and its whole
-    /// body renders as markdown; on an Image node, the picture at popup
-    /// size. Non-interactable, tooltip layer, anchored where the dwell
-    /// began.
+    /// The full-content hover preview: linger on any node — a File renders
+    /// its whole body as markdown, an Image the picture at popup size, a
+    /// text Asset its raw head, a Dir its listing, a Ghost its referrers.
+    /// Non-interactable, tooltip layer, anchored where the dwell began.
     pub(super) fn hover_preview_ui(&mut self, ui: &egui::Ui) {
         let Some((id, since, anchor)) = self.hover_since else {
             return;
         };
         let kind = self.g.node(id).kind;
-        if !matches!(kind, NodeKind::File | NodeKind::Image) {
-            return;
-        }
         let elapsed = since.elapsed();
         if elapsed < HOVER_DELAY {
             // wake exactly when the dwell completes
@@ -131,10 +133,26 @@ impl Viewer {
                     ui.label(egui::RichText::new(&path).small().color(TEXT));
                     ui.separator();
                     match kind {
-                        NodeKind::File => {
+                        NodeKind::File | NodeKind::Asset => {
+                            let text_asset = kind == NodeKind::Asset && filetype::is_text(&path);
+                            if kind == NodeKind::Asset && !text_asset {
+                                let size = std::fs::metadata(self.root.join(&path))
+                                    .map(|m| m.len())
+                                    .unwrap_or(0);
+                                ui.label(
+                                    egui::RichText::new(format!("binary file · {size} bytes"))
+                                        .weak(),
+                                );
+                                return;
+                            }
                             if self.hover_body.as_ref().map(|(i, _)| *i) != Some(id) {
-                                let body = vault::read_body(&self.root.join(&path))
-                                    .unwrap_or_else(|e| format!("*error reading file:* {e}"));
+                                let body = if text_asset {
+                                    vault::read_head(&self.root.join(&path), ASSET_POPUP_CAP)
+                                        .unwrap_or_else(|e| format!("error reading file: {e}"))
+                                } else {
+                                    vault::read_body(&self.root.join(&path))
+                                        .unwrap_or_else(|e| format!("*error reading file:* {e}"))
+                                };
                                 self.hover_body = Some((id, body));
                             }
                             // take/put-back so the markdown cache and the
@@ -145,7 +163,22 @@ impl Viewer {
                                     .id_salt("hover-preview-scroll")
                                     .max_height(POPUP_MAX_H)
                                     .show(ui, |ui| {
-                                        CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+                                        if text_asset {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(body.as_str())
+                                                        .monospace()
+                                                        .size(11.0),
+                                                )
+                                                .wrap(),
+                                            );
+                                        } else {
+                                            CommonMarkViewer::new().show(
+                                                ui,
+                                                &mut self.md_cache,
+                                                body,
+                                            );
+                                        }
                                     });
                             }
                             self.hover_body = hb;
@@ -173,7 +206,64 @@ impl Viewer {
                                 }
                             }
                         }
-                        _ => {}
+                        NodeKind::Dir => {
+                            let children = self.g.node(id).children.clone();
+                            ui.label(
+                                egui::RichText::new(format!("{} entries", children.len())).weak(),
+                            );
+                            ui.add_space(2.0);
+                            for c in children.iter().take(LIST_CAP) {
+                                let child = self.g.node(*c);
+                                let (icon, suffix) = match child.kind {
+                                    NodeKind::Dir => (filetype::ICON_FOLDER, "/"),
+                                    NodeKind::Image => (filetype::ICON_IMAGE, ""),
+                                    _ => (filetype::icon_of(&child.path), ""),
+                                };
+                                let color =
+                                    Color32::from_rgb(icon.color.0, icon.color.1, icon.color.2);
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 6.0;
+                                    ui.label(
+                                        egui::RichText::new(icon.glyph)
+                                            .font(icon_font(12.0))
+                                            .color(color),
+                                    );
+                                    ui.label(format!("{}{suffix}", child.display_name()));
+                                });
+                            }
+                            if children.len() > LIST_CAP {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "… and {} more",
+                                        children.len() - LIST_CAP
+                                    ))
+                                    .weak(),
+                                );
+                            }
+                        }
+                        NodeKind::Ghost => {
+                            ui.label(
+                                egui::RichText::new("not written yet — referenced from:").weak(),
+                            );
+                            ui.add_space(2.0);
+                            let refs: Vec<String> = self
+                                .g
+                                .backlinks(id)
+                                .map(|l| self.g.node(l.from).path.clone())
+                                .collect();
+                            for r in refs.iter().take(LIST_CAP) {
+                                ui.label(r.as_str());
+                            }
+                            if refs.len() > LIST_CAP {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "… and {} more",
+                                        refs.len() - LIST_CAP
+                                    ))
+                                    .weak(),
+                                );
+                            }
+                        }
                     }
                 });
             });
