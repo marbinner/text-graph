@@ -40,7 +40,15 @@ impl Previews {
         if !self.cache.contains_key(key) {
             let path = root.join(key);
             let stamp = file_stamp(&path);
-            let excerpt = match vault::read_body(&path) {
+            // markdown gets frontmatter/BOM stripping; any other text file
+            // is read raw (a YAML file opening with `---` is not frontmatter)
+            let is_md = filetype::ext_of(key).is_some_and(|e| e.eq_ignore_ascii_case("md"));
+            let body = if is_md {
+                vault::read_body(&path)
+            } else {
+                vault::read_head(&path, 8 * 1024)
+            };
+            let excerpt = match body {
                 Ok(body) => excerpt(&body),
                 Err(_) => "(unreadable)".to_string(),
             };

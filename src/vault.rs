@@ -1,4 +1,5 @@
-//! Vault scanning: walk a directory of markdown files, parse frontmatter,
+//! Vault scanning: walk a directory (every visible file becomes a leaf —
+//! markdown parsed, images and other assets as paths), parse frontmatter,
 //! and extract wikilink targets (still unresolved strings).
 //!
 //! No global state — every file is parsed independently. Resolution of the
@@ -49,13 +50,24 @@ pub struct VaultScan {
     /// Image files (rel paths, sorted). Not parsed — they become Image
     /// nodes with no links of their own.
     pub images: Vec<String>,
+    /// Every other visible file (rel paths, sorted) — code, config, data,
+    /// binaries. Not parsed; they become Asset nodes.
+    pub assets: Vec<String>,
     /// Files that could not be read; the scan continues past them.
     pub errors: Vec<ScanError>,
 }
 
-/// Directories skipped regardless of hidden-file handling (belt and
-/// suspenders — the walker's hidden filter already covers dotdirs).
-const SKIPPED_DIRS: &[&str] = &[".obsidian", ".trash"];
+/// Directories skipped regardless of hidden-file handling. The dotdirs are
+/// belt and suspenders (the walker's hidden filter already covers them);
+/// the build/dependency dirs matter now that every file type becomes a
+/// node — a `cargo build` must not flood the graph or storm the watcher.
+const SKIPPED_DIRS: &[&str] = &[
+    ".obsidian",
+    ".trash",
+    "node_modules",
+    "target",
+    "__pycache__",
+];
 
 /// Raster formats the scan turns into Image nodes. SVG is excluded — the
 /// viewer has no vector rasterizer.
@@ -73,11 +85,13 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         bail!("vault root {} is not a directory", root.display());
     }
 
-    // Collect .md and image paths. Hidden files/dirs are skipped (.obsidian,
-    // .trash, .git); git-ignore semantics are deliberately disabled — a notes
-    // viewer should show what's on disk, not what git tracks.
+    // Collect every visible file: .md parsed, images and everything else as
+    // leaf paths. Hidden files/dirs are skipped (.obsidian, .trash, .git);
+    // git-ignore semantics are deliberately disabled — the viewer should
+    // show what's on disk, not what git tracks.
     let mut paths: Vec<(String, PathBuf)> = Vec::new();
     let mut images: Vec<String> = Vec::new();
+    let mut assets: Vec<String> = Vec::new();
     let mut errors = Vec::new();
     let walker = ignore::WalkBuilder::new(&root)
         .hidden(true)
@@ -114,6 +128,8 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
             paths.push((rel, path));
         } else if ext.is_some_and(image_ext) {
             images.push(rel_str(&root, &path));
+        } else {
+            assets.push(rel_str(&root, &path));
         }
     }
 
@@ -123,6 +139,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     // component-wise order differs around '/' vs '.'/'-' in dirnames.
     paths.sort();
     images.sort();
+    assets.sort();
 
     let mut files = Vec::with_capacity(paths.len());
     for (rel, path) in paths {
@@ -139,6 +156,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         root,
         files,
         images,
+        assets,
         errors,
     })
 }
@@ -193,21 +211,29 @@ pub fn read_body(path: &Path) -> Result<String> {
 
 /// Should a filesystem event at `p` trigger a vault reload? Hidden
 /// components (.obsidian/.git/.text-graph churn — including our own state
-/// saves) never do; markdown files, image files, and extensionless paths
-/// (directory creates/renames) do. The watcher's one filter — a wrong
-/// `true` costs a pointless rebuild, a wrong `false` costs a stale graph.
+/// saves) and skipped dirs (target/, node_modules/ — build churn) never
+/// do; every other path does, since every visible file is a node now.
+/// The watcher's one filter — a wrong `true` costs a pointless rebuild, a
+/// wrong `false` costs a stale graph.
 pub fn watch_relevant(root: &Path, p: &Path) -> bool {
     let rel = p.strip_prefix(root).unwrap_or(p);
     let hidden = rel
         .components()
         .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')));
-    if hidden {
-        return false;
-    }
-    match rel.extension().and_then(|e| e.to_str()) {
-        Some(ext) => ext.eq_ignore_ascii_case("md") || image_ext(ext),
-        None => true, // directory events (creates, renames)
-    }
+    !hidden && !in_skipped_dir(root, p)
+}
+
+/// Read at most `max_bytes` of a file as (lossy) text — for previewing
+/// Asset files, which have no frontmatter semantics and can be huge (logs)
+/// or binary. A truncated read ends mid-line; callers show it as-is.
+pub fn read_head(path: &Path, max_bytes: u64) -> Result<String> {
+    use std::io::Read as _;
+    let f = std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let mut bytes = Vec::new();
+    f.take(max_bytes)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[derive(Debug, Default)]
@@ -367,9 +393,11 @@ mod tests {
         assert!(rel("notes/a.md"), "markdown edits reload");
         assert!(rel("a.MD"), "case-insensitive extension");
         assert!(rel("newdir"), "extensionless = dir create/rename");
-        assert!(rel("assets/pic.png"), "images are nodes now — they reload");
-        assert!(rel("assets/pic.JPEG"), "case-insensitive image extension");
-        assert!(!rel("assets/data.bin"), "other non-md files don't");
+        assert!(rel("assets/pic.png"), "images are nodes — they reload");
+        assert!(rel("assets/data.bin"), "every visible file is a node now");
+        assert!(rel("src/main.rs"), "code files too");
+        assert!(!rel("target/debug/foo.d"), "build churn must not reload");
+        assert!(!rel("node_modules/x/index.js"), "dependency churn neither");
         assert!(
             !rel(".text-graph/view"),
             "our own state saves must not loop"

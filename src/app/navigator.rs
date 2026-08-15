@@ -5,11 +5,19 @@
 use super::*;
 
 impl Viewer {
+    /// Cap on the raw-text detail read for Asset files — logs can be huge,
+    /// and the pane is a glance, not an editor.
+    const ASSET_DETAIL_CAP: u64 = 64 * 1024;
+
     pub(super) fn load_body(&self, id: NodeId) -> String {
         let node = self.g.node(id);
         match node.kind {
             NodeKind::File => vault::read_body(&self.root.join(&node.path))
                 .unwrap_or_else(|e| format!("*error reading file:* {e}")),
+            NodeKind::Asset if filetype::is_text(&node.path) => {
+                vault::read_head(&self.root.join(&node.path), Self::ASSET_DETAIL_CAP)
+                    .unwrap_or_else(|e| format!("error reading file: {e}"))
+            }
             _ => String::new(),
         }
     }
@@ -108,7 +116,7 @@ impl Viewer {
             }
             ui.label(egui::RichText::new(&display).strong());
         });
-        ui.label(egui::RichText::new(sub).small().color(TEXT));
+        ui.label(egui::RichText::new(sub.as_str()).small().color(TEXT));
         ui.separator();
 
         // ranger columns: siblings (cursor) | preview of the selection
@@ -255,6 +263,41 @@ impl Viewer {
                                 }
                             }
                         }
+                        NodeKind::Asset => {
+                            if ui.button("open  (Enter / l)").clicked() {
+                                self.open_in_editor(sel);
+                            }
+                            ui.add_space(4.0);
+                            if filetype::is_text(&sub) {
+                                let detail = self.detail.take();
+                                if let Some((_, body)) = &detail {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("nav-preview")
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(body.as_str())
+                                                        .monospace()
+                                                        .size(11.0),
+                                                )
+                                                .wrap(),
+                                            );
+                                        });
+                                }
+                                self.detail = detail;
+                            } else {
+                                let size = std::fs::metadata(self.root.join(&sub))
+                                    .map(|m| m.len())
+                                    .unwrap_or(0);
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "binary file · {size} bytes — Enter opens it externally"
+                                    ))
+                                    .weak(),
+                                );
+                            }
+                        }
                         NodeKind::Ghost => {
                             ui.label("Not written yet. Referenced from:");
                             ui.add_space(4.0);
@@ -280,6 +323,7 @@ impl Viewer {
                 match n.kind {
                     NodeKind::Dir => entries.push((id, DIR, format!("▸ {}/", n.display_name()))),
                     NodeKind::Image => entries.push((id, IMG, format!("▸ {}", n.display_name()))),
+                    NodeKind::Asset => entries.push((id, ASSET, format!("▸ {}", n.display_name()))),
                     _ => entries.push((id, FILE, format!("▸ {}", n.display_name()))),
                 }
             }

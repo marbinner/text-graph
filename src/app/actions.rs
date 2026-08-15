@@ -313,7 +313,8 @@ impl Viewer {
         let path = self.root.join(&node.path);
         let result = match node.kind {
             NodeKind::File => spawn_editor(&path),
-            NodeKind::Dir | NodeKind::Image => {
+            NodeKind::Asset if filetype::is_text(&node.path) => spawn_editor(&path),
+            NodeKind::Dir | NodeKind::Image | NodeKind::Asset => {
                 detached(std::process::Command::new("xdg-open").arg(&path))
             }
             NodeKind::Ghost => return,

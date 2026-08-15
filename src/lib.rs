@@ -11,6 +11,7 @@
 
 pub mod agents;
 pub mod create;
+pub mod filetype;
 pub mod graph;
 pub mod keys;
 pub mod layout;

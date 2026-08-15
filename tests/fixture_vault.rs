@@ -33,13 +33,11 @@ fn expected_counts() {
     let g = build_fixture();
     let s = stats::compute(&g);
     assert_eq!(s.files, 13, "file nodes");
-    assert_eq!(
-        s.dirs, 7,
-        "dir nodes (misc pruned, assets kept for its image)"
-    );
+    assert_eq!(s.dirs, 8, "dir nodes (misc appears via its csv asset)");
     assert_eq!(s.images, 1, "image nodes");
+    assert_eq!(s.assets, 1, "asset nodes (misc/data.csv)");
     assert_eq!(s.ghosts, 2, "ghost nodes");
-    assert_eq!(s.contains_edges, 20);
+    assert_eq!(s.contains_edges, 22);
     assert_eq!(s.wiki_to_files, 16);
     assert_eq!(s.wiki_to_images, 1, "[[diagram.png]] in index.md");
     assert_eq!(s.wiki_to_ghosts, 2);
@@ -53,14 +51,14 @@ fn expected_counts() {
 fn depth_histogram() {
     let g = build_fixture();
     let s = stats::compute(&g);
-    let h: Vec<(usize, (usize, usize, usize))> = s.depth_hist.into_iter().collect();
+    let h: Vec<(usize, (usize, usize, usize, usize))> = s.depth_hist.into_iter().collect();
     assert_eq!(
         h,
         vec![
-            (0, (1, 0, 0)),
-            (1, (5, 4, 0)),
-            (2, (1, 7, 1)),
-            (3, (0, 2, 0))
+            (0, (1, 0, 0, 0)),
+            (1, (6, 4, 0, 0)),
+            (2, (1, 7, 1, 1)),
+            (3, (0, 2, 0, 0))
         ]
     );
 }
@@ -143,15 +141,25 @@ fn traps_embeds_and_skip_dirs_leave_no_trace() {
     // surface as ghost nodes if extraction regressed
     assert!(!g.nodes.iter().any(|n| n.path.contains("trap")));
     assert!(!g.nodes.iter().any(|n| n.path.contains("embedded-note")));
-    // non-md, non-image files are not nodes, and their dirs are pruned
-    assert!(!g.nodes.iter().any(|n| n.path.contains("data.csv")));
-    assert!(!g.nodes.iter().any(|n| n.path == "misc"));
     // .trash canary: its [[index]] must not be counted anywhere
     assert!(
         !g.nodes
             .iter()
             .any(|n| n.path.contains(".trash") || n.path.contains(".obsidian"))
     );
+}
+
+/// Every other file type is an Asset node (with its dir chain), addressable
+/// like an image — by full filename.
+#[test]
+fn other_files_are_asset_nodes() {
+    let g = build_fixture();
+    let csv = find(&g, "misc/data.csv");
+    assert_eq!(g.node(csv).kind, NodeKind::Asset);
+    assert_eq!(g.node(csv).name, "data.csv", "name keeps the extension");
+    let misc = find(&g, "misc");
+    assert_eq!(g.node(misc).kind, NodeKind::Dir);
+    assert_eq!(g.node(csv).parent, Some(misc));
 }
 
 #[test]
@@ -256,9 +264,9 @@ fn stats_render_snapshot() {
     let text = stats::render(&g, &s);
     let expected = "\
 vault: vault
-nodes: 23 total = 13 files + 7 dirs + 1 image + 2 ghosts
-edges: 20 contains, 19 wikilinks (16 -> files, 1 -> images, 2 -> ghosts)
-depth: d0: 1 dir | d1: 5 dirs + 4 files | d2: 1 dir + 7 files + 1 image | d3: 2 files
+nodes: 25 total = 13 files + 8 dirs + 1 image + 1 asset + 2 ghosts
+edges: 22 contains, 19 wikilinks (16 -> files, 1 -> images, 2 -> ghosts)
+depth: d0: 1 dir | d1: 6 dirs + 4 files | d2: 1 dir + 7 files + 1 image + 1 asset | d3: 2 files
 largest dirs (direct md files):
     4  <root>
     2  notes

@@ -10,8 +10,8 @@ commit.
 |---|---|
 | `.obsidian/` and `.trash/` skipped entirely | `.trash/deleted-note.md` contains `[[index]]` — must not appear anywhere |
 | Image files are Image nodes, with their dir chain | `assets/diagram.png` → Image node, `assets/` → Dir node |
-| Non-md, non-image files are not nodes | `misc/data.csv` |
-| Dirs with no md/image descendants are pruned | `misc/` must not become a Dir node |
+| Every other file type is an Asset node, with its dir chain | `misc/data.csv` → Asset node, `misc/` → Dir node |
+| Build/dependency dirs are skipped like dotdirs | `node_modules/`, `target/`, `__pycache__/` (no fixture — unit-tested via the watcher filter) |
 | Wikilink to an existing image resolves | `[[diagram.png]]` in index.md → `assets/diagram.png` |
 | Embeds skipped in v1 | `![[diagram.png]]` and `![[embedded-note-trap]]` in index.md — the second is md-resolvable, so an extraction regression surfaces as a ghost |
 | Markdown-style links not edges in v1 | `[ideas](projects/ideas.md)` in index.md |
@@ -40,16 +40,17 @@ commit.
 | Kind | Count | Members |
 |---|---|---|
 | File | 13 | index, empty, frontmatter-only, bom, projects/{rust-app, ideas}, notes/{readme, scratch}, notes/daily/{2026-08-13, 2026-08-14}, topics/{rust, grafér}, languages/rust |
-| Dir | 7 | vault root, assets, projects, notes, notes/daily, topics, languages (misc pruned) |
+| Dir | 8 | vault root, assets, misc, projects, notes, notes/daily, topics, languages |
 | Image | 1 | assets/diagram.png |
+| Asset | 1 | misc/data.csv |
 | Ghost | 2 | `missing-note`, `nonexistent/deep/ghost` |
-| **Total** | **23** | |
+| **Total** | **25** | |
 
 ## Expected edge counts
 
 | Kind | Count | Notes |
 |---|---|---|
-| Contains | 20 | 13 files + 6 non-root dirs + 1 image, one parent each |
+| Contains | 22 | 13 files + 7 non-root dirs + 1 image + 1 asset, one parent each |
 | WikiLink | 19 | 16 resolved to Files + 1 to Images + 2 to Ghosts |
 
 ### WikiLink edges by source
@@ -77,8 +78,9 @@ the image); 2 ghost edges.
 - Ambiguous resolutions: **1** (`[[rust]]`)
 - Raw `[[` occurrences in countable files: **24** = 19 edges + 2 code traps
   + 2 embeds + 1 dropped self-link (useful cross-check when editing the vault)
-- Depth histogram — dirs: d0×1 (root), d1×5, d2×1 (daily);
-  files: d1×4, d2×7, d3×2; images: d2×1 (assets/diagram.png)
+- Depth histogram — dirs: d0×1 (root), d1×6, d2×1 (daily);
+  files: d1×4, d2×7, d3×2; images: d2×1 (assets/diagram.png);
+  assets: d2×1 (misc/data.csv)
 
 ## Stress vault
 

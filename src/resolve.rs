@@ -42,16 +42,19 @@ const ASSET_EXTS: &[&str] = &[
 ];
 
 pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
-    // Index all File and Image nodes. Leaves are indexed in NodeId order,
-    // which is sorted relative-path (string) order, so the first candidate
-    // in any bucket is the deterministic ambiguity winner. Image names keep
-    // their extension, so `[[pic.png]]` hits by_stem while `[[pic]]` never
-    // matches an image.
+    // Index all File, Image, and Asset nodes. Leaves are indexed in NodeId
+    // order, which is sorted relative-path (string) order, so the first
+    // candidate in any bucket is the deterministic ambiguity winner. Image
+    // and Asset names keep their extension, so `[[pic.png]]`/`[[data.csv]]`
+    // hit by_stem while `[[pic]]` never matches either.
     let mut by_stem: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut by_alias: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut comp_paths: Vec<(NodeId, Vec<String>)> = Vec::new();
     for (idx, node) in g.nodes.iter().enumerate() {
-        if !matches!(node.kind, NodeKind::File | NodeKind::Image) {
+        if !matches!(
+            node.kind,
+            NodeKind::File | NodeKind::Image | NodeKind::Asset
+        ) {
             continue;
         }
         let id = NodeId(idx as u32);

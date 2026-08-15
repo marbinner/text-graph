@@ -36,13 +36,16 @@ use text_graph::graph::{Graph, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
-use text_graph::{create, graph, state, vault};
+use text_graph::{create, filetype, graph, state, vault};
 
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);
 const EDGE: Color32 = Color32::from_rgb(0x3a, 0x40, 0x4d);
 const DIR: Color32 = Color32::from_rgb(0x7a, 0xa2, 0xf7);
 const FILE: Color32 = Color32::from_rgb(0xb8, 0xbc, 0xc8);
+/// Non-markdown, non-image leaves (code, config, data) — dimmer than
+/// notes, which stay the brightest thing on the canvas.
+const ASSET: Color32 = Color32::from_rgb(0x8b, 0x92, 0x9f);
 const GHOST: Color32 = Color32::from_rgb(0x6b, 0x72, 0x82);
 const IMG: Color32 = Color32::from_rgb(0x9e, 0xce, 0x6a);
 const HOVER: Color32 = Color32::from_rgb(0xff, 0xb4, 0x54);
@@ -168,6 +171,7 @@ struct Derived {
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
+    n_assets: usize,
     dir_by_path: HashMap<String, NodeId>,
 }
 
@@ -229,6 +233,7 @@ struct Viewer {
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
+    n_assets: usize,
     // ---- search ----
     matcher: Matcher,
     /// Per-node "name aliases path" string the fuzzy pattern scores against.
@@ -321,6 +326,7 @@ impl Viewer {
                     NodeKind::Dir => 6.0,
                     NodeKind::Image => 4.5,
                     NodeKind::File => 3.5,
+                    NodeKind::Asset => 3.0,
                     NodeKind::Ghost => 3.0,
                 };
                 (base + (*d as f32).sqrt() * 1.3f32).min(18.0)
@@ -334,6 +340,7 @@ impl Viewer {
         let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
         let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
         let n_images = g.nodes.iter().filter(|n| n.kind == NodeKind::Image).count();
+        let n_assets = g.nodes.iter().filter(|n| n.kind == NodeKind::Asset).count();
         let mut dir_by_path = HashMap::new();
         for (i, n) in g.nodes.iter().enumerate() {
             if n.kind == NodeKind::Dir {
@@ -346,6 +353,7 @@ impl Viewer {
             n_files,
             n_dirs,
             n_images,
+            n_assets,
             dir_by_path,
         }
     }
@@ -358,6 +366,7 @@ impl Viewer {
             n_files,
             n_dirs,
             n_images,
+            n_assets,
             dir_by_path,
         } = Self::derived(&g);
         let n = haystacks.len();
@@ -391,6 +400,7 @@ impl Viewer {
             n_files,
             n_dirs,
             n_images,
+            n_assets,
             matcher: Matcher::new(Config::DEFAULT),
             haystacks,
             search_open: false,
@@ -825,13 +835,28 @@ impl Viewer {
         Rect::from_center_size(s, size)
     }
 
+    /// Can this node open into a text-preview card? Markdown always;
+    /// assets only when their extension is textual (a binary excerpt would
+    /// be mojibake).
+    fn previewable(&self, id: NodeId) -> bool {
+        let node = self.g.node(id);
+        match node.kind {
+            NodeKind::File => true,
+            NodeKind::Asset => filetype::is_text(&node.path),
+            _ => false,
+        }
+    }
+
     /// The rect a node's expanded form occupies — image thumbnail or text
     /// preview card — if it is expanded at the current zoom. Hover targets,
     /// selection rings, and label anchors all follow this shape.
     fn node_box(&self, id: NodeId, s: Pos2, r: f32) -> Option<Rect> {
         match self.g.node(id).kind {
             NodeKind::Image if r >= Self::IMG_BOX_MIN_R => Some(self.image_box(id, s, r)),
-            NodeKind::File if self.radius[id.0 as usize] * self.zoom >= Self::PREVIEW_MIN_R => {
+            NodeKind::File | NodeKind::Asset
+                if self.radius[id.0 as usize] * self.zoom >= Self::PREVIEW_MIN_R
+                    && self.previewable(id) =>
+            {
                 Some(self.preview_box(id, s))
             }
             _ => None,
@@ -1262,18 +1287,25 @@ impl Viewer {
                         paint_folder_icon(&painter, s, r, punch);
                     }
                 }
-                NodeKind::File => {
-                    // zoomed in far enough, the note opens into a text
+                NodeKind::File | NodeKind::Asset => {
+                    let disc = if node.kind == NodeKind::File {
+                        FILE
+                    } else {
+                        ASSET
+                    };
+                    // zoomed in far enough, a textual leaf opens into a
                     // preview card (the canvas sibling of the detail pane);
-                    // presence fades so the disc↔card flip never pops
+                    // presence fades so the disc↔card flip never pops.
+                    // Binary assets stay discs at every zoom.
                     let ur = self.radius[id.0 as usize] * self.zoom;
+                    let want = ur >= Self::PREVIEW_MIN_R && self.previewable(id);
                     let presence = ui.ctx().animate_value_with_time(
                         egui::Id::new(("preview", &node.path)),
-                        if ur >= Self::PREVIEW_MIN_R { 1.0 } else { 0.0 },
+                        if want { 1.0 } else { 0.0 },
                         0.12,
                     );
                     if presence < 0.95 {
-                        painter.circle_filled(s, r, dimmed(FILE));
+                        painter.circle_filled(s, r, dimmed(disc));
                         if glyph && presence < 0.05 {
                             paint_doc_icon(&painter, s, r, Some(punch), None);
                         }
@@ -1296,16 +1328,18 @@ impl Viewer {
                             egui::StrokeKind::Outside,
                         );
                         let fs = (ur * 0.22).clamp(6.5, 12.0);
+                        // notes read as prose, assets read as code
+                        let font = if node.kind == NodeKind::File {
+                            FontId::proportional(fs)
+                        } else {
+                            FontId::monospace(fs * 0.92)
+                        };
                         let text = self
                             .previews
                             .get_or_load(&self.root, &node.path)
                             .to_string();
-                        let galley = painter.layout(
-                            text,
-                            FontId::proportional(fs),
-                            TEXT.gamma_multiply(a),
-                            bx.width() - 12.0,
-                        );
+                        let galley =
+                            painter.layout(text, font, TEXT.gamma_multiply(a), bx.width() - 12.0);
                         painter.with_clip_rect(bx.shrink(2.0)).galley(
                             bx.min + Vec2::new(6.0, 5.0),
                             galley,
@@ -1485,11 +1519,16 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
+                    "{} files · {} dirs{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
                     self.n_files,
                     self.n_dirs,
                     if self.n_images > 0 {
                         format!(" · {} images", self.n_images)
+                    } else {
+                        String::new()
+                    },
+                    if self.n_assets > 0 {
+                        format!(" · {} assets", self.n_assets)
                     } else {
                         String::new()
                     },

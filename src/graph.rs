@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::resolve;
-use crate::vault::{RawLink, VaultScan};
+use crate::vault::{self, RawLink, VaultScan};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct NodeId(pub u32);
@@ -16,6 +16,9 @@ pub enum NodeKind {
     /// An image file — a leaf like File, but with no body to parse. Its
     /// `name` keeps the extension (that's how links address it).
     Image,
+    /// Any other file — code, config, data, binaries. A leaf with no body
+    /// to parse; `name` keeps the extension, like Image.
+    Asset,
     /// A wikilink target that doesn't exist (yet).
     Ghost,
 }
@@ -262,54 +265,64 @@ pub fn build(scan: VaultScan) -> Graph {
     let mut dir_ids: HashMap<String, NodeId> = HashMap::from([(String::new(), g.root)]);
     let mut file_links: Vec<(NodeId, Vec<RawLink>)> = Vec::new();
 
-    // Merge notes and images in sorted rel_path order, so NodeId order keeps
-    // meaning "sorted path order" across every leaf — resolution's ambiguity
-    // winner and the determinism tests both lean on that.
-    let mut files = scan.files.into_iter().peekable();
-    let mut images = scan.images.into_iter().peekable();
-    loop {
-        let take_file = match (files.peek(), images.peek()) {
-            (Some(f), Some(i)) => f.rel_path <= *i,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (None, None) => break,
-        };
-        if take_file {
-            let file = files.next().unwrap();
-            let parent = ensure_dirs(&mut g, &mut dir_ids, &file.rel_path);
-            let name = file_stem(&file.rel_path);
-            let id = g.push_node(Node {
-                kind: NodeKind::File,
-                path: file.rel_path.clone(),
-                name,
-                title: file.title,
-                aliases: file.aliases,
-                parent: Some(parent),
-                children: Vec::new(),
-            });
-            g.node_mut(parent).children.push(id);
-            if let Some(w) = file.warning {
-                g.warnings.push((file.rel_path, w));
+    // Merge notes, images, and assets in sorted rel_path order, so NodeId
+    // order keeps meaning "sorted path order" across every leaf —
+    // resolution's ambiguity winner and the determinism tests both lean on
+    // that.
+    enum Leaf {
+        File(vault::RawFile),
+        Image,
+        Asset,
+    }
+    let mut leaves: Vec<(String, Leaf)> = scan
+        .files
+        .into_iter()
+        .map(|f| (f.rel_path.clone(), Leaf::File(f)))
+        .chain(scan.images.into_iter().map(|p| (p, Leaf::Image)))
+        .chain(scan.assets.into_iter().map(|p| (p, Leaf::Asset)))
+        .collect();
+    leaves.sort_by(|a, b| a.0.cmp(&b.0));
+    for (rel, leaf) in leaves {
+        let parent = ensure_dirs(&mut g, &mut dir_ids, &rel);
+        let id = match leaf {
+            Leaf::File(file) => {
+                let id = g.push_node(Node {
+                    kind: NodeKind::File,
+                    path: rel.clone(),
+                    name: file_stem(&rel),
+                    title: file.title,
+                    aliases: file.aliases,
+                    parent: Some(parent),
+                    children: Vec::new(),
+                });
+                if let Some(w) = file.warning {
+                    g.warnings.push((rel, w));
+                }
+                file_links.push((id, file.links));
+                id
             }
-            file_links.push((id, file.links));
-        } else {
-            let rel = images.next().unwrap();
-            let parent = ensure_dirs(&mut g, &mut dir_ids, &rel);
-            let name = rel
-                .rsplit_once('/')
-                .map_or(rel.as_str(), |(_, f)| f)
-                .to_string();
-            let id = g.push_node(Node {
-                kind: NodeKind::Image,
-                path: rel,
-                name,
-                title: None,
-                aliases: Vec::new(),
-                parent: Some(parent),
-                children: Vec::new(),
-            });
-            g.node_mut(parent).children.push(id);
-        }
+            Leaf::Image | Leaf::Asset => {
+                let kind = if matches!(leaf, Leaf::Image) {
+                    NodeKind::Image
+                } else {
+                    NodeKind::Asset
+                };
+                let name = rel
+                    .rsplit_once('/')
+                    .map_or(rel.as_str(), |(_, f)| f)
+                    .to_string();
+                g.push_node(Node {
+                    kind,
+                    path: rel,
+                    name,
+                    title: None,
+                    aliases: Vec::new(),
+                    parent: Some(parent),
+                    children: Vec::new(),
+                })
+            }
+        };
+        g.node_mut(parent).children.push(id);
     }
 
     sort_children(&mut g);

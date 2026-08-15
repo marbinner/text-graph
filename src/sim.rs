@@ -87,7 +87,7 @@ impl Sim {
             .iter()
             .map(|n| match n.kind {
                 NodeKind::Dir => CHARGE_DIR,
-                NodeKind::File | NodeKind::Image => CHARGE_FILE,
+                NodeKind::File | NodeKind::Image | NodeKind::Asset => CHARGE_FILE,
                 NodeKind::Ghost => CHARGE_GHOST,
             })
             .collect();
