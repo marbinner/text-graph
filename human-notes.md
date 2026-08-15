@@ -25,9 +25,9 @@
 
 
 # in progress
-- when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to. And also make it maintain the same zoom the camera already has, but the camera just refocuses location.
 
 # done
+- when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to. And also make it maintain the same zoom the camera already has, but the camera just refocuses location.
 - make graph edges directed and make folder edges more noticable. The folder structure should be clear glancing at the graph.
 - make it so the focused pane/terminal is always on top of the non-focused one. Currently other terminals appear on top of the focues one.
 - make it so node icons render on top of edges. Currently the terminal edges going from a folder to a terminal with the dotted eges goes on top of the folder icon which is wrong.
