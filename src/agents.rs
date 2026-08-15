@@ -85,6 +85,45 @@ pub fn launch_shell(socket: Option<&str>, dir: &Path) -> std::io::Result<String>
     launch_named(socket, dir, "term", None)
 }
 
+/// The PATH a launched agent should resolve against: the server's global
+/// PATH (from whoever started the server — normally the user's real shell)
+/// joined with our own. The viewer itself may run with a stripped PATH
+/// (IDE/launcher environments), and tmux seeds a new session's environment
+/// from its CLIENT — us — so without this an agent binary can be
+/// unfindable in the pane while being findable in every terminal the user
+/// owns; the pane then dies in milliseconds and the session evaporates
+/// before discovery ever sees it. (`new-session -e PATH=…` was tried and
+/// does not apply to the initial pane.) No server or no global PATH →
+/// None, and the command runs unwrapped as before.
+fn launch_path(socket: Option<&str>) -> Option<String> {
+    let mut c = Command::new("tmux");
+    if let Some(l) = socket {
+        c.args(["-L", l]);
+    }
+    c.args(["show-environment", "-g", "PATH"]);
+    let out = c.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let server = text.strip_prefix("PATH=")?.trim_end().to_string();
+    match std::env::var("PATH") {
+        Ok(client) if !client.is_empty() => Some(format!("{server}:{client}")),
+        _ => Some(server),
+    }
+}
+
+/// The pane command for an agent launch: `PATH='…' exec <cmd>` when a
+/// known-good PATH is available (single-quoted, quote-safe), the raw
+/// command otherwise. tmux runs a string command via `/bin/sh -c`, so this
+/// stays free of shell rc files and interactivity.
+fn path_cmd(path: Option<&str>, cmd: &str) -> String {
+    match path {
+        Some(p) => format!("PATH='{}' exec {cmd}", p.replace('\'', r"'\''")),
+        None => cmd.to_string(),
+    }
+}
+
 fn launch_named(
     socket: Option<&str>,
     dir: &Path,
@@ -99,6 +138,7 @@ fn launch_named(
         c.args(args);
         c
     };
+    let good_path = cmd.is_some().then(|| launch_path(socket)).flatten();
     for n in 1..=99u32 {
         let name = if n == 1 {
             format!("tg_{slug}")
@@ -126,7 +166,7 @@ fn launch_named(
         ]);
         c.arg(dir);
         if let Some(cmd) = cmd {
-            c.arg(cmd);
+            c.arg(path_cmd(good_path.as_deref(), cmd));
         }
         if c.status()?.success() {
             return Ok(name);
@@ -362,6 +402,21 @@ mod tests {
         let t1 = t0 + Duration::from_secs(2); // well inside GRACE
         let active = tr.update(&[pane_pid("work", "vim", 999)], &allow, t1);
         assert!(active.is_empty(), "revived onto a new server's pane");
+    }
+
+    #[test]
+    fn path_cmd_wraps_only_with_a_known_path_and_escapes_quotes() {
+        assert_eq!(path_cmd(None, "claude"), "claude");
+        assert_eq!(
+            path_cmd(Some("/a/bin:/b/bin"), "claude"),
+            "PATH='/a/bin:/b/bin' exec claude"
+        );
+        // a single quote in a PATH component must not break out of the
+        // quoting (pathological, but this runs through `sh -c`)
+        assert_eq!(
+            path_cmd(Some("/we'ird"), "sh"),
+            r"PATH='/we'\''ird' exec sh"
+        );
     }
 
     #[test]

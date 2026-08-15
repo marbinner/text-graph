@@ -204,7 +204,8 @@ impl Viewer {
             ui.menu_button("Launch agent", |ui| {
                 for agent in agents::default_allowlist() {
                     if ui.button(&agent).clicked() {
-                        self.launch_agent(&dir, &agent);
+                        let ctx = ui.ctx().clone();
+                        self.launch_agent(&ctx, &dir, &agent);
                     }
                 }
             });

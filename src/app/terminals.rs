@@ -46,6 +46,9 @@ pub(super) struct Terminals {
     pub(super) pinned: HashMap<(String, String), ()>,
     /// Parked pins, keyed by session name (see `parked`).
     pub(super) parked_pins: HashMap<String, Vec<(String, ())>>,
+    /// Flash messages from background threads (launch watchdogs), drained
+    /// into the status line each frame.
+    pub(super) bg_flash: Arc<Mutex<Vec<String>>>,
     /// Fuzzy-search scores for panes (aligned with `panes`).
     pub(super) scores: Vec<Option<u32>>,
     /// Best terminal hit: index at scoring time plus its key.
@@ -78,6 +81,7 @@ impl Terminals {
             cursor: None,
             pinned: HashMap::new(),
             parked_pins,
+            bg_flash: Arc::new(Mutex::new(Vec::new())),
             scores: Vec::new(),
             best: None,
             tmux_ok: std::process::Command::new("tmux")
@@ -470,6 +474,10 @@ impl Viewer {
     /// Snapshot discovery, keep mirrors in sync with it, pump events, and
     /// refresh converted screens per mirror generation.
     pub(super) fn sync_terminals(&mut self, ctx: &egui::Context) {
+        let bg: Vec<String> = std::mem::take(&mut *self.terms.bg_flash.lock().unwrap());
+        for msg in bg {
+            self.set_flash(msg);
+        }
         self.terms.panes = self.terms.seen.lock().unwrap().clone();
 
         let sessions: HashSet<String> =
@@ -886,10 +894,33 @@ impl Viewer {
         }
     }
 
-    pub(super) fn launch_agent(&mut self, dir: &str, agent: &str) {
+    pub(super) fn launch_agent(&mut self, ctx: &egui::Context, dir: &str, agent: &str) {
         let path = self.ctx_path(dir);
         match agents::launch(None, &path, agent) {
-            Ok(name) => self.set_flash(format!("launched {agent} — session {name}")),
+            Ok(name) => {
+                self.set_flash(format!("launched {agent} — session {name}"));
+                // Instant-death watchdog: a command that exits immediately
+                // (binary not on the pane's PATH, bad flags) takes its
+                // session down before discovery's next scan — without this
+                // the success flash is the only, false, feedback.
+                let sink = self.terms.bg_flash.clone();
+                let ctx = ctx.clone();
+                let agent = agent.to_string();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(2500));
+                    let alive = std::process::Command::new("tmux")
+                        .args(["has-session", "-t", &format!("={name}")])
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    if !alive {
+                        sink.lock().unwrap().push(format!(
+                            "{agent} exited immediately — session {name} is gone (is `{agent}` installed?)"
+                        ));
+                        ctx.request_repaint();
+                    }
+                });
+            }
             Err(e) => self.set_flash(format!("launch failed: {e}")),
         }
     }
