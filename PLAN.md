@@ -356,6 +356,30 @@ deterministic); those are a later opt-in.
 
 ---
 
+## Audit 2026-08-15 — accepted limitations
+
+A 7-lens adversarially-verified audit found 18 real defects; 14 are fixed
+(commits `5c4c168`…`1edf1a0`). Four were judged not worth their fix cost —
+recorded here so they read as decisions, not undiscovered bugs:
+
+- **(mtime, len) stamp granularity**: two same-length rewrites of a file
+  within one kernel clock tick are indistinguishable, so a canvas
+  excerpt/thumbnail captured between them can stay stale until the next
+  length- or tick-changing write. Fixing needs content hashing on every
+  reload — not worth it for a ≤4ms window.
+- **`%output` between Capture and Cursor replies** (mirror.rs): output
+  landing in that few-ms window paints at the replay-parked cursor —
+  transient bottom-row garbling on attach/resize while a pane streams.
+  A fix means buffering output while a capture is pending; the hot-path
+  risk outweighs the cosmetic blip.
+- **Tab inside an anchored filename** shears the discovery scan record
+  (anchor is field 5 of 6) and the tg_edit card never appears. Legal on
+  Linux, essentially never occurs in a notes vault.
+- **Trailing-edge-only 300ms reload debounce**: a gap-free sub-300ms write
+  stream defers the rebuild until it pauses. Real bursts pause constantly,
+  so staleness is bounded and self-heals; add a max-latency cap only if a
+  real workload shows starvation.
+
 ## Phase 2: the intelligence layer
 
 Reframed after milestone E: agents arrive by being *opened in the vault* (terminals
