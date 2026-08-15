@@ -27,7 +27,7 @@
     - each file should have some mandatory metadata like date created, date modified, immutable id.
     - quick description and purpose of this file.
     - tags
-- fuzzy search across the entire graph including contents of the text files.
+- fuzzy search across the entire graph including contents of the text files. We should replace our existing search feature with a more highly powered nvim telescope like search. We want to be able to match file,names,content etc. and be able to easily preview and pick the node we want. quickly finding the exact node we want using keyboard and search should be one of the central features.
 - make it so I can drag and drop files and paste shit into the gui.
 - for opening an agent with 'a' or editor with 'e' or most other bindings like these, we should only have to hover over a node with the cursor, we shouldn't have to click on it first. So I shoudl be able to just hover over a node, press 'e' and then it opens up in the editor. Or I shoudl be able to do the same with 'a' and it opens up the default agent in the corresponding folder.
 - add a bunch of basic stuff to the settings so they're centralized and configuarable.

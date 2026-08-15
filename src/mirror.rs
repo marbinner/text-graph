@@ -315,13 +315,6 @@ pub fn indexed_rgb(i: u8) -> (u8, u8, u8) {
     }
 }
 
-/// The bottom-most screen line with real (alphanumeric) content, box-drawing
-/// stripped: for a TUI that's its status line ("✳ Deliberating…"), for a
-/// shell the last output line — an honest "what is it doing right now".
-pub fn summary_line(g: &TermGrid) -> Option<String> {
-    tail_lines(g, 1).pop()
-}
-
 /// The last `n` screen lines with real content, top-to-bottom — compact
 /// cards show them as "what this agent is doing". Box-drawing borders are
 /// trimmed so a TUI frame doesn't read as content.
@@ -538,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_is_the_status_line_not_the_input_box() {
+    fn tail_skips_the_input_box_and_keeps_the_status_line() {
         // claude-shaped screen: output, a status line, then the input box —
         // the box is pure box-drawing + '>' and must be skipped
         let mut p = vt100::Parser::new(6, 30, 0);
@@ -550,17 +543,13 @@ mod tests {
               \xE2\x95\xB0\xE2\x94\x80\xE2\x94\x80\xE2\x94\x80\xE2\x95\xAF",
         );
         let g = screen_to_grid(p.screen());
-        assert_eq!(summary_line(&g).unwrap(), "✳ Deliberating… (12s)");
-    }
-
-    #[test]
-    fn summary_of_a_shell_is_its_last_line_and_blank_screens_are_none() {
-        let g = grid(b"$ cargo test\r\nok. 84 passed");
-        assert_eq!(summary_line(&g).unwrap(), "ok. 84 passed");
-        assert_eq!(summary_line(&grid(b"")), None);
-        assert_eq!(
-            summary_line(&grid(b"\x1b[?2004h")),
-            None,
+        assert_eq!(tail_lines(&g, 1), vec!["✳ Deliberating… (12s)"]);
+        // shells: the last output line; blank/control-only screens: nothing
+        let sh = grid(b"$ cargo test\r\nok. 84 passed");
+        assert_eq!(tail_lines(&sh, 1), vec!["ok. 84 passed"]);
+        assert!(tail_lines(&grid(b""), 1).is_empty());
+        assert!(
+            tail_lines(&grid(b"\x1b[?2004h"), 1).is_empty(),
             "control-only screen"
         );
     }
