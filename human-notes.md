@@ -1,6 +1,11 @@
 # notes made by human, don't take seriously
 
 # todo
+- perfect the focus mechanics and focus history.
+    - we want to be able to fluidly choose which node to focus on with minimal cognitive effort.
+    - we want to track a history of which panels were focused so we can jump back and forth quickly.
+    - when fuzzy searching we want to put higher priority on recently visited nodes.
+    - the telescope like fuzzy search
 - action view: automatically move to locations where things are happening.
     - when the agents are doing stuff. Sit back and relax and watch what they're doing automatically. 
     - we should probably have a centralized event logs of things that are happening. We're already tracking all the files and all the changes we should be able to see all the changes that are happening.
@@ -26,11 +31,12 @@
 - make it so I can drag and drop files and paste shit into the gui.
 
 # in progress
+- when I start a new terminal/agent it should be focused by default. also I wanna start adding more keybindngs. For example when I have a folder focused and I press 'a' then the default agent pane should open in that folder. When I press t a terminal pane should open. (remove the existing keybinding that says t shoudl jump between panes. we don't need that). when I press e it should open the node in my default editor, whether it is a text file or a folder.
+
+# done
 - have a menu for settings.
     - light mode vs. dark mode
     - default agent and then when I click the launch agent button without selecting a specific one it launches the default one. Pi should be the default for now.
-
-# done
 - there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
 - when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to. And also make it maintain the same zoom the camera already has, but the camera just refocuses location.
 - make graph edges directed and make folder edges more noticable. The folder structure should be clear glancing at the graph.

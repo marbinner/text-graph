@@ -231,11 +231,7 @@ impl Viewer {
         if self.terms.tmux_ok {
             ui.separator();
             if ui.button("New terminal").clicked() {
-                let path = self.ctx_path(&dir);
-                match agents::launch_shell(None, &path) {
-                    Ok(name) => self.set_flash(format!("opened terminal — session {name}")),
-                    Err(e) => self.set_flash(format!("terminal failed: {e}")),
-                }
+                self.new_terminal(&dir);
             }
             // one click launches the DEFAULT agent (⚙ settings); the
             // submenu offers the full list

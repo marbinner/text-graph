@@ -716,18 +716,20 @@ impl Viewer {
         if self.create.is_some() {
             return; // the create dialog owns the keyboard
         }
-        let (open_key, esc, enter, frame_key, reset, term_key, web_key, edit_key) = ui.input(|i| {
-            (
-                i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
-                i.key_pressed(Key::Escape),
-                i.key_pressed(Key::Enter),
-                i.modifiers.is_none() && i.key_pressed(Key::Z),
-                i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
-                i.modifiers.is_none() && i.key_pressed(Key::T),
-                i.modifiers.is_none() && i.key_pressed(Key::W),
-                i.modifiers.is_none() && i.key_pressed(Key::E),
-            )
-        });
+        let (open_key, esc, enter, frame_key, reset, term_key, web_key, edit_key, agent_key) = ui
+            .input(|i| {
+                (
+                    i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
+                    i.key_pressed(Key::Escape),
+                    i.key_pressed(Key::Enter),
+                    i.modifiers.is_none() && i.key_pressed(Key::Z),
+                    i.key_pressed(Key::Num0) || i.key_pressed(Key::Home),
+                    i.modifiers.is_none() && i.key_pressed(Key::T),
+                    i.modifiers.is_none() && i.key_pressed(Key::W),
+                    i.modifiers.is_none() && i.key_pressed(Key::E),
+                    i.modifiers.is_none() && i.key_pressed(Key::A),
+                )
+            });
         if self.search_open {
             if esc {
                 self.close_search();
@@ -748,7 +750,7 @@ impl Viewer {
                         .iter()
                         .position(|a| a.session == bk.0 && a.pane == bk.1)
                 {
-                    self.terms.cycle = i + 1;
+                    let _ = i;
                     self.terms.cursor = Some(bk.clone());
                     self.terms.focused = Some(bk.clone());
                     self.fly_to_card(bk);
@@ -818,15 +820,24 @@ impl Viewer {
                 }
                 .into(),
             );
-        } else if term_key && ui.memory(|m| m.focused().is_none()) && !self.terms.panes.is_empty() {
-            // hop the terminal cursor to the next card — keyboard stays on
-            // the graph so repeated t keeps hopping; Enter dives in
-            let i = self.terms.cycle % self.terms.panes.len();
-            self.terms.cycle += 1;
-            let a = &self.terms.panes[i];
-            let key = (a.session.clone(), a.pane.clone());
-            self.terms.cursor = Some(key.clone());
-            self.fly_to_card(key);
+        } else if term_key
+            && ui.memory(|m| m.focused().is_none())
+            && self.terms.tmux_ok
+            && let Some(sel) = self.selected
+        {
+            // t = new terminal at the selected node's folder
+            let dir = self.node_dir(sel);
+            self.new_terminal(&dir);
+        } else if agent_key
+            && ui.memory(|m| m.focused().is_none())
+            && self.terms.tmux_ok
+            && let Some(sel) = self.selected
+        {
+            // a = the DEFAULT agent (⚙ settings) at the selected node's folder
+            let dir = self.node_dir(sel);
+            let ctx = ui.ctx().clone();
+            let agent = self.default_agent.clone();
+            self.launch_agent(&ctx, &dir, &agent);
         }
 
         // Ranger-style tree walk — SELECTION IS THE MODE: with a node
@@ -1450,16 +1461,6 @@ impl Viewer {
                         self.terms.pinned.insert(t, ());
                     }
                 } else {
-                    // clicking also parks the t-cursor here, so cycling
-                    // resumes from this card
-                    if let Some(i) = self
-                        .terms
-                        .panes
-                        .iter()
-                        .position(|a| a.session == t.0 && a.pane == t.1)
-                    {
-                        self.terms.cycle = i + 1;
-                    }
                     self.terms.cursor = Some(t.clone());
                     self.terms.focused = Some(t);
                     self.close_search();
@@ -1933,7 +1934,7 @@ impl Viewer {
         } else if active.is_none()
             && let Some((s, p)) = &self.terms.cursor
         {
-            format!("{s} {p} — Enter types into it · t next · Ctrl+click pins open · Esc dismisses")
+            format!("{s} {p} — Enter types into it · Ctrl+click pins open · Esc dismisses")
         } else {
             match active.map(|id| self.g.node(id)) {
                 Some(n) => {
@@ -1945,7 +1946,7 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs{}{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · w web · 0 reset",
+                    "{} files · {} dirs{}{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · w web · 0 reset  |  on selection: e edit · t terminal · a agent",
                     self.n_files,
                     self.n_dirs,
                     if self.n_images > 0 {

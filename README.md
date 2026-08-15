@@ -139,7 +139,9 @@ instead of snapping, and never changes your zoom.
 | `f` | find in this directory — fuzzy-jumps the cursor live as you type |
 | `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
-| `e` | **edit in the graph**: the file opens in your terminal editor inside a live `tg_edit` card, tethered to the file's own node (also on right-click); the card dies when the editor exits |
+| `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
+| `t` | new **terminal** card at this node's folder, focused and ready to type |
+| `a` | launch the **default agent** (⚙ settings) at this node's folder, focused when it appears |
 | `Esc` | dismiss the link cursor, then deselect — back to camera mode |
 
 ### Terminal cards
@@ -149,7 +151,6 @@ instead of snapping, and never changes your zoom.
 | hover + linger on a compact card | **peek**: the full live screen pops up at readable size — inspect an agent without zooming, focusing, or pinning |
 | click a card | select + focus: it expands to full readable size at any zoom, turns **cyan ⌨**, and the keyboard types into the agent |
 | **Ctrl+click a card** | 📌 pin it open — expanded at any zoom, several at once, without taking the keyboard; Ctrl+click again unpins. Pins survive restarts |
-| `t` | hop the (orange) terminal cursor from card to card, each expanding in place; `Enter` dives in to type |
 | `Ctrl+Q` / click away | release focus back to the graph in one gesture — a click on a node also selects it, a click on empty space just releases (your selection stays) |
 | double-click a card | fly the camera into it (zoom + center) |
 | drag a card | arrange it (it stays put, following its anchor node) |
@@ -235,9 +236,10 @@ several to pin them open** (📌 in the title) and watch a whole fleet at
 once. Border colors state the mode — **cyan + ⌨ = your keyboard is in it,
 orange = selected**, green = streaming.
 
-**Click the card and type** — or drive it all from the keyboard: `t` hops
-a highlight from card to card, `Enter` dives into the highlighted one, and
-`/` finds an agent by name, session, or folder (`Enter` lands focused).
+**Click the card and type** — or `/` finds an agent by name, session, or
+folder (`Enter` lands focused). Cards you launch yourself (agent,
+terminal, editor) focus automatically the moment they appear — launch and
+just start typing.
 While focused, every key goes to the agent — Enter, Esc, arrows,
 Shift+Tab, Ctrl chords including Ctrl+C to interrupt — and graph keybinds
 suspend; `Ctrl+Q` or clicking empty space gives you the graph back.

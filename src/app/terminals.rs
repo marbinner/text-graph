@@ -37,8 +37,9 @@ pub(super) struct Terminals {
     pub(super) resize: Option<ResizeDrag>,
     /// Set on double-click / t: next paint recenters the view on this card.
     pub(super) fly_to: Option<(String, String)>,
-    /// Position of the t (cycle terminals) key, modulo the pane count.
-    pub(super) cycle: usize,
+    /// A just-launched session to focus the moment discovery shows it
+    /// (with a takeover deadline — a dead launch must not steal keys later).
+    pub(super) focus_pending: Option<(String, Instant)>,
     /// The card the terminal cursor is on: highlighted, Enter focuses it.
     pub(super) cursor: Option<(String, String)>,
     /// (card, dwell start, screen anchor) — drives the hover peek popup on
@@ -82,7 +83,7 @@ impl Terminals {
             drag_card: None,
             resize: None,
             fly_to: None,
-            cycle: 0,
+            focus_pending: None,
             cursor: None,
             hover_since: None,
             pinned: HashMap::new(),
@@ -619,6 +620,19 @@ impl Viewer {
         }) {
             self.terms.cursor = None;
         }
+        // A just-launched session focuses the moment discovery shows it —
+        // you launched it to type into it. Deadline-guarded so a slow or
+        // dead launch can't steal the keyboard minutes later.
+        if let Some((name, t0)) = self.terms.focus_pending.clone() {
+            if let Some(a) = self.terms.panes.iter().find(|a| a.session == name) {
+                let key = (a.session.clone(), a.pane.clone());
+                self.terms.cursor = Some(key.clone());
+                self.terms.focused = Some(key);
+                self.terms.focus_pending = None;
+            } else if t0.elapsed() > Duration::from_secs(10) {
+                self.terms.focus_pending = None;
+            }
+        }
         // A focused pane killed externally (session survives) must release
         // the keyboard — otherwise every keystroke drains into a dead
         // target while all graph keybinds stay suspended.
@@ -1081,22 +1095,49 @@ impl Viewer {
         });
     }
 
+    /// The folder a node-scoped launch targets (vault-relative, "" =
+    /// root): a dir itself, anything else its parent dir.
+    pub(super) fn node_dir(&self, id: NodeId) -> String {
+        let n = self.g.node(id);
+        match n.kind {
+            NodeKind::Dir => n.path.clone(),
+            _ => n
+                .parent
+                .map(|p| self.g.node(p).path.clone())
+                .unwrap_or_default(),
+        }
+    }
+
     pub(super) fn launch_agent(&mut self, ctx: &egui::Context, dir: &str, agent: &str) {
         let path = self.ctx_path(dir);
         match agents::launch(None, &path, agent) {
             Ok(name) => {
                 self.set_flash(format!("launched {agent} — session {name}"));
+                self.terms.focus_pending = Some((name.clone(), Instant::now()));
                 self.watch_instant_death(ctx, name, agent.to_string());
             }
             Err(e) => self.set_flash(format!("launch failed: {e}")),
         }
     }
 
-    /// Is this a node "Edit here" applies to — markdown, or a text asset?
+    /// A plain shell card at `dir`, focused as soon as it appears.
+    pub(super) fn new_terminal(&mut self, dir: &str) {
+        let path = self.ctx_path(dir);
+        match agents::launch_shell(None, &path) {
+            Ok(name) => {
+                self.set_flash(format!("opened terminal — session {name}"));
+                self.terms.focus_pending = Some((name, Instant::now()));
+            }
+            Err(e) => self.set_flash(format!("terminal failed: {e}")),
+        }
+    }
+
+    /// Is this a node "Edit here" applies to — markdown, a text asset,
+    /// or a folder (terminal editors open directories as pickers)?
     pub(super) fn editable(&self, id: NodeId) -> bool {
         let node = self.g.node(id);
         match node.kind {
-            NodeKind::File => true,
+            NodeKind::File | NodeKind::Dir => true,
             NodeKind::Asset => text_graph::filetype::is_text(&node.path),
             _ => false,
         }
@@ -1110,10 +1151,14 @@ impl Viewer {
         let node = self.g.node(id);
         let rel = node.path.clone();
         let abs = self.root.join(&rel);
-        let dir = abs
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.root.clone());
+        // a folder opens as the editor's picker, cwd'd inside itself
+        let dir = if node.kind == NodeKind::Dir {
+            abs.clone()
+        } else {
+            abs.parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.root.clone())
+        };
         let editor = super::actions::terminal_editor();
         // COLORFGBG tells the editor the pane is DARK: clientless tmux
         // answers no background-color query, and vim's fallback guesses
@@ -1128,6 +1173,7 @@ impl Viewer {
         match agents::launch_edit(None, &dir, &cmd, &rel) {
             Ok(name) => {
                 self.set_flash(format!("editing {rel} — session {name}"));
+                self.terms.focus_pending = Some((name.clone(), Instant::now()));
                 self.watch_instant_death(ctx, name, editor);
             }
             Err(e) => self.set_flash(format!("edit launch failed: {e}")),
