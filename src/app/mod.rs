@@ -992,12 +992,12 @@ impl Viewer {
                 } else {
                     // seed the override from where the card currently is, so
                     // the first dragged frame doesn't jump
-                    let cur_min = self
+                    let cur_center = self
                         .terms
                         .rects
                         .iter()
                         .find(|(s, p, _)| (s, p) == (&t.0, &t.1))
-                        .map(|(_, _, r)| r.min);
+                        .map(|(_, _, r)| r.center());
                     let anchor_s = self
                         .terms
                         .panes
@@ -1007,10 +1007,10 @@ impl Viewer {
                             let id = self.anchor_for(&a.cwd);
                             self.to_screen(rect, self.world_pos(id.0 as usize))
                         });
-                    if let (Some(min), Some(anchor_s)) = (cur_min, anchor_s) {
+                    if let (Some(center), Some(anchor_s)) = (cur_center, anchor_s) {
                         self.terms
                             .offsets
-                            .insert(t.clone(), (min - anchor_s) / self.zoom);
+                            .insert(t.clone(), (center - anchor_s) / self.zoom);
                     }
                     self.terms.drag_card = Some(t);
                 }

@@ -10,6 +10,8 @@
 - external web links
 - images/pdf/audio and other files.
 - make LLM wiki setup: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f 
+    - how to do the entire workflow? 
+    - ingest/query/lint
 - figure out how to use yaml frontmatter correctly.
     - each file should have some mandatory metadata like date created, date modified, immutable id.
     - quick description and purpose of this file.
@@ -20,6 +22,7 @@
     - light mode vs. dark mode
     - default agent.
     - 
+- when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to.
 
 # in progress
 - when I click to expand a terminal pane / agent pane it should expand so the the preview is in the center of the entire terminal. Currently the preview is like the top left part, but this is unintuitive because I place the preview at the place where I want the terminal to expand not wehre I want the top-leftt to expand from. DOes that make sense? Do you understand what i mean? 

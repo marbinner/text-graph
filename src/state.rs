@@ -23,7 +23,9 @@ pub struct ViewState {
 pub struct CardPos {
     pub session: String,
     pub pane: String,
-    /// World-space offset of the card's min corner from its anchor node.
+    /// World-space offset of the card's CENTER from its anchor node — the
+    /// center is the placement reference, so compact↔expanded flips grow
+    /// the card symmetrically around where the user put it.
     pub dx: f32,
     pub dy: f32,
 }

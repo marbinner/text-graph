@@ -24,8 +24,9 @@ pub(super) struct Terminals {
     pub(super) focused: Option<(String, String)>,
     /// Card hit-boxes from the last paint (screen space).
     pub(super) rects: Vec<(String, String, Rect)>,
-    /// User-arranged card positions: world-space offset of the card's min
-    /// corner from its anchor node. Absent = automatic outward placement.
+    /// User-arranged card positions: world-space offset of the card's
+    /// CENTER from its anchor node (the center is the placement reference —
+    /// expansion grows around it). Absent = automatic outward placement.
     pub(super) offsets: HashMap<(String, String), Vec2>,
     /// Parked arrangements (from disk, or from sessions that went away),
     /// keyed by session name: reclaimed when the session reappears.
@@ -698,13 +699,27 @@ impl Viewer {
                     c.rows.len() as f32 * line_h + title_h + pad * 2.0,
                 )
             };
-            // User-arranged cards keep their world-space offset from the
-            // anchor; otherwise place outward from the graph center relative
-            // to the anchor (jittered so several cards fan out), past the
-            // node's radius in screen space — the tether points inward and
-            // the card never sits on top of the cluster it's attached to.
+            // The card's UNEXPANDED footprint at this zoom — placement is
+            // computed from this, so expanding (click/pin/cursor) grows the
+            // card symmetrically around where the small card sat. The
+            // compact card is the placeholder for the terminal; it must not
+            // become its top-left corner.
+            let base_size = if compact_base {
+                Vec2::new(260.0, 82.0)
+            } else {
+                Vec2::new(
+                    c.cols as f32 * adv_base + pad * 2.0,
+                    c.rows.len() as f32 * line_h_base + title_h + pad * 2.0,
+                )
+            };
+            // User-arranged cards keep their CENTER's world-space offset
+            // from the anchor; otherwise place outward from the graph
+            // center relative to the anchor (jittered so several cards fan
+            // out), past the node's radius in screen space — the tether
+            // points inward and the card never sits on top of the cluster
+            // it's attached to.
             let (card, tether_to) = if let Some(off) = self.terms.offsets.get(&key) {
-                let card = Rect::from_min_size(anchor_s + *off * self.zoom, size);
+                let card = Rect::from_center_size(anchor_s + *off * self.zoom, size);
                 (card, card.center())
             } else {
                 let jitter = (hash_angle(&a.session, &a.pane, i) - std::f32::consts::PI) * 0.25;
@@ -717,10 +732,11 @@ impl Viewer {
                 let anchor_r = (self.radius[anchor.0 as usize] * self.zoom).clamp(1.5, 16.0);
                 let p = anchor_s + dir * (anchor_r + 22.0);
                 let min = Pos2::new(
-                    if dir.x >= 0.0 { p.x } else { p.x - size.x },
-                    if dir.y >= 0.0 { p.y } else { p.y - size.y },
+                    if dir.x >= 0.0 { p.x } else { p.x - base_size.x },
+                    if dir.y >= 0.0 { p.y } else { p.y - base_size.y },
                 );
-                (Rect::from_min_size(min, size), p)
+                let center = Rect::from_min_size(min, base_size).center();
+                (Rect::from_center_size(center, size), p)
             };
             // Double-click fly-in: the zoom jump already happened in the
             // input pass; now that the card's rect is known at the new zoom,
