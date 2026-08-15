@@ -112,6 +112,7 @@ impl Viewer {
 
         let Derived {
             radius,
+            depths,
             haystacks,
             n_files,
             n_dirs,
@@ -121,6 +122,7 @@ impl Viewer {
             dir_by_path,
         } = Self::derived(&g);
         self.radius = radius;
+        self.depths = depths;
         self.haystacks = haystacks;
         self.n_files = n_files;
         self.n_dirs = n_dirs;

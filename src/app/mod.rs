@@ -182,6 +182,21 @@ fn reveal_near_cursor(
         .collect()
 }
 
+/// Darken RGB by `f` (alpha untouched) — depth shading for folders.
+fn shade(c: Color32, f: f32) -> Color32 {
+    Color32::from_rgb(
+        (c.r() as f32 * f) as u8,
+        (c.g() as f32 * f) as u8,
+        (c.b() as f32 * f) as u8,
+    )
+}
+
+/// The folder color at a given tree depth: the root's folders are the
+/// brightest blue on the canvas, each level a shade darker.
+fn dir_depth_color(depth: u8) -> Color32 {
+    shade(DIR, 1.0 - depth.min(4) as f32 * 0.10)
+}
+
 /// Tapered tree edge: thick at the parent, thin at the child — hierarchy
 /// and direction readable without an arrowhead per edge.
 fn paint_tree_edge(p: &egui::Painter, parent: Pos2, child: Pos2, color: Color32) {
@@ -191,7 +206,7 @@ fn paint_tree_edge(p: &egui::Painter, parent: Pos2, child: Pos2, color: Color32)
         return;
     }
     let perp = Vec2::new(-d.y, d.x) / len;
-    let (wp, wc) = (1.7, 0.45);
+    let (wp, wc) = (2.1, 0.35);
     p.add(egui::Shape::convex_polygon(
         vec![
             parent + perp * wp,
@@ -270,6 +285,7 @@ fn paint_doc_icon(
 /// Everything `derived()` recomputes from a fresh graph.
 struct Derived {
     radius: Vec<f32>,
+    depths: Vec<u8>,
     haystacks: Vec<String>,
     n_files: usize,
     n_dirs: usize,
@@ -323,6 +339,8 @@ struct Viewer {
     sim: Sim,
     /// World-space radius per node (degree-scaled, Obsidian-style).
     radius: Vec<f32>,
+    /// Tree depth per node (0 = root; ghosts/web nodes are 0).
+    depths: Vec<u8>,
     /// World point currently at the viewport center.
     center: Pos2,
     /// Screen pixels per world unit.
@@ -428,13 +446,20 @@ impl Viewer {
             degree[l.from.0 as usize] += 1;
             degree[l.to.0 as usize] += 1;
         }
+        let depths: Vec<u8> = (0..g.nodes.len())
+            .map(|i| g.depth(NodeId(i as u32)).min(255) as u8)
+            .collect();
+        // Folders SHRINK with depth — the root is unmistakably the biggest
+        // thing on the canvas, each level visibly smaller, files below all
+        // of them. Hierarchy readable from size alone.
         let radius = g
             .nodes
             .iter()
+            .enumerate()
             .zip(&degree)
-            .map(|(n, d)| {
+            .map(|((i, n), d)| {
                 let base = match n.kind {
-                    NodeKind::Dir => 6.0,
+                    NodeKind::Dir => (10.0 - depths[i] as f32 * 1.5).max(5.5),
                     NodeKind::Image => 4.5,
                     NodeKind::File => 3.5,
                     NodeKind::Asset => 3.0,
@@ -462,6 +487,7 @@ impl Viewer {
         }
         Derived {
             radius,
+            depths,
             haystacks,
             n_files,
             n_dirs,
@@ -476,6 +502,7 @@ impl Viewer {
         let sim = Sim::new(&g);
         let Derived {
             radius,
+            depths,
             haystacks,
             n_files,
             n_dirs,
@@ -504,6 +531,7 @@ impl Viewer {
             g,
             sim,
             radius,
+            depths,
             center: cam.map_or(Pos2::ZERO, |(x, y, _)| Pos2::new(x, y)),
             zoom: cam.map_or(1.0, |(_, _, z)| z.clamp(0.02, 50.0)),
             hover: None,
@@ -1491,17 +1519,18 @@ impl Viewer {
                     }
                 }
                 NodeKind::Dir => {
+                    let col = dir_depth_color(self.depths[id.0 as usize]);
                     if glyph {
                         paint_glyph_node(
                             &painter,
                             s,
                             r,
                             filetype::ICON_FOLDER.glyph,
-                            dimmed(DIR),
+                            dimmed(col),
                             dimmed(BG),
                         );
                     } else {
-                        painter.circle_filled(s, r, dimmed(DIR));
+                        painter.circle_filled(s, r, dimmed(col));
                     }
                 }
                 NodeKind::File | NodeKind::Asset => {
@@ -1673,10 +1702,20 @@ impl Viewer {
             if strength <= 0.0 {
                 continue;
             }
+            // folder labels are blue and scale with the node — parent
+            // folders read as large bright anchors in the label soup
+            let is_dir = node.kind == NodeKind::Dir;
             let color = if active == Some(id) {
                 HOVER
+            } else if is_dir {
+                dir_depth_color(self.depths[id.0 as usize]).gamma_multiply(0.45 + 0.55 * strength)
             } else {
                 TEXT.gamma_multiply(0.35 + 0.65 * strength)
+            };
+            let font = if is_dir {
+                FontId::proportional((r * 1.15).clamp(11.5, 16.5))
+            } else {
+                FontId::proportional(11.5)
             };
             // an expanded box is wider than r — hang the label off its
             // right edge, not the nominal radius
@@ -1689,7 +1728,7 @@ impl Viewer {
                 anchor,
                 Align2::LEFT_CENTER,
                 node.display_name(),
-                FontId::proportional(11.5),
+                font,
                 color,
             );
         }
