@@ -10,3 +10,4 @@
 - Make the ranger style navigator and file viewer in the side bar prettier. Currently we don't have good icons for files or folders, and also we need to render the markdown files well and take into account obsidian style references to stuff like [[ref]] and also for external links and images.
 - when hovering over a node I should be able to see metadata like, when it was created, when it was last edited, how long it is, how many ingoing and outgoing references it has and how many of those are to files in the vault and which ones are external links.
 - there should be a quick option to open a text file in a terminal with my default terminal editor.
+- have a menu for settings.
