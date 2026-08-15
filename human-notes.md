@@ -34,7 +34,7 @@
     - size of various text and UI.
     - how far we have to zoom in to see previews etc.
     - graph physics
-- dd
+- when I pin a terminal/agent pane with ctrl+click it should stay at the exact same part of the screen regardless how I move. It's basically a stiky terminal I can take with me whereeve. 
 
 
 # in progress
