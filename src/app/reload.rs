@@ -121,7 +121,14 @@ impl Viewer {
                 .map(|&nid| (nid, t, a))
         });
         self.hover_body = None; // body may have changed on disk — re-read
-        self.cam_anim = None; // its target NodeId indexes the old graph
+        // the glide REMAPS too: cancelling parked the camera mid-flight
+        // whenever a reload landed inside the 180ms window (hjkl walking
+        // while an agent saves), leaving the new selection off-center
+        self.cam_anim = self.cam_anim.take().and_then(|(from, id, t)| {
+            by_ident
+                .get(&self.g.node(id).ident())
+                .map(|&nid| (from, nid, t))
+        });
         self.conn_cursor = None; // indexes the old graph's link lists
         self.best = None;
 
@@ -363,6 +370,24 @@ mod tests {
         v.pump_reload(&egui::Context::default());
         assert_eq!(v.g.nodes.len(), before, "old graph stays on error");
         assert!(v.reload_error.as_deref().unwrap().contains("disk on fire"));
+    }
+
+    /// A reload landing inside the 180ms glide window must not park the
+    /// camera mid-flight — the target remaps by ident like selection does.
+    #[test]
+    fn camera_glide_survives_reload_remapped_by_ident() {
+        let mut v = fixture_viewer();
+        let id = v.g.by_path("index.md").expect("index exists");
+        v.frame_node(id);
+        assert!(v.cam_anim.is_some());
+        let g2 = graph::build(vault::scan(&v.root).unwrap());
+        v.apply_graph(g2);
+        let target = v.cam_anim.map(|(_, i, _)| v.g.node(i).path.clone());
+        assert_eq!(
+            target.as_deref(),
+            Some("index.md"),
+            "glide continues toward the remapped node"
+        );
     }
 
     #[test]
