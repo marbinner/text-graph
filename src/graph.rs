@@ -333,7 +333,7 @@ pub fn build(scan: VaultScan) -> Graph {
                     name: file_stem(&rel),
                     title: file.title,
                     aliases: file.aliases,
-                    externals: file.externals,
+                    externals: file.externals.into_iter().map(|e| e.url).collect(),
                     parent: Some(parent),
                     children: Vec::new(),
                 });

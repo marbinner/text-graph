@@ -24,3 +24,4 @@ pub mod stats;
 pub mod thumb;
 pub mod tmux;
 pub mod vault;
+pub mod weburl;

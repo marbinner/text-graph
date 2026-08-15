@@ -22,9 +22,10 @@ pub struct RawFile {
     pub aliases: Vec<String>,
     /// Extracted wikilink targets, in document order.
     pub links: Vec<RawLink>,
-    /// External http(s) URLs found in the body, deduplicated, in document
-    /// order. Metadata (hover popups), not edges.
-    pub externals: Vec<String>,
+    /// External http(s) URLs found in the body, deduplicated by exact
+    /// text, in document order. Resolution turns these into Web nodes and
+    /// External edges (identity decided there, via weburl::normalize).
+    pub externals: Vec<RawExternal>,
     /// Non-fatal parse problem (e.g. invalid frontmatter YAML).
     pub warning: Option<String>,
 }
@@ -34,6 +35,14 @@ pub struct RawLink {
     /// Target with alias / heading / block suffixes stripped, e.g. `topics/rust`.
     pub target: String,
     /// Byte offset of `[[` in the body (kept for future use: previews, jumps).
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawExternal {
+    /// The URL as written (unnormalized — display keeps the author's form).
+    pub url: String,
+    /// Byte offset in the body, like [`RawLink::offset`].
     pub offset: usize,
 }
 
@@ -337,10 +346,11 @@ pub(crate) fn excluded_ranges(body: &str) -> Vec<Range<usize>> {
 /// are stripped from the returned target.
 /// Extract external http(s) URLs from a body — markdown link targets,
 /// autolinks, and bare URLs alike — skipping code (fenced and inline).
-/// Deduplicated, document order. Metadata for popups, never edges.
-pub fn extract_externals(body: &str) -> Vec<String> {
+/// Deduplicated by exact text (first occurrence's offset wins), document
+/// order.
+pub fn extract_externals(body: &str) -> Vec<RawExternal> {
     let excluded = excluded_ranges(body);
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<RawExternal> = Vec::new();
     let mut i = 0;
     while let Some(found) = body[i..].find("http") {
         let start = i + found;
@@ -368,8 +378,11 @@ pub fn extract_externals(body: &str) -> Vec<String> {
         }
         // trailing sentence punctuation is prose, not URL
         let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
-        if url.len() > scheme_len && !out.iter().any(|u| u == url) {
-            out.push(url.to_string());
+        if url.len() > scheme_len && !out.iter().any(|u| u.url == url) {
+            out.push(RawExternal {
+                url: url.to_string(),
+                offset: start,
+            });
         }
     }
     out
@@ -464,8 +477,10 @@ mod tests {
                     bare https://foo.bar/baz. and dup https://docs.rs/tmux\n\
                     ```\nhttps://in-code.example\n```\n\
                     not a url: httpx://nope http alone";
+        let ex = extract_externals(body);
+        let urls: Vec<&str> = ex.iter().map(|e| e.url.as_str()).collect();
         assert_eq!(
-            extract_externals(body),
+            urls,
             [
                 "https://docs.rs/tmux",
                 "https://example.com/a",
