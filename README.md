@@ -31,15 +31,19 @@ graph live-reloads when you save.
 | **Dir node** | every directory with files somewhere beneath it |
 | **Ghost node** | a `[[target]]` that resolves to nothing — a note you've referenced but not written; drawn hollow |
 | **Web node** | every external URL cited anywhere — ONE cyan globe per normalized URL however many notes cite it, so shared sources become visible bridges between their citers; `w` toggles them, Enter/double-click opens the browser |
-| **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton |
-| **WikiLink edge** | `[[...]]` in note bodies; drawn as faint curves, bright on the hovered node |
+| **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton — drawn as a **tapered wedge**, thick at the parent thinning to the child |
+| **WikiLink edge** | `[[...]]` in note bodies; faint **arrowheaded** curves, bright on the hovered node |
 | **External edge** | note → cited URL; fainter cyan curves — context, not structure |
 
 Big enough to read, every node paints as its **file-type icon** (Nerd Font
 glyphs bundled in `assets/icons.ttf`): the python logo on `.py`, the css
 shield, markdown pages, blue folders, per-language colors — zoomed way
 out they collapse to plain color-coded discs, so huge graphs render
-cheap. Ghosts stay hollow outlines.
+cheap. Ghosts stay hollow outlines. **The hierarchy is legible at a
+glance**: folders shrink and darken with tree depth (the root is the
+biggest, brightest thing on the canvas) and their names render in blue
+at a size that scales with the node — a readable directory outline over
+the graph, wedge edges pointing the way down.
 
 **The closer you look, the more you see.** Labels ease in early (hubs
 first) and moving the mouse acts as a label flashlight: names near the
@@ -119,8 +123,11 @@ listing for folders), and the color-coded connections strip — every row
 led by its file-type icon. Note previews render **Obsidian-flavored**:
 `[[wikilinks]]` are real links that jump to their node (ghosts included),
 `![[image embeds]]` and relative image paths render inline, relative
-markdown links to vault files jump too, and external links open your
-browser.
+markdown links to vault files jump too, footnote-style citations
+(`[^raw/2026-….md]` — a wiki convention: sources cited by path) become
+links showing the cited note's title, and external links open your
+browser. Every camera jump — tree walks, search, link clicks — **glides**
+instead of snapping, and never changes your zoom.
 
 | Input | Action |
 |---|---|
@@ -190,6 +197,12 @@ you clicked:
   pretending it worked.
 - **New terminal** — the same thing with a plain shell (`tg_term`): a
   terminal card at that folder you can type into right in the graph.
+- **Edit here** — on a text file (`e`, or right-click): your terminal
+  editor opens on it in a `tg_edit` session whose card tethers to the
+  file's own node (the binding rides the session's `@tg_anchor` tmux
+  option, so it survives viewer restarts); the card dies with the editor,
+  and the pane is told it's dark (`COLORFGBG`) so editors pick their dark
+  theme.
 
 And the reverse, on a card: **Attach in terminal…** opens a real terminal
 window on that session, landed on that pane (mirror and external client

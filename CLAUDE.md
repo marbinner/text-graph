@@ -102,21 +102,31 @@
   suspend), Ctrl+click = toggle pin (📌 expanded at any zoom, several at
   once, never touches focus; persisted and parked/claimed by session like
   arrangements), drag = arrange (world-space offset from anchor in
-  `terms.offsets`), Ctrl+Q or click-away = release, dwell on a COMPACT
-  card = full-screen peek popup (same 350ms dwell as node previews;
-  expanded cards never peek).
-- Agent launches (`agents::launch`) wrap the command as
-  `PATH='<server-global>:<client>' exec <agent>` — the viewer may run with
-  an IDE-stripped PATH and tmux seeds new-session env from its client, so
-  without this the pane dies unfindable in ~25ms and the session vanishes
-  before discovery's scan (`-e PATH=` does NOT reach the initial pane —
-  tested). A 2.5s watchdog flashes when a launched session is already gone. A click-away onto a
-  node also selects it in the same gesture (release must never cost a
+  `terms.offsets`; offsets reference the card CENTER, so expansion grows
+  symmetrically around it), Ctrl+Q or click-away = release, dwell on a
+  COMPACT card = full-screen peek popup (same 350ms dwell as node
+  previews; expanded cards never peek). Paint order IS stacking order:
+  plain → pinned → cursor → focused last, and hit-testing follows
+  (last rect wins), so the visible top card is the clickable one.
+  tg_edit panes run under `env COLORFGBG='15;0'` — clientless tmux
+  answers no background query and vim would guess light. A click-away onto
+  a node also selects it in the same gesture (release must never cost a
   second click), but a release-click on empty space ONLY releases — it
   must not deselect, or leaving a terminal would slam the navigator pane
   shut. Deselect-on-empty-click applies only when no terminal was focused.
   Cards win pointer contention over nodes beneath them via last-frame
   `terms.rects`.
+- `frame_node` GLIDES (180ms ease-out toward the node, cancelled by any
+  manual camera input) and never touches zoom — don't reintroduce the
+  snap or the 0.9 zoom floor.
+- Card tethers fill a reserved shape slot among the edges (under node
+  icons); the hovered node's label paints last, on a backdrop.
+- Agent launches (`agents::launch`) wrap the command as
+  `PATH='<server-global>:<client>' exec <agent>` — the viewer may run with
+  an IDE-stripped PATH and tmux seeds new-session env from its client, so
+  without this the pane dies unfindable in ~25ms and the session vanishes
+  before discovery's scan (`-e PATH=` does NOT reach the initial pane —
+  tested). A 2.5s watchdog flashes when a launched session is already gone.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to

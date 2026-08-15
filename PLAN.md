@@ -1,9 +1,13 @@
 # text-graph — Plan
 
-*Last updated 2026-08-14 (v0.2.0, 108 tests). Where to pick up: milestone F
+*Last updated 2026-08-15 (v0.3.0, 127 tests). Where to pick up: milestone F
 (agents talk) is fully spec'd below — design converged, NO code yet; start at
 slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
-step 0, the audit backlog under D.*
+step 0, the audit backlog under D. The 2026-08-15 wave (v0.3.0): asset
+nodes + file-type icons, metadata hover popups everywhere, Obsidian-flavored
+previews, milestone G (web nodes), directed/tapered edges + depth-scaled
+hierarchy, camera glides, edit-in-graph cards (@tg_anchor), and the
+launch-PATH + busy-agent-hover fixes.*
 
 **Phase 1 (current):** a fast native GUI over a markdown vault. Point it at a folder of
 `.md` files and it renders an interactive graph. One static Rust binary — egui, no
@@ -326,7 +330,8 @@ become visible bridges between notes that never wikilink each other (and
 the raw-note convention composes: analysis → citation → raw note →
 external edge → source). Decisions made: per-URL granularity (not
 per-domain — presentation carries the domain story: small nodes, globe
-glyph, host-only labels, full URL in popup/status); `LinkKind::External`
+glyph, host labels — refined post-ship to layered titles: authored link text,
+else URL slug, else host; full URL in popup/status); `LinkKind::External`
 edges drawn fainter than wikilinks; mild deterministic normalization
 (lowercase host, strip fragment + utm_*/fbclid/gclid, trailing slash;
 KEEP other query params); on by default with a `w` toggle persisted in

@@ -20,16 +20,20 @@ pub(super) const TERMINAL_EDITORS: &[&str] = &[
     "vim", "nvim", "vi", "nano", "micro", "hx", "helix", "kak", "vis", "ne",
 ];
 
-pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
-    let editor = std::env::var("VISUAL")
+/// $VISUAL, else $EDITOR, when set and non-blank.
+fn env_editor() -> Option<String> {
+    std::env::var("VISUAL")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| {
             std::env::var("EDITOR")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
-        });
-    let Some(editor) = editor else {
+        })
+}
+
+pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
+    let Some(editor) = env_editor() else {
         return detached(std::process::Command::new("xdg-open").arg(file));
     };
     // $EDITOR may carry args ("code --wait") — split on whitespace
@@ -53,15 +57,7 @@ pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
 /// first of hx/nvim/vim/nano/vi on PATH. For editing INSIDE a graph
 /// terminal card — GUI editors ($EDITOR=code) would exit instantly there.
 pub(super) fn terminal_editor() -> String {
-    let env = std::env::var("VISUAL")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("EDITOR")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        });
-    if let Some(ed) = env {
+    if let Some(ed) = env_editor() {
         let base = ed.split_whitespace().next().unwrap_or("");
         let base = Path::new(base)
             .file_name()

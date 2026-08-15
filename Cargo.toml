@@ -1,6 +1,6 @@
 [package]
 name = "text-graph"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Native graph viewer for a folder of markdown notes, with live tmux agent terminals in the graph"
 # license: intentionally unset until the author picks one

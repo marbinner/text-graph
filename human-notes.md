@@ -1,6 +1,9 @@
 # notes made by human, don't take seriously
 
 # todo
+- action view: automatically move to locations where things are happening.
+    - when the agents are doing stuff. Sit back and relax and watch what they're doing automatically. 
+    - we should probably have a centralized event logs of things that are happening. We're already tracking all the files and all the changes we should be able to see all the changes that are happening.
 - how to treat agent context
     - we want each agent to in essance have their context be a text file that we can search through.
     - a standard text summarization of an agents history can be fed to any agent harness to have it continue where it left off.
@@ -19,16 +22,16 @@
     - each file should have some mandatory metadata like date created, date modified, immutable id.
     - quick description and purpose of this file.
     - tags
-- have a menu for settings.
-    - light mode vs. dark mode
-    - default agent and then when I click the launch agent button without selecting a specific one it launches the default one.
-    - 
 - fuzzy search across the entire graph including contents of the text files.
 - make it so I can drag and drop files and paste shit into the gui.
+
 # in progress
-- there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
+- have a menu for settings.
+    - light mode vs. dark mode
+    - default agent and then when I click the launch agent button without selecting a specific one it launches the default one. The default agent for now should be pi.
 
 # done
+- there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
 - when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to. And also make it maintain the same zoom the camera already has, but the camera just refocuses location.
 - make graph edges directed and make folder edges more noticable. The folder structure should be clear glancing at the graph.
 - make it so the focused pane/terminal is always on top of the non-focused one. Currently other terminals appear on top of the focues one.
