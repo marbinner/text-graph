@@ -66,6 +66,10 @@ const DIM: f32 = 0.18;
 /// Screen radius above which a ghost shows its hollow-page silhouette.
 const ICON_MIN_R: f32 = 6.5;
 
+/// Camera glide duration for frame_node jumps — long enough to read the
+/// direction of travel, short enough to never feel laggy.
+const CAM_ANIM_SECS: f32 = 0.18;
+
 /// Screen radius above which a node paints as its file-type glyph instead
 /// of a disc — glyphs are unreadable smaller than this.
 const GLYPH_MIN_R: f32 = 4.0;
@@ -356,6 +360,10 @@ struct Viewer {
     fitted: bool,
     /// Canvas rect of the previous frame — camera compensation on change.
     last_canvas_rect: Option<Rect>,
+    /// In-flight camera glide: (start center, target node, start time).
+    /// The target is a NODE so a settling sim can't make the glide land
+    /// beside it. Manual pan/zoom input cancels it.
+    cam_anim: Option<(Pos2, NodeId, Instant)>,
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
@@ -541,6 +549,7 @@ impl Viewer {
             drag_node: None,
             fitted: cam.is_some(), // a restored camera must not be re-fit away
             last_canvas_rect: None,
+            cam_anim: None,
             n_files,
             n_dirs,
             n_images,
@@ -603,11 +612,11 @@ impl Viewer {
         }
     }
 
+    /// Glide the camera to center on `id` — zoom stays exactly as it is,
+    /// and the quick movement (instead of a snap) shows where the jump
+    /// came from and where it lands.
     fn frame_node(&mut self, id: NodeId) {
-        self.center = self.world_pos(id.0 as usize);
-        if self.zoom < 0.9 {
-            self.zoom = 0.9;
-        }
+        self.cam_anim = Some((self.center, id, Instant::now()));
     }
 
     fn close_search(&mut self) {
@@ -845,6 +854,7 @@ impl Viewer {
                 )
             });
             if h || j || k || l || d || u {
+                self.cam_anim = None; // manual camera input wins
                 let axis = |pos: bool, neg: bool| (pos as i8 - neg as i8) as f32;
                 let pan = 2200.0 * dt / self.zoom; // constant screen-space speed
                 self.center.x += pan * axis(l, h);
@@ -1054,6 +1064,19 @@ impl Viewer {
             self.center += (rect.center() - last.center()) / self.zoom;
         }
         self.last_canvas_rect = Some(rect);
+        if let Some((from, id, t0)) = self.cam_anim {
+            if (id.0 as usize) < self.g.nodes.len() {
+                let t = (t0.elapsed().as_secs_f32() / CAM_ANIM_SECS).min(1.0);
+                let e = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
+                self.center = from.lerp(self.world_pos(id.0 as usize), e);
+                if t >= 1.0 {
+                    self.cam_anim = None;
+                }
+                ui.ctx().request_repaint();
+            } else {
+                self.cam_anim = None; // graph swapped underneath
+            }
+        }
         if !self.fitted {
             self.fit(rect);
             self.fitted = true;
@@ -1200,6 +1223,7 @@ impl Viewer {
                 self.sim.pin(id.0, w.x, w.y);
                 ui.ctx().request_repaint();
             } else {
+                self.cam_anim = None; // manual pan wins over a glide
                 self.center -= response.drag_delta() / self.zoom;
             }
         }
@@ -1224,6 +1248,7 @@ impl Viewer {
             && let Some(cursor) = response.hover_pos()
         {
             // keep the world point under the cursor fixed while zooming
+            self.cam_anim = None;
             let anchor = self.to_world(rect, cursor);
             self.zoom = (self.zoom * factor).clamp(0.02, 50.0);
             self.center = anchor - (cursor - rect.center()) / self.zoom;

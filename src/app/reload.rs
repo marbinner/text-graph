@@ -107,6 +107,7 @@ impl Viewer {
                 .map(|&nid| (nid, t, a))
         });
         self.hover_body = None; // body may have changed on disk — re-read
+        self.cam_anim = None; // its target NodeId indexes the old graph
         self.conn_cursor = None; // indexes the old graph's link lists
         self.best = None;
 
