@@ -117,6 +117,7 @@ impl Viewer {
             n_dirs,
             n_images,
             n_assets,
+            n_webs,
             dir_by_path,
         } = Self::derived(&g);
         self.radius = radius;
@@ -125,6 +126,7 @@ impl Viewer {
         self.n_dirs = n_dirs;
         self.n_images = n_images;
         self.n_assets = n_assets;
+        self.n_webs = n_webs;
         self.dir_by_path = dir_by_path;
         self.scores = vec![None; g.nodes.len()];
         self.last_query.clear(); // force a re-score against the new nodes

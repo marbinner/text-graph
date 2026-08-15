@@ -147,6 +147,11 @@ pub const ICON_IMAGE: FileIcon = FileIcon {
     glyph: '\u{f03e}',
     color: (0x9e, 0xce, 0x6a),
 };
+/// Globe, for external web nodes.
+pub const ICON_WEB: FileIcon = FileIcon {
+    glyph: '\u{f0ac}',
+    color: (0x56, 0xb6, 0xc2),
+};
 
 /// The icon for a leaf, by extension (or well-known extensionless name).
 pub fn icon_of(rel_path: &str) -> FileIcon {

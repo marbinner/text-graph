@@ -231,6 +231,7 @@ struct Derived {
     n_dirs: usize,
     n_images: usize,
     n_assets: usize,
+    n_webs: usize,
     dir_by_path: HashMap<String, NodeId>,
 }
 
@@ -297,6 +298,7 @@ struct Viewer {
     n_dirs: usize,
     n_images: usize,
     n_assets: usize,
+    n_webs: usize,
     // ---- search ----
     matcher: Matcher,
     /// Per-node "name aliases path" string the fuzzy pattern scores against.
@@ -405,6 +407,7 @@ impl Viewer {
         let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
         let n_images = g.nodes.iter().filter(|n| n.kind == NodeKind::Image).count();
         let n_assets = g.nodes.iter().filter(|n| n.kind == NodeKind::Asset).count();
+        let n_webs = g.nodes.iter().filter(|n| n.kind == NodeKind::Web).count();
         let mut dir_by_path = HashMap::new();
         for (i, n) in g.nodes.iter().enumerate() {
             if n.kind == NodeKind::Dir {
@@ -418,6 +421,7 @@ impl Viewer {
             n_dirs,
             n_images,
             n_assets,
+            n_webs,
             dir_by_path,
         }
     }
@@ -431,6 +435,7 @@ impl Viewer {
             n_dirs,
             n_images,
             n_assets,
+            n_webs,
             dir_by_path,
         } = Self::derived(&g);
         let n = haystacks.len();
@@ -465,6 +470,7 @@ impl Viewer {
             n_dirs,
             n_images,
             n_assets,
+            n_webs,
             matcher: Matcher::new(Config::DEFAULT),
             haystacks,
             search_open: false,
@@ -908,9 +914,7 @@ impl Viewer {
             NodeKind::Ghost => {
                 return ('\u{f016}', GHOST); // an unwritten page
             }
-            NodeKind::Web => {
-                return ('\u{f016}', WEB); // placeholder until the globe glyph (G3)
-            }
+            NodeKind::Web => filetype::ICON_WEB,
             _ => filetype::icon_of(&node.path),
         };
         (
@@ -1378,8 +1382,19 @@ impl Viewer {
             let glyph = r >= GLYPH_MIN_R;
             match node.kind {
                 NodeKind::Web => {
-                    // a cited URL — small cyan dot (globe glyph lands in G3)
-                    painter.circle_filled(s, r, dimmed(WEB));
+                    // a cited URL — cyan globe once readable, dot below
+                    if glyph {
+                        paint_glyph_node(
+                            &painter,
+                            s,
+                            r,
+                            filetype::ICON_WEB.glyph,
+                            dimmed(WEB),
+                            dimmed(BG),
+                        );
+                    } else {
+                        painter.circle_filled(s, r, dimmed(WEB));
+                    }
                 }
                 NodeKind::Ghost => {
                     painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(GHOST)));
@@ -1639,7 +1654,7 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
+                    "{} files · {} dirs{}{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · t terminals · 0 reset",
                     self.n_files,
                     self.n_dirs,
                     if self.n_images > 0 {
@@ -1649,6 +1664,11 @@ impl Viewer {
                     },
                     if self.n_assets > 0 {
                         format!(" · {} assets", self.n_assets)
+                    } else {
+                        String::new()
+                    },
+                    if self.n_webs > 0 {
+                        format!(" · {} web", self.n_webs)
                     } else {
                         String::new()
                     },
