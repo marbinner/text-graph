@@ -44,6 +44,9 @@ pub struct RawExternal {
     pub url: String,
     /// Byte offset in the body, like [`RawLink::offset`].
     pub offset: usize,
+    /// The markdown link text when cited as `[text](url)` — an authored
+    /// title for the web node. None for bare URLs and autolinks.
+    pub text: Option<String>,
 }
 
 #[derive(Debug)]
@@ -378,10 +381,17 @@ pub fn extract_externals(body: &str) -> Vec<RawExternal> {
         }
         // trailing sentence punctuation is prose, not URL
         let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        // `[text](url` — the author already titled this link
+        let text = body[..start].strip_suffix("](").and_then(|before| {
+            let open = before.rfind('[')?;
+            let t = before[open + 1..].trim();
+            (!t.is_empty() && !t.contains('\n') && t.len() <= 100).then(|| t.to_string())
+        });
         if url.len() > scheme_len && !out.iter().any(|u| u.url == url) {
             out.push(RawExternal {
                 url: url.to_string(),
                 offset: start,
+                text,
             });
         }
     }

@@ -154,6 +154,9 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
 pub fn resolve_externals(g: &mut Graph, file_externals: &[(NodeId, Vec<vault::RawExternal>)]) {
     let mut webs: HashMap<String, NodeId> = HashMap::new();
     let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
+    // The first authored `[text](url)` in encounter order names the node
+    // (it beats the slug-mined title a node is created with).
+    let mut first_text: HashMap<NodeId, String> = HashMap::new();
     for (src, exts) in file_externals {
         for e in exts {
             let key = crate::weburl::normalize(&e.url);
@@ -161,13 +164,16 @@ pub fn resolve_externals(g: &mut Graph, file_externals: &[(NodeId, Vec<vault::Ra
                 g.push_node(Node {
                     kind: NodeKind::Web,
                     name: crate::weburl::host(&key).to_string(),
+                    title: crate::weburl::slug_title(&key),
                     path: key,
-                    title: None,
                     aliases: Vec::new(),
                     parent: None,
                     children: Vec::new(),
                 })
             });
+            if let Some(t) = &e.text {
+                first_text.entry(to).or_insert_with(|| t.clone());
+            }
             if seen.insert((*src, to)) {
                 g.links.push(Link {
                     from: *src,
@@ -177,6 +183,9 @@ pub fn resolve_externals(g: &mut Graph, file_externals: &[(NodeId, Vec<vault::Ra
                 });
             }
         }
+    }
+    for (id, t) in first_text {
+        g.nodes[id.0 as usize].title = Some(t);
     }
 }
 

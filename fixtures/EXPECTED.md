@@ -88,6 +88,8 @@ the image); 2 ghost edges.
 - External edges: **2**, both from projects/ideas.md
   (`https://docs.rs/notify`, `https://example.com/spec` — already in
   canonical form, so normalization is a no-op here)
+- Web node labels: `the docs` (from the `[the docs](…)` link text) and
+  `spec` (slug mined from the bare URL); hosts stay in `name`
 
 ## Stress vault
 

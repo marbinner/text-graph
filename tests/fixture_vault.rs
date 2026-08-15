@@ -218,6 +218,18 @@ fn external_urls_become_web_nodes_and_subtree_stats_add_up() {
         );
     }
     assert_eq!(g.node(find(&g, "https://docs.rs/notify")).name, "docs.rs");
+    // web nodes take their label from the citing link text when authored,
+    // else a slug mined from the URL, else the host
+    assert_eq!(
+        g.node(find(&g, "https://docs.rs/notify")).display_name(),
+        "the docs",
+        "[the docs](url) names the node"
+    );
+    assert_eq!(
+        g.node(find(&g, "https://example.com/spec")).display_name(),
+        "spec",
+        "a bare URL is titled by its slug"
+    );
     // 1 wikilink (the ghost) + 2 external
     assert_eq!(g.outlinks(ideas).count(), 3);
 
