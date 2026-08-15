@@ -58,8 +58,46 @@ const LINK_IN: Color32 = Color32::from_rgb(0xbb, 0x9a, 0xf7);
 /// Dim factor applied to everything outside the active node's neighborhood.
 const DIM: f32 = 0.18;
 
-/// Screen radius above which a node shows its type glyph.
+/// Screen radius above which a ghost shows its hollow-page silhouette.
 const ICON_MIN_R: f32 = 6.5;
+
+/// Screen radius above which a node paints as its file-type glyph instead
+/// of a disc — glyphs are unreadable smaller than this.
+const GLYPH_MIN_R: f32 = 4.0;
+
+/// The bundled Nerd Font subset (assets/icons.ttf), registered as the
+/// "icons" family at startup — file-type glyphs render with it.
+fn install_icon_font(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "tg-icons".into(),
+        egui::FontData::from_static(include_bytes!("../../assets/icons.ttf")).into(),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name("icons".into()),
+        vec!["tg-icons".into()],
+    );
+    ctx.set_fonts(fonts);
+}
+
+fn icon_font(size: f32) -> FontId {
+    FontId::new(size, egui::FontFamily::Name("icons".into()))
+}
+
+/// A file-type glyph centered on the node, over a canvas-colored backing
+/// disc — edges crossing behind a thin glyph would shred it, and the old
+/// solid discs occluded them the same way.
+fn paint_glyph_node(
+    p: &egui::Painter,
+    c: Pos2,
+    r: f32,
+    glyph: char,
+    color: Color32,
+    backing: Color32,
+) {
+    p.circle_filled(c, r, backing);
+    p.text(c, Align2::CENTER_CENTER, glyph, icon_font(r * 2.3), color);
+}
 
 /// Label LOD ramp: labels ease in between these screen radii instead of
 /// popping at a hard cutoff. Dirs surface earlier than leaves.
@@ -105,19 +143,6 @@ fn reveal_near_cursor(
     near.into_iter()
         .map(|(d, id)| (id, 1.0 - d / REVEAL_R))
         .collect()
-}
-
-/// Folder silhouette: tab + rounded body, sized relative to the node disc.
-fn paint_folder_icon(p: &egui::Painter, c: Pos2, r: f32, color: Color32) {
-    let w = r * 1.02;
-    let h = r * 0.72;
-    let body = Rect::from_center_size(c + Vec2::new(0.0, r * 0.10), Vec2::new(w, h));
-    let tab = Rect::from_min_size(
-        Pos2::new(body.min.x, body.min.y - r * 0.20),
-        Vec2::new(w * 0.45, r * 0.24),
-    );
-    p.rect_filled(tab, r * 0.08, color);
-    p.rect_filled(body, r * 0.10, color);
 }
 
 /// Photo silhouette: a punched-out landscape frame with a sun dot and a
@@ -196,6 +221,7 @@ pub fn run(path: &Path) -> ExitCode {
         // egui quits on Ctrl+Q by default; that key releases terminal focus
         // here. Closing the window still quits.
         cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
+        install_icon_font(&cc.egui_ctx);
         let mut viewer = viewer;
         viewer.start_watcher(cc.egui_ctx.clone());
         viewer.start_agent_scan(cc.egui_ctx.clone());
@@ -1268,23 +1294,30 @@ impl Viewer {
             let node = self.g.node(id);
             let on = lit[id.0 as usize];
             let dimmed = |c: Color32| if on { c } else { c.gamma_multiply(DIM) };
-            // Type glyph inside the disc once it's big enough to read — a
-            // dark punch-out silhouette, painter primitives only (no text
-            // layout), so zoomed-out rendering stays a plain circle.
-            let glyph = r >= ICON_MIN_R;
-            let punch = dimmed(TERM_BG);
+            // Big enough to read, a node paints as its file-type glyph
+            // (Nerd Font icons — python is the python logo, css the css
+            // shield); below that, a colored disc. Ghosts stay hollow.
+            let glyph = r >= GLYPH_MIN_R;
             match node.kind {
                 NodeKind::Ghost => {
                     painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(GHOST)));
-                    if glyph {
+                    if r >= ICON_MIN_R {
                         // an unwritten page, hollow like its node
                         paint_doc_icon(&painter, s, r, None, Some(dimmed(GHOST)));
                     }
                 }
                 NodeKind::Dir => {
-                    painter.circle_filled(s, r, dimmed(DIR));
                     if glyph {
-                        paint_folder_icon(&painter, s, r, punch);
+                        paint_glyph_node(
+                            &painter,
+                            s,
+                            r,
+                            filetype::ICON_FOLDER.glyph,
+                            dimmed(DIR),
+                            dimmed(BG),
+                        );
+                    } else {
+                        painter.circle_filled(s, r, dimmed(DIR));
                     }
                 }
                 NodeKind::File | NodeKind::Asset => {
@@ -1305,9 +1338,12 @@ impl Viewer {
                         0.12,
                     );
                     if presence < 0.95 {
-                        painter.circle_filled(s, r, dimmed(disc));
-                        if glyph && presence < 0.05 {
-                            paint_doc_icon(&painter, s, r, Some(punch), None);
+                        if glyph {
+                            let icon = filetype::icon_of(&node.path);
+                            let color = Color32::from_rgb(icon.color.0, icon.color.1, icon.color.2);
+                            paint_glyph_node(&painter, s, r, icon.glyph, dimmed(color), dimmed(BG));
+                        } else {
+                            painter.circle_filled(s, r, dimmed(disc));
                         }
                     }
                     if presence >= 0.05 {
