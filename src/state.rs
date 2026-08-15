@@ -204,10 +204,26 @@ pub fn load(vault: &Path) -> ViewState {
 }
 
 /// Write-temp-then-rename, so a crash mid-write can't leave a torn file.
+/// The state dir and temp file must not be symlinks: saving starts ~3s
+/// after opening a vault with zero interaction, so a hostile vault could
+/// otherwise plant links that redirect the write outside the vault
+/// (truncating whatever they point at). `view` itself needs no check —
+/// rename() replaces a symlink instead of following it.
 pub fn save(vault: &Path, s: &ViewState) -> io::Result<()> {
     let dir = vault.join(".text-graph");
+    let no_follow = |p: &Path, what: &str| {
+        if std::fs::symlink_metadata(p).is_ok_and(|m| m.is_symlink()) {
+            Err(io::Error::other(format!(
+                "{what} is a symlink — refusing to write view state through it"
+            )))
+        } else {
+            Ok(())
+        }
+    };
+    no_follow(&dir, ".text-graph")?;
     std::fs::create_dir_all(&dir)?;
     let tmp = dir.join("view.tmp");
+    no_follow(&tmp, "view.tmp")?;
     std::fs::write(&tmp, to_text(s))?;
     std::fs::rename(&tmp, dir.join("view"))
 }
@@ -311,6 +327,43 @@ mod tests {
             load(Path::new("/nonexistent-vault-path")),
             ViewState::default()
         );
+    }
+
+    /// Saving must refuse to follow planted symlinks — it fires ~3s after
+    /// opening a vault with no interaction, so a hostile vault could
+    /// otherwise truncate an arbitrary user-writable file.
+    #[test]
+    fn save_refuses_symlinked_state_dir_and_tmp() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("tg-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+
+        // case 1: .text-graph itself is a symlink out of the vault
+        let v1 = base.join("v1");
+        std::fs::create_dir_all(&v1).unwrap();
+        symlink(&outside, v1.join(".text-graph")).unwrap();
+        assert!(save(&v1, &ViewState::default()).is_err());
+        assert!(
+            std::fs::read_dir(&outside).unwrap().next().is_none(),
+            "nothing may be written through the link"
+        );
+
+        // case 2: a planted view.tmp symlink targeting a victim file
+        let v2 = base.join("v2");
+        std::fs::create_dir_all(v2.join(".text-graph")).unwrap();
+        let victim = base.join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+        symlink(&victim, v2.join(".text-graph/view.tmp")).unwrap();
+        assert!(save(&v2, &ViewState::default()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "precious",
+            "the victim file must not be truncated"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn k(s: &str, p: &str) -> (String, String) {
