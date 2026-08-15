@@ -58,6 +58,22 @@ const DIM: f32 = 0.18;
 /// Screen radius above which a node shows its type glyph.
 const ICON_MIN_R: f32 = 6.5;
 
+/// Label LOD ramp: labels ease in between these screen radii instead of
+/// popping at a hard cutoff. Dirs surface earlier than leaves.
+const LABEL_RAMP_DIR: (f32, f32) = (2.0, 3.2);
+const LABEL_RAMP: (f32, f32) = (2.6, 4.2);
+
+/// 0 below the ramp, 1 above it — how strongly a node's label shows at
+/// this screen radius.
+fn label_lod(kind: NodeKind, r: f32) -> f32 {
+    let (lo, hi) = if kind == NodeKind::Dir {
+        LABEL_RAMP_DIR
+    } else {
+        LABEL_RAMP
+    };
+    ((r - lo) / (hi - lo)).clamp(0.0, 1.0)
+}
+
 /// Cursor flashlight: labels within this screen distance of the pointer are
 /// revealed even when the zoom LOD would hide them.
 const REVEAL_R: f32 = 130.0;
@@ -781,7 +797,7 @@ impl Viewer {
 
     /// Screen radius above which an Image node paints as a thumbnail box
     /// rather than a disc.
-    const IMG_BOX_MIN_R: f32 = 7.0;
+    const IMG_BOX_MIN_R: f32 = 5.0;
 
     /// The rect an Image node's thumbnail occupies: aspect from the decoded
     /// texture (4:3 until it arrives), fit into half-extents 1.5r × r.
@@ -797,7 +813,7 @@ impl Viewer {
     /// UNCLAMPED screen radius above which a File node shows its text
     /// preview card. (The clamped radius caps at 16, so zoom depth would be
     /// invisible through it.)
-    const PREVIEW_MIN_R: f32 = 26.0;
+    const PREVIEW_MIN_R: f32 = 13.0;
 
     /// The card rect a File node's text preview occupies at this zoom.
     fn preview_box(&self, id: NodeId, s: Pos2) -> Rect {
@@ -1370,24 +1386,28 @@ impl Viewer {
         };
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
-            let show = if searching {
+            // full strength for the active/partner/search cases; otherwise
+            // the LOD ramp and the cursor flashlight compete — whichever
+            // reveals harder wins
+            let full = if searching {
                 lit[id.0 as usize] && (r >= 3.0 || self.best == Some(id))
             } else {
-                active == Some(id)
-                    || partners.contains(&id)
-                    || (lit[id.0 as usize]
-                        && ((node.kind == NodeKind::Dir && r >= 3.0) || r >= 5.0))
+                active == Some(id) || partners.contains(&id)
             };
-            let fade = reveal.get(&id).copied();
-            if !show && fade.is_none() {
+            let lod = if !searching && lit[id.0 as usize] {
+                label_lod(node.kind, r)
+            } else {
+                0.0
+            };
+            let fade = reveal.get(&id).copied().unwrap_or(0.0);
+            let strength = if full { 1.0 } else { lod.max(fade) };
+            if strength <= 0.0 {
                 continue;
             }
             let color = if active == Some(id) {
                 HOVER
-            } else if show {
-                TEXT
             } else {
-                TEXT.gamma_multiply(0.35 + 0.65 * fade.unwrap_or(0.0))
+                TEXT.gamma_multiply(0.35 + 0.65 * strength)
             };
             // an expanded box is wider than r — hang the label off its
             // right edge, not the nominal radius
