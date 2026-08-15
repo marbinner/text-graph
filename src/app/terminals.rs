@@ -1,6 +1,7 @@
-//! Terminal cards: discovery sync, live mirrors, painting, keyboard
-//! forwarding, gestures (fly-to, native resize), and session lifecycle
-//! (launch / kill / external attach).
+//! Terminal cards: discovery sync, live mirrors, painting (full screens,
+//! compact summaries, the hover peek popup), keyboard forwarding, gestures
+//! (fly-to, native resize), and session lifecycle (launch / kill /
+//! external attach).
 
 use super::actions::{detached, new_terminal_window};
 use super::*;

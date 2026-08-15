@@ -1,8 +1,9 @@
-//! Keyboard state-machine tests, driven through a real egui context via
-//! egui_kittest — synthetic key events, real frames, no window and no
-//! renderer. The harness runs handle_keys + update_search only: that's
-//! where the modal logic lives, and skipping canvas keeps sync_terminals
-//! from ever touching the user's default tmux server (house rule).
+//! Viewer state-machine tests, driven through a real egui context via
+//! egui_kittest — synthetic events, real frames, no window and no
+//! renderer: the keyboard modal logic (handle_keys + update_search), the
+//! hover-popup render path, and reload carry-over (apply_graph). The
+//! harness never runs canvas — sync_terminals would attach mirrors
+//! against the user's default tmux server (house rule).
 
 use std::path::PathBuf;
 

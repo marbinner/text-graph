@@ -57,9 +57,12 @@ become `Ghost` nodes — in the model from A, rendered from C.
 
 ### v1 scope cuts (decisions, not accidents)
 
-- Only `.md` files, raster images (as `Image` nodes with thumbnails — a v0.2
-  addition that reversed the original "only .md" cut), and directories become
-  nodes; other files are skipped.
+- ~~Only `.md` files, raster images, and directories become nodes; other
+  files are skipped.~~ **Reversed twice**: raster images became `Image`
+  nodes in v0.2, and as of 2026-08-15 every other visible file is an
+  `Asset` node (code/config/data — the viewer runs over code projects with
+  agents, not just notes). Build/dependency dirs (`node_modules/`,
+  `target/`, `__pycache__/`) are skipped like dotdirs.
 - `![[embeds]]` are skipped. A plain `[[pic.png]]` link resolves to the Image
   node when the image exists; links to *missing* assets are skipped, not
   ghosted.

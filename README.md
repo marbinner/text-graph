@@ -25,26 +25,33 @@ graph live-reloads when you save.
 
 | Element | Source |
 |---|---|
-| **File node** | every `.md` file (`.obsidian/`, `.trash/`, hidden dirs skipped; git-ignore semantics deliberately off) |
+| **File node** | every `.md` file (hidden dirs, `.obsidian/`, `.trash/`, `node_modules/`, `target/`, `__pycache__/` skipped; git-ignore semantics deliberately off) |
 | **Image node** | every raster image (png/jpg/jpeg/gif/webp/bmp) — rendered as its actual picture once you zoom in |
-| **Dir node** | every directory with markdown or images somewhere beneath it (empty ones pruned) |
+| **Asset node** | every other visible file — code, config, data, binaries. Text-classified assets get previews; all are linkable by full name (`[[data.csv]]`) |
+| **Dir node** | every directory with files somewhere beneath it |
 | **Ghost node** | a `[[target]]` that resolves to nothing — a note you've referenced but not written; drawn hollow |
 | **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton |
 | **WikiLink edge** | `[[...]]` in note bodies; drawn as faint curves, bright on the hovered node |
 
-Zoomed in, discs reveal a type glyph: a folder silhouette on dirs, a
-dog-eared page on files, an outlined page on ghosts — zoomed out they stay
-plain color-coded circles (blue dirs, gray files, green images), so huge
-graphs render cheap.
+Big enough to read, every node paints as its **file-type icon** (Nerd Font
+glyphs bundled in `assets/icons.ttf`): the python logo on `.py`, the css
+shield, markdown pages, blue folders, per-language colors — zoomed way
+out they collapse to plain color-coded discs, so huge graphs render
+cheap. Ghosts stay hollow outlines.
 
-**The closer you look, the more you see.** Moving the mouse acts as a label
-flashlight: node names near the cursor fade in even when the zoom would
-hide them. Zoom into an image and its disc becomes the picture (decoded on
-a background thread, so big photos never hitch a frame); zoom into a note
-and it opens into a card showing its first lines, text growing with the
-zoom. And hovering any note or image for a moment pops up the full thing —
-the whole body rendered as markdown, or the image at popup size — without
-selecting anything.
+**The closer you look, the more you see.** Labels ease in early (hubs
+first) and moving the mouse acts as a label flashlight: names near the
+cursor fade in even when the zoom would hide them. Zoom into an image and
+its disc becomes the picture (decoded on a background thread, so big
+photos never hitch a frame); zoom into a note — or any text-classified
+asset — and it opens into a card showing its first lines (prose
+proportional, code monospace), text growing with the zoom. And hovering
+**any node** for a moment pops up the full thing, headed by its metadata
+— edited/created age, size, lines · words, and a links line (`N out · N
+in · N external`, external URLs listed): notes render as markdown, text
+assets raw, images large, folders show their listing plus direct and
+recursive counts and the total wiki + external links leaving their files,
+ghosts list their referencers — all without selecting anything.
 
 Selecting a node opens the **navigator**: a ranger-style pane with a
 clickable breadcrumb, the selection's siblings in a cursor column (dirs
@@ -70,8 +77,8 @@ heading/block (`[[x#h]]`, `[[x#^id]]`) suffixes are stripped before resolving.
    `[[SAE]]`, and the alias becomes its label in the graph.
 4. Several candidates → the **first in sorted path order** wins and the link
    is flagged ambiguous (visible in `stats`).
-5. A plain `[[pic.png]]` (with extension) resolves to the **image node** if
-   the image exists in the vault.
+5. A plain `[[pic.png]]` or `[[data.csv]]` (with extension) resolves to the
+   **image or asset node** if that file exists in the vault.
 6. Not edges at all: `![[embeds]]`, anything inside code fences or inline
    code, self-links, and *unresolved* links with asset extensions (png/pdf/…)
    — a real note named `pic.png.md` or `Drawing.excalidraw.md` stays
@@ -97,14 +104,15 @@ the agent until `Ctrl+Q`.
 | `z` | center on the selection |
 | drag a node | move it — pins to the cursor, the simulation responds live |
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
-| hover + linger | full preview popup: the whole note rendered as markdown, or the image large |
+| hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals; matches stay lit, `Enter` jumps to the ringed best hit (a winning terminal lands focused, ready to type), `Esc` closes |
 
 ### Navigator (a node is selected)
 
 Click any node (or search into one) to open the navigator pane:
-breadcrumb, sibling column with the cursor, preview, and the color-coded
-connections strip.
+breadcrumb, sibling column with the cursor, preview (rendered markdown
+for notes, raw text for code/config assets, the picture for images, the
+listing for folders), and the color-coded connections strip.
 
 | Input | Action |
 |---|---|
@@ -121,6 +129,7 @@ connections strip.
 
 | Input | Action |
 |---|---|
+| hover + linger on a compact card | **peek**: the full live screen pops up at readable size — inspect an agent without zooming, focusing, or pinning |
 | click a card | select + focus: it expands to full readable size at any zoom, turns **cyan ⌨**, and the keyboard types into the agent |
 | **Ctrl+click a card** | 📌 pin it open — expanded at any zoom, several at once, without taking the keyboard; Ctrl+click again unpins. Pins survive restarts |
 | `t` | hop the (orange) terminal cursor from card to card, each expanding in place; `Enter` dives in to type |
@@ -166,7 +175,10 @@ you clicked:
   discovery) and it starts in a detached `tg_*` tmux session cwd'd at that
   folder; its live card fades in within a couple of seconds. The session is
   plain tmux and outlives the viewer — `tmux attach -t tg_claude` works from
-  any terminal.
+  any terminal. Launches resolve the agent against the tmux server's PATH
+  (not just the viewer's — IDE-launched viewers carry stripped ones), and
+  if the command still dies instantly, the status line says so instead of
+  pretending it worked.
 - **New terminal** — the same thing with a plain shell (`tg_term`): a
   terminal card at that folder you can type into right in the graph.
 
@@ -186,11 +198,13 @@ tmux new-session -s work -c ~/notes claude
 ```
 
 Within ~1.5s a live terminal card appears in the graph, tethered to the node
-of the folder the agent runs in. Zoomed out it's a summary — name, folder,
-active/idle age, and the pane's own last status line (`✳ Deliberating…`,
-the last shell output), so you can see what each agent is doing at a
-glance; zoom in and it becomes the full styled screen — colors, cursor,
-everything, mirrored in real time. The card under the terminal cursor (or
+of the folder the agent runs in. Zoomed out it's a summary — a status dot
+(green streaming · gray idle), name, folder, idle age, and the pane's last
+**three** contentful lines (newest brightest: `✳ Deliberating…`, the last
+shell output), so a whole fleet reads at a glance — and lingering on a
+compact card peeks its full screen without touching anything. Zoom in and
+it becomes the full styled screen — colors, cursor, everything, mirrored
+in real time. The card under the terminal cursor (or
 focused for typing) always renders full-size, whatever the zoom: stand
 back and click through your agents to inspect them — or **Ctrl+click
 several to pin them open** (📌 in the title) and watch a whole fleet at
@@ -259,7 +273,8 @@ or too spread for your vault, those are the dials.
 
 ```
 src/
-  vault.rs    walk + frontmatter/wikilink extraction (per-file, no global state)
+  vault.rs    walk + frontmatter/wikilink/URL extraction (per-file, no global state)
+  filetype.rs extension classification: textual? which icon glyph and color?
   resolve.rs  Obsidian-style link resolution (stems → aliases → ghosts)
   create.rs   new note/folder: path validation + create-only fs writes
   graph.rs    arena: typed nodes, Contains tree, overlay links
@@ -276,6 +291,9 @@ src/
               reload worker, terminal cards + focus; images.rs = thumbnail
               textures, previews.rs = text previews + hover popup,
               diag.rs = health badge
+assets/
+  icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
+  gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs
 examples/
   tmux_debug.rs       raw control-client event dump — the mirror's debug harness
   discovery_probe.rs  what discovery + mirrors see for a vault, headless

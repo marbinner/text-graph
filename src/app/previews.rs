@@ -1,12 +1,16 @@
-//! Zoomed-in text previews for File nodes: when a note's screen size
-//! crosses the preview threshold, its card shows the opening lines of the
-//! body — the graph-canvas sibling of the detail pane, like terminal cards
-//! and image thumbnails.
+//! Zoomed-in text previews and the hover popup.
 //!
-//! Bodies are never held whole: each cache entry is a small excerpt plus
-//! the file's (mtime, len) stamp, and a vault reload evicts only entries
-//! whose stamp no longer matches disk (same anti-flicker rule as the
-//! thumbnail cache).
+//! Previews: when a textual leaf's screen size crosses the threshold, its
+//! card shows the opening lines of the body — the graph-canvas sibling of
+//! the detail pane, like terminal cards and image thumbnails. Bodies are
+//! never held whole: each cache entry is a small excerpt plus the file's
+//! (mtime, len) stamp, and a vault reload evicts only entries whose stamp
+//! no longer matches disk (same anti-flicker rule as the thumbnail cache).
+//!
+//! The hover popup (dwell on any node) leads with metadata — edited/
+//! created age, size, lines·words, link counts with external URLs — then
+//! the content: markdown for notes, raw text for assets, the image, a
+//! folder's listing + subtree stats, a ghost's referencers.
 
 use std::collections::HashMap;
 use std::path::Path;

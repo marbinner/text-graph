@@ -12,11 +12,11 @@
 - tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
   (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
   tmux is absent. Never point tests at the user's default tmux server.
-- Keyboard state machine: `src/app/kb_tests.rs` drives handle_keys through
-  egui_kittest (headless, no renderer). Its harness deliberately does NOT
-  run canvas — sync_terminals would attach mirrors against the user's
-  default tmux server (see rule above). New keybind behavior gets a test
-  there.
+- Viewer state machine: `src/app/kb_tests.rs` drives handle_keys, the
+  hover popup, and apply_graph through egui_kittest (headless, no
+  renderer). Its harness deliberately does NOT run canvas —
+  sync_terminals would attach mirrors against the user's default tmux
+  server (see rule above). New keybind behavior gets a test there.
 
 ## House rules
 
@@ -63,7 +63,7 @@
   worker pump + apply + persistence glue; `diag.rs` = health badge;
   `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
   does the pixel work, headless); `previews.rs` = zoom-in text-excerpt
-  cache. File-backed canvas caches (thumbs, previews) evict by (mtime,
+  cache + the all-kind hover popup (metadata header, then content). File-backed canvas caches (thumbs, previews) evict by (mtime,
   len) stamp on reload, never wholesale — a full clear makes every card
   flicker through its placeholder (reloads are constant when agents
   write). New GUI code goes into the matching child module, not into

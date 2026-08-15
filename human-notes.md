@@ -1,6 +1,6 @@
 # notes made by human, don't take seriously
 
-## todo
+# todo
 - sub-agents and agent-to-agent communication.
     - currently planning for this to be tmux based with utils implemented as a lean cli that supports:
     - roster: shows all active agent tmux sessions open in the graph, what their status is, how long they've been running, etc. hopefully some live updating status of what they're doing.
@@ -20,7 +20,10 @@
     - light mode vs. dark mode
     - default agent.
     - 
-- when I click to expand a terminal pane / agent pane it should expand so the the preview is in the center of the entire terminal. Currently the preview is like the top left part, but this is unintuitive because I place the preview at the place where I want the terminal to expand not wehre I want the top-leftt to expand from. DOes that make sense? Do you understand what i mean? 
 
 # in progress
+- when I click to expand a terminal pane / agent pane it should expand so the the preview is in the center of the entire terminal. Currently the preview is like the top left part, but this is unintuitive because I place the preview at the place where I want the terminal to expand not wehre I want the top-leftt to expand from. DOes that make sense? Do you understand what i mean? 
+
+
+# done
 - when hovering over a node I should be able to see metadata like, when it was created, when it was last edited, how long it is, how many ingoing and outgoing references it has and how many of those are to files in the vault and which ones are external links. I should be able to see size of the file too. Same when hovering over a folder. I should be able to see various stats like  number of files in the folder, 1 layer deep and all layers deep. How many outgoing links it has in total etc.
