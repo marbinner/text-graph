@@ -266,18 +266,37 @@ impl Viewer {
             }
         };
         if due {
-            self.reload_gen += 1;
-            let generation = self.reload_gen;
-            let root = self.root.clone();
-            let tx = self.reload_tx.clone();
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                let res = vault::scan(&root).map(graph::build);
-                let _ = tx.send((generation, res));
-                ctx.request_repaint();
-            });
+            if self.scan_inflight {
+                // single-flight: a slow scan under a fast save cadence must
+                // not stack concurrent full walks — remember and re-fire
+                // one trailing rescan when the running one lands
+                self.rescan_queued = true;
+            } else {
+                self.scan_inflight = true;
+                self.reload_gen += 1;
+                let generation = self.reload_gen;
+                let root = self.root.clone();
+                let tx = self.reload_tx.clone();
+                let ctx = ctx.clone();
+                std::thread::spawn(move || {
+                    let res = vault::scan(&root).map(graph::build);
+                    let _ = tx.send((generation, res));
+                    ctx.request_repaint();
+                });
+            }
         }
         while let Ok((generation, res)) = self.reload_rx.try_recv() {
+            self.scan_inflight = false;
+            if self.rescan_queued {
+                self.rescan_queued = false;
+                // already past its debounce — due again on the next frame
+                *self.reload_at.lock().unwrap() = Some(
+                    Instant::now()
+                        .checked_sub(Duration::from_millis(300))
+                        .unwrap_or_else(Instant::now),
+                );
+                ctx.request_repaint();
+            }
             if generation != self.reload_gen {
                 continue; // superseded by a newer save — discard stale build
             }
@@ -371,6 +390,34 @@ mod tests {
         v.pump_reload(&egui::Context::default());
         assert_eq!(v.g.nodes.len(), before, "old graph stays on error");
         assert!(v.reload_error.as_deref().unwrap().contains("disk on fire"));
+    }
+
+    /// A debounce expiring while a scan runs must not stack a second
+    /// worker — it queues ONE trailing rescan for when the result lands.
+    #[test]
+    fn scans_are_single_flight_with_a_trailing_rescan() {
+        let mut v = fixture_viewer();
+        let ctx = egui::Context::default();
+        v.scan_inflight = true;
+        *v.reload_at.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
+        let gen_before = v.reload_gen;
+        v.pump_reload(&ctx);
+        assert_eq!(v.reload_gen, gen_before, "no second worker while one runs");
+        assert!(v.rescan_queued, "the expired debounce is remembered");
+
+        // the in-flight scan lands -> applied, and the trailing rescan is
+        // re-armed as an already-due debounce
+        let root = v.root.clone();
+        v.reload_tx
+            .send((gen_before, Ok(graph::build(vault::scan(&root).unwrap()))))
+            .unwrap();
+        v.pump_reload(&ctx);
+        assert!(!v.scan_inflight);
+        assert!(!v.rescan_queued);
+        assert!(
+            v.reload_at.lock().unwrap().is_some(),
+            "trailing rescan re-armed as an already-due debounce"
+        );
     }
 
     /// A reload landing inside the 180ms glide window must not park the

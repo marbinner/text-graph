@@ -492,6 +492,12 @@ struct Viewer {
     /// Monotonic reload request counter — results from superseded requests
     /// are discarded on arrival.
     reload_gen: u64,
+    /// A scan+build worker is running — at most ONE at a time (a slow scan
+    /// under a fast save cadence must not stack concurrent full walks).
+    scan_inflight: bool,
+    /// A debounce expired while a scan was in flight; run one trailing
+    /// rescan when it lands.
+    rescan_queued: bool,
     reload_tx: std::sync::mpsc::Sender<ReloadMsg>,
     reload_rx: std::sync::mpsc::Receiver<ReloadMsg>,
     /// Health state, surfaced by the diagnostics badge.
@@ -694,6 +700,8 @@ impl Viewer {
             _watcher: None,
             reload_at: Arc::new(Mutex::new(None)),
             reload_gen: 0,
+            scan_inflight: false,
+            rescan_queued: false,
             reload_tx,
             reload_rx,
             last_reload: None,
