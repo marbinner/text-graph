@@ -60,7 +60,12 @@ impl Viewer {
                             .color(self.theme.text),
                     );
                 }
-                for s in self.terms.attach_backoff.keys() {
+                // sorted: HashMap order would shuffle the rows between
+                // frames whenever an insert/remove rehashes — reordering
+                // the list under the user's cursor
+                let mut backoff: Vec<&String> = self.terms.attach_backoff.keys().collect();
+                backoff.sort();
+                for s in backoff {
                     ui.colored_label(BAD, format!("can't mirror tmux session {s} (retrying)"));
                 }
                 if !self.g.errors.is_empty() {
