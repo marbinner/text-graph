@@ -110,7 +110,10 @@ impl Viewer {
             ui.spacing_mut().item_spacing.x = 3.0;
             for a in &chain {
                 let name = self.g.node(*a).display_name().to_string();
-                if ui.link(egui::RichText::new(name).color(DIR)).clicked() {
+                if ui
+                    .link(egui::RichText::new(name).color(self.theme.dir))
+                    .clicked()
+                {
                     jump = Some(*a);
                 }
                 ui.label(egui::RichText::new("/").weak());
@@ -124,7 +127,11 @@ impl Viewer {
                 14.0,
             ));
         });
-        ui.label(egui::RichText::new(sub.as_str()).small().color(TEXT));
+        ui.label(
+            egui::RichText::new(sub.as_str())
+                .small()
+                .color(self.theme.text),
+        );
         ui.separator();
 
         // ranger columns: siblings (cursor) | preview of the selection
@@ -177,7 +184,7 @@ impl Viewer {
                                 };
                                 let (glyph, color) = self.node_icon(*c);
                                 let text_color = if is_dir {
-                                    DIR
+                                    self.theme.dir
                                 } else {
                                     ui.visuals().text_color()
                                 };
@@ -375,19 +382,29 @@ impl Viewer {
                     n.display_name().to_string()
                 };
                 let (glyph, color) = self.node_icon(id);
-                let text_color = if n.kind == NodeKind::Dir { DIR } else { FILE };
+                let text_color = if n.kind == NodeKind::Dir {
+                    self.theme.dir
+                } else {
+                    self.theme.file
+                };
                 entries.push((id, icon_label(glyph, color, &label, text_color, 11.0)));
             }
             for id in outs {
                 entries.push((
                     id,
-                    plain(format!("→ {}", self.g.node(id).display_name()), WIKI),
+                    plain(
+                        format!("→ {}", self.g.node(id).display_name()),
+                        self.theme.wiki,
+                    ),
                 ));
             }
             for id in backs {
                 entries.push((
                     id,
-                    plain(format!("← {}", self.g.node(id).display_name()), LINK_IN),
+                    plain(
+                        format!("← {}", self.g.node(id).display_name()),
+                        self.theme.link_in,
+                    ),
                 ));
             }
             if self.conn_cursor.is_some_and(|i| i >= entries.len()) {

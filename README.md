@@ -112,6 +112,7 @@ the agent until `Ctrl+Q`.
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
+| `⚙` (bottom-right) | settings: **dark / light theme** and the **default agent** for one-click launching — both persisted per vault |
 | `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals; matches stay lit, `Enter` jumps to the ringed best hit (a winning terminal lands focused, ready to type), `Esc` closes |
 
 ### Navigator (a node is selected)
@@ -187,9 +188,10 @@ you clicked:
 - **Write a ghost** — right-click a hollow node: the referenced-but-missing
   note is created at the linked path, and every link that pointed at the
   ghost snaps to the real file.
-- **Launch agent** — pick claude / codex / pi / … (the same list that drives
-  discovery) and it starts in a detached `tg_*` tmux session cwd'd at that
-  folder; its live card fades in within a couple of seconds. The session is
+- **Launch agent** — one click on **Launch <default>** starts your default
+  agent (pi out of the box; change it in ⚙ settings), or pick claude /
+  codex / … from the submenu (the same list that drives discovery). It
+  starts in a detached `tg_*` tmux session cwd'd at that folder; its live card fades in within a couple of seconds. The session is
   plain tmux and outlives the viewer — `tmux attach -t tg_claude` works from
   any terminal. Launches resolve the agent against the tmux server's PATH
   (not just the viewer's — IDE-launched viewers carry stripped ones), and

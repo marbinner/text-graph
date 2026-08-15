@@ -237,7 +237,17 @@ impl Viewer {
                     Err(e) => self.set_flash(format!("terminal failed: {e}")),
                 }
             }
-            ui.menu_button("Launch agent", |ui| {
+            // one click launches the DEFAULT agent (⚙ settings); the
+            // submenu offers the full list
+            if ui
+                .button(format!("Launch {}", self.default_agent))
+                .clicked()
+            {
+                let ctx = ui.ctx().clone();
+                let agent = self.default_agent.clone();
+                self.launch_agent(&ctx, &dir, &agent);
+            }
+            ui.menu_button("Launch other agent", |ui| {
                 for agent in agents::default_allowlist() {
                     if ui.button(&agent).clicked() {
                         let ctx = ui.ctx().clone();
@@ -277,6 +287,7 @@ impl Viewer {
         };
         let mut submit = false;
         let mut cancel = false;
+        let err_color = self.theme.select;
         egui::Window::new(if dlg.folder { "New folder" } else { "New note" })
             .id(egui::Id::new("tg-create"))
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
@@ -298,7 +309,7 @@ impl Viewer {
                     dlg.focus = false;
                 }
                 if let Some(e) = &dlg.err {
-                    ui.colored_label(SELECT, e);
+                    ui.colored_label(err_color, e);
                 }
                 submit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 ui.horizontal(|ui| {

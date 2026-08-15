@@ -28,7 +28,7 @@
 # in progress
 - have a menu for settings.
     - light mode vs. dark mode
-    - default agent and then when I click the launch agent button without selecting a specific one it launches the default one. The default agent for now should be pi.
+    - default agent and then when I click the launch agent button without selecting a specific one it launches the default one. Pi should be the default for now.
 
 # done
 - there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.

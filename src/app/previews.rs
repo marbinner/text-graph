@@ -141,7 +141,7 @@ impl Viewer {
                         .map(|l| self.g.node(l.to).path.clone())
                         .collect();
                     ui.label(egui::RichText::new(name).strong());
-                    ui.label(egui::RichText::new(&path).small().color(TEXT));
+                    ui.label(egui::RichText::new(&path).small().color(self.theme.text));
                     // ---- metadata: times, size, reference counts ----
                     if matches!(kind, NodeKind::File | NodeKind::Asset | NodeKind::Image)
                         && let Ok(meta) = std::fs::metadata(self.root.join(&path))
@@ -154,7 +154,11 @@ impl Viewer {
                             bits.push(format!("created {}", ago(c)));
                         }
                         bits.push(human_size(meta.len()));
-                        ui.label(egui::RichText::new(bits.join(" · ")).small().color(TEXT));
+                        ui.label(
+                            egui::RichText::new(bits.join(" · "))
+                                .small()
+                                .color(self.theme.text),
+                        );
                     }
                     match kind {
                         NodeKind::File => {
@@ -168,10 +172,12 @@ impl Viewer {
                             if !externals.is_empty() {
                                 line.push_str(&format!(" · {} external", externals.len()));
                             }
-                            ui.label(egui::RichText::new(line).small().color(TEXT));
+                            ui.label(egui::RichText::new(line).small().color(self.theme.text));
                             for url in externals.iter().take(6) {
                                 ui.label(
-                                    egui::RichText::new(format!("↗ {url}")).small().color(WIKI),
+                                    egui::RichText::new(format!("↗ {url}"))
+                                        .small()
+                                        .color(self.theme.wiki),
                                 );
                             }
                             if externals.len() > 6 {
@@ -191,7 +197,7 @@ impl Viewer {
                                 ui.label(
                                     egui::RichText::new(format!("links: {inn} in"))
                                         .small()
-                                        .color(TEXT),
+                                        .color(self.theme.text),
                                 );
                             }
                         }
@@ -287,7 +293,9 @@ impl Viewer {
                                 .filter(|c| self.g.node(**c).kind == NodeKind::Dir)
                                 .count();
                             let s = self.g.subtree_stats(id);
-                            let small = |t: String| egui::RichText::new(t).small().color(TEXT);
+                            let th_text = self.theme.text;
+                            let small =
+                                move |t: String| egui::RichText::new(t).small().color(th_text);
                             ui.label(small(format!(
                                 "direct: {} entries ({} folders)",
                                 children.len(),

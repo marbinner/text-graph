@@ -20,6 +20,11 @@ pub struct ViewState {
     /// Web nodes hidden by the `w` toggle. Stored inverted so the derived
     /// Default (false) means the default view: webs visible.
     pub hide_web: bool,
+    /// Light theme on (default false = dark).
+    pub light: bool,
+    /// Agent the one-click "Launch <agent>" menu button starts; None =
+    /// the built-in default (pi).
+    pub default_agent: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +55,12 @@ pub fn to_text(s: &ViewState) -> String {
     if s.hide_web {
         out.push_str("hide_web\n");
     }
+    if s.light {
+        out.push_str("light\n");
+    }
+    if let Some(a) = &s.default_agent {
+        out.push_str(&format!("agent\t{a}\n"));
+    }
     out
 }
 
@@ -79,6 +90,14 @@ pub fn from_text(text: &str) -> ViewState {
                 }
             }
             Some("hide_web") => s.hide_web = true,
+            Some("light") => s.light = true,
+            Some("agent") => {
+                if let Some((_, a)) = line.split_once('\t')
+                    && !a.is_empty()
+                {
+                    s.default_agent = Some(a.to_string());
+                }
+            }
             Some("pin") => {
                 let fields: Vec<&str> = line.splitn(3, '\t').collect();
                 if let [_, pane, session] = fields[..] {
@@ -195,6 +214,8 @@ mod tests {
                 ("work".to_string(), "%0".to_string()),
             ],
             hide_web: true,
+            light: true,
+            default_agent: Some("claude".into()),
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }
@@ -206,6 +227,8 @@ mod tests {
             cards: vec![card("weird\tname", "%1", 1.0, 2.0)],
             pins: vec![("weird\tname".to_string(), "%1".to_string())],
             hide_web: false,
+            light: false,
+            default_agent: None,
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }

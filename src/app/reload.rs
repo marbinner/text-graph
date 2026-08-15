@@ -195,6 +195,8 @@ impl Viewer {
             cards,
             pins,
             hide_web: !self.show_web,
+            light: self.theme.light,
+            default_agent: Some(self.default_agent.clone()),
         }
     }
 

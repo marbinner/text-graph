@@ -5,7 +5,7 @@
 
 use eframe::egui::{self, Align2, Color32, RichText, Vec2};
 
-use super::{SELECT, TEXT, Viewer, WIKI};
+use super::Viewer;
 
 const BAD: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x75);
 
@@ -57,7 +57,7 @@ impl Viewer {
                     ui.label(
                         RichText::new("showing the previous graph until a save succeeds")
                             .small()
-                            .color(TEXT),
+                            .color(self.theme.text),
                     );
                 }
                 for s in self.terms.attach_backoff.keys() {
@@ -74,10 +74,13 @@ impl Viewer {
                     ui.separator();
                     ui.label(RichText::new("parse warnings").strong());
                     for (path, msg) in &self.g.warnings {
-                        if ui.link(RichText::new(path).color(SELECT)).clicked() {
+                        if ui
+                            .link(RichText::new(path).color(self.theme.select))
+                            .clicked()
+                        {
                             jump = self.g.by_path(path);
                         }
-                        ui.label(RichText::new(msg).small().color(TEXT));
+                        ui.label(RichText::new(msg).small().color(self.theme.text));
                     }
                 }
                 if !self.g.ambiguities.is_empty() {
@@ -92,7 +95,7 @@ impl Viewer {
                                     a.target,
                                     self.g.node(a.chosen).path
                                 ))
-                                .color(WIKI),
+                                .color(self.theme.wiki),
                             )
                             .clicked()
                         {
@@ -105,7 +108,7 @@ impl Viewer {
                     ui.label(
                         RichText::new(format!("last reload {}s ago", t.elapsed().as_secs()))
                             .small()
-                            .color(TEXT),
+                            .color(self.theme.text),
                     );
                 }
             });

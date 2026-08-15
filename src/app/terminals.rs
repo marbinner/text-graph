@@ -793,7 +793,7 @@ impl Viewer {
 
             tethers.extend(egui::Shape::dashed_line(
                 &[anchor_s, tether_to],
-                Stroke::new(1.0, EDGE),
+                Stroke::new(1.0, self.theme.edge),
                 6.0,
                 4.0,
             ));

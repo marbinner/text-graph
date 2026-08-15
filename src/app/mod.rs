@@ -12,6 +12,7 @@ mod images;
 mod navigator;
 mod previews;
 mod reload;
+mod settings;
 mod terminals;
 
 #[cfg(test)]
@@ -62,6 +63,77 @@ const LINK_IN: Color32 = Color32::from_rgb(0xbb, 0x9a, 0xf7);
 
 /// Dim factor applied to everything outside the active node's neighborhood.
 const DIM: f32 = 0.18;
+
+/// Canvas + panel palette, switchable at runtime (⚙ settings). The module
+/// consts above are the DARK values and stay the fixed palette for
+/// terminal-card internals — terminals are dark in either theme.
+#[derive(Clone, Copy)]
+pub(super) struct Theme {
+    pub(super) light: bool,
+    pub(super) bg: Color32,
+    pub(super) edge: Color32,
+    pub(super) edge_tree: Color32,
+    pub(super) dir: Color32,
+    pub(super) file: Color32,
+    pub(super) asset: Color32,
+    pub(super) ghost: Color32,
+    pub(super) img: Color32,
+    pub(super) hover: Color32,
+    pub(super) select: Color32,
+    pub(super) wiki: Color32,
+    pub(super) text: Color32,
+    pub(super) link_in: Color32,
+    pub(super) web: Color32,
+    /// Card-like surfaces drawn on the canvas (text preview cards, image
+    /// placeholder frames).
+    pub(super) panel: Color32,
+}
+
+impl Theme {
+    pub(super) fn dark() -> Self {
+        Theme {
+            light: false,
+            bg: BG,
+            edge: EDGE,
+            edge_tree: EDGE_TREE,
+            dir: DIR,
+            file: FILE,
+            asset: ASSET,
+            ghost: GHOST,
+            img: IMG,
+            hover: HOVER,
+            select: SELECT,
+            wiki: WIKI,
+            text: TEXT,
+            link_in: LINK_IN,
+            web: WEB,
+            panel: TERM_BG,
+        }
+    }
+    pub(super) fn light() -> Self {
+        Theme {
+            light: true,
+            bg: Color32::from_rgb(0xf5, 0xf4, 0xef),
+            edge: Color32::from_rgb(0xc6, 0xc9, 0xd2),
+            edge_tree: Color32::from_rgb(0x9d, 0xa8, 0xc6),
+            dir: Color32::from_rgb(0x33, 0x5e, 0xcc),
+            file: Color32::from_rgb(0x45, 0x49, 0x54),
+            asset: Color32::from_rgb(0x70, 0x76, 0x82),
+            ghost: Color32::from_rgb(0x9a, 0xa0, 0xac),
+            img: Color32::from_rgb(0x43, 0x7d, 0x24),
+            hover: Color32::from_rgb(0xc2, 0x69, 0x06),
+            select: Color32::from_rgb(0xb3, 0x50, 0x0a),
+            wiki: Color32::from_rgb(0xa1, 0x6a, 0x0e),
+            text: Color32::from_rgb(0x50, 0x56, 0x62),
+            link_in: Color32::from_rgb(0x6f, 0x42, 0xc8),
+            web: Color32::from_rgb(0x0b, 0x7f, 0x92),
+            panel: Color32::WHITE,
+        }
+    }
+    pub(super) fn get(light: bool) -> Self {
+        if light { Self::light() } else { Self::dark() }
+    }
+}
 
 /// Screen radius above which a ghost shows its hollow-page silhouette.
 const ICON_MIN_R: f32 = 6.5;
@@ -197,8 +269,8 @@ fn shade(c: Color32, f: f32) -> Color32 {
 
 /// The folder color at a given tree depth: the root's folders are the
 /// brightest blue on the canvas, each level a shade darker.
-fn dir_depth_color(depth: u8) -> Color32 {
-    shade(DIR, 1.0 - depth.min(4) as f32 * 0.10)
+fn dir_depth_color(base: Color32, depth: u8) -> Color32 {
+    shade(base, 1.0 - depth.min(4) as f32 * 0.10)
 }
 
 /// Tapered tree edge: thick at the parent, thin at the child — hierarchy
@@ -360,6 +432,13 @@ struct Viewer {
     fitted: bool,
     /// Canvas rect of the previous frame — camera compensation on change.
     last_canvas_rect: Option<Rect>,
+    /// Active palette (dark/light) — swapped from the ⚙ settings window.
+    theme: Theme,
+    /// egui visuals need (re)applying (startup, theme toggle).
+    apply_visuals: bool,
+    settings_open: bool,
+    /// Agent the top-level "Launch <agent>" menu button starts.
+    default_agent: String,
     /// In-flight camera glide: (start center, target node, start time).
     /// The target is a NODE so a settling sim can't make the glide land
     /// beside it. Manual pan/zoom input cancels it.
@@ -524,6 +603,8 @@ impl Viewer {
         let vs = state::load(&root);
         let cam = vs.camera;
         let show_web = !vs.hide_web;
+        let theme = Theme::get(vs.light);
+        let default_agent = vs.default_agent.clone().unwrap_or_else(|| "pi".into());
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
         for c in vs.cards {
             restore_offsets
@@ -549,6 +630,10 @@ impl Viewer {
             drag_node: None,
             fitted: cam.is_some(), // a restored camera must not be re-fit away
             last_canvas_rect: None,
+            theme,
+            apply_visuals: true,
+            settings_open: false,
+            default_agent,
             cam_anim: None,
             n_files,
             n_dirs,
@@ -1014,6 +1099,14 @@ impl Viewer {
         Rect::from_center_size(s, size)
     }
 
+    /// A file-type icon's color under the active theme — the per-language
+    /// palette is dark-tuned, so light mode darkens it a shade to keep
+    /// yellows and cyans readable on paper.
+    fn icon_color(&self, icon: filetype::FileIcon) -> Color32 {
+        let c = Color32::from_rgb(icon.color.0, icon.color.1, icon.color.2);
+        if self.theme.light { shade(c, 0.72) } else { c }
+    }
+
     /// The glyph + color a node shows in lists (navigator, popups).
     fn node_icon(&self, id: NodeId) -> (char, Color32) {
         let node = self.g.node(id);
@@ -1021,15 +1114,12 @@ impl Viewer {
             NodeKind::Dir => filetype::ICON_FOLDER,
             NodeKind::Image => filetype::ICON_IMAGE,
             NodeKind::Ghost => {
-                return ('\u{f016}', GHOST); // an unwritten page
+                return ('\u{f016}', self.theme.ghost); // an unwritten page
             }
             NodeKind::Web => filetype::ICON_WEB,
             _ => filetype::icon_of(&node.path),
         };
-        (
-            icon.glyph,
-            Color32::from_rgb(icon.color.0, icon.color.1, icon.color.2),
-        )
+        (icon.glyph, self.icon_color(icon))
     }
 
     /// Can this node open into a text-preview card? Markdown always;
@@ -1463,9 +1553,9 @@ impl Viewer {
             }
             let on = lit[i] && lit[parent.0 as usize];
             let color = if on {
-                EDGE_TREE
+                self.theme.edge_tree
             } else {
-                EDGE_TREE.gamma_multiply(DIM)
+                self.theme.edge_tree.gamma_multiply(DIM)
             };
             // sa = child, sb = parent — the wedge thins toward the child
             paint_tree_edge(&painter, sb, sa, color);
@@ -1487,8 +1577,8 @@ impl Viewer {
             // external (citation) edges: cyan and fainter — context, not
             // structure
             let (hue, rest_a) = match l.kind {
-                LinkKind::WikiLink => (WIKI, 0.35),
-                LinkKind::External => (WEB, 0.22),
+                LinkKind::WikiLink => (self.theme.wiki, 0.35),
+                LinkKind::External => (self.theme.web, 0.22),
             };
             let (color, width) = if bright {
                 (hue, 1.8)
@@ -1539,22 +1629,22 @@ impl Viewer {
                             s,
                             r,
                             filetype::ICON_WEB.glyph,
-                            dimmed(WEB),
-                            dimmed(BG),
+                            dimmed(self.theme.web),
+                            dimmed(self.theme.bg),
                         );
                     } else {
-                        painter.circle_filled(s, r, dimmed(WEB));
+                        painter.circle_filled(s, r, dimmed(self.theme.web));
                     }
                 }
                 NodeKind::Ghost => {
-                    painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(GHOST)));
+                    painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(self.theme.ghost)));
                     if r >= ICON_MIN_R {
                         // an unwritten page, hollow like its node
-                        paint_doc_icon(&painter, s, r, None, Some(dimmed(GHOST)));
+                        paint_doc_icon(&painter, s, r, None, Some(dimmed(self.theme.ghost)));
                     }
                 }
                 NodeKind::Dir => {
-                    let col = dir_depth_color(self.depths[id.0 as usize]);
+                    let col = dir_depth_color(self.theme.dir, self.depths[id.0 as usize]);
                     if glyph {
                         paint_glyph_node(
                             &painter,
@@ -1562,7 +1652,7 @@ impl Viewer {
                             r,
                             filetype::ICON_FOLDER.glyph,
                             dimmed(col),
-                            dimmed(BG),
+                            dimmed(self.theme.bg),
                         );
                     } else {
                         painter.circle_filled(s, r, dimmed(col));
@@ -1570,9 +1660,9 @@ impl Viewer {
                 }
                 NodeKind::File | NodeKind::Asset => {
                     let disc = if node.kind == NodeKind::File {
-                        FILE
+                        self.theme.file
                     } else {
-                        ASSET
+                        self.theme.asset
                     };
                     // zoomed in far enough, a textual leaf opens into a
                     // preview card (the canvas sibling of the detail pane);
@@ -1588,8 +1678,15 @@ impl Viewer {
                     if presence < 0.95 {
                         if glyph {
                             let icon = filetype::icon_of(&node.path);
-                            let color = Color32::from_rgb(icon.color.0, icon.color.1, icon.color.2);
-                            paint_glyph_node(&painter, s, r, icon.glyph, dimmed(color), dimmed(BG));
+                            let color = self.icon_color(icon);
+                            paint_glyph_node(
+                                &painter,
+                                s,
+                                r,
+                                icon.glyph,
+                                dimmed(color),
+                                dimmed(self.theme.bg),
+                            );
                         } else {
                             painter.circle_filled(s, r, dimmed(disc));
                         }
@@ -1604,11 +1701,11 @@ impl Viewer {
                         );
                         let a = presence * dim_a;
                         let bx = self.preview_box(id, s);
-                        painter.rect_filled(bx, 3.0, TERM_BG.gamma_multiply(a));
+                        painter.rect_filled(bx, 3.0, self.theme.panel.gamma_multiply(a));
                         painter.rect_stroke(
                             bx,
                             3.0,
-                            Stroke::new(1.0, EDGE.gamma_multiply(a)),
+                            Stroke::new(1.0, self.theme.edge.gamma_multiply(a)),
                             egui::StrokeKind::Outside,
                         );
                         let fs = (ur * 0.22).clamp(6.5, 12.0);
@@ -1622,18 +1719,22 @@ impl Viewer {
                             .previews
                             .get_or_load(&self.root, &node.path)
                             .to_string();
-                        let galley =
-                            painter.layout(text, font, TEXT.gamma_multiply(a), bx.width() - 12.0);
+                        let galley = painter.layout(
+                            text,
+                            font,
+                            self.theme.text.gamma_multiply(a),
+                            bx.width() - 12.0,
+                        );
                         painter.with_clip_rect(bx.shrink(2.0)).galley(
                             bx.min + Vec2::new(6.0, 5.0),
                             galley,
-                            TEXT,
+                            self.theme.text,
                         );
                     }
                 }
                 NodeKind::Image => {
                     if r < Self::IMG_BOX_MIN_R {
-                        painter.circle_filled(s, r, dimmed(IMG));
+                        painter.circle_filled(s, r, dimmed(self.theme.img));
                     } else {
                         // decode on demand, draw the thumbnail once it lands;
                         // a framed placeholder with the photo glyph meanwhile
@@ -1660,20 +1761,20 @@ impl Viewer {
                                 );
                             }
                             _ => {
-                                painter.rect_filled(bx, 2.0, dimmed(TERM_BG));
+                                painter.rect_filled(bx, 2.0, dimmed(self.theme.panel));
                                 paint_img_icon(
                                     &painter,
                                     s,
                                     r.min(14.0),
-                                    dimmed(IMG),
-                                    dimmed(TERM_BG),
+                                    dimmed(self.theme.img),
+                                    dimmed(self.theme.panel),
                                 );
                             }
                         }
                         painter.rect_stroke(
                             bx,
                             2.0,
-                            Stroke::new(1.0, dimmed(EDGE)),
+                            Stroke::new(1.0, dimmed(self.theme.edge)),
                             egui::StrokeKind::Outside,
                         );
                     }
@@ -1696,15 +1797,15 @@ impl Viewer {
             };
             if active == Some(id) {
                 let color = if self.selected == Some(id) {
-                    SELECT
+                    self.theme.select
                 } else {
-                    HOVER
+                    self.theme.hover
                 };
                 ring(color, 2.0);
             } else if searching && self.best == Some(id) {
-                ring(HOVER, 2.0);
+                ring(self.theme.hover, 2.0);
             } else if partners.contains(&id) {
-                ring(WIKI, 1.5);
+                ring(self.theme.wiki, 1.5);
             }
         }
 
@@ -1744,11 +1845,12 @@ impl Viewer {
             // folders read as large bright anchors in the label soup
             let is_dir = node.kind == NodeKind::Dir;
             let color = if active == Some(id) {
-                HOVER
+                self.theme.hover
             } else if is_dir {
-                dir_depth_color(self.depths[id.0 as usize]).gamma_multiply(0.45 + 0.55 * strength)
+                dir_depth_color(self.theme.dir, self.depths[id.0 as usize])
+                    .gamma_multiply(0.45 + 0.55 * strength)
             } else {
-                TEXT.gamma_multiply(0.35 + 0.65 * strength)
+                self.theme.text.gamma_multiply(0.35 + 0.65 * strength)
             };
             let font = if is_dir {
                 FontId::proportional((r * 1.15).clamp(11.5, 16.5))
@@ -1788,11 +1890,11 @@ impl Viewer {
             } else {
                 s + Vec2::new(r + 5.0, 0.0)
             };
-            let galley = painter.layout_no_wrap(node.display_name().into(), font, HOVER);
+            let galley = painter.layout_no_wrap(node.display_name().into(), font, self.theme.hover);
             let pos = Pos2::new(anchor.x, anchor.y - galley.size().y * 0.5);
             let back = Rect::from_min_size(pos, galley.size()).expand2(Vec2::new(4.0, 2.0));
-            painter.rect_filled(back, 4.0, BG.gamma_multiply(0.88));
-            painter.galley(pos, galley, HOVER);
+            painter.rect_filled(back, 4.0, self.theme.bg.gamma_multiply(0.88));
+            painter.galley(pos, galley, self.theme.hover);
         }
 
         // terminal cards, on top of the graph (their tethers fill the
@@ -1875,13 +1977,21 @@ impl Viewer {
             Align2::LEFT_TOP,
             status,
             FontId::proportional(12.0),
-            TEXT,
+            self.theme.text,
         );
     }
 }
 
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.apply_visuals {
+            self.apply_visuals = false;
+            ui.ctx().set_visuals(if self.theme.light {
+                egui::Visuals::light()
+            } else {
+                egui::Visuals::dark()
+            });
+        }
         self.pump_reload(ui.ctx());
         let release = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q));
         if release {
@@ -1907,11 +2017,12 @@ impl eframe::App for Viewer {
             self.nav_find = None; // no navigator, no find prompt
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG))
+            .frame(egui::Frame::new().fill(self.theme.bg))
             .show(ui, |ui| self.canvas(ui));
         let ctx = ui.ctx().clone();
         self.create_dialog_ui(&ctx);
         self.diag_ui(&ctx);
+        self.settings_ui(&ctx);
         self.persist_state(false);
         // egui repaints on demand; without a heartbeat the debounced save
         // would never run once the sim settles and input stops
