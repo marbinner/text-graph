@@ -185,12 +185,21 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
             g.by_path(&dest).map(node_url)
         };
         let Some(new) = new else { continue };
-        // the destination appears verbatim inside the construct; replace
-        // that occurrence only (skip quietly on escapes/percent-encoding)
-        let Some(at) = body[range.clone()].find(&dest) else {
+        // the destination appears verbatim AFTER the `](` separator —
+        // searching the whole construct hit the LABEL first whenever the
+        // label contains the dest string (self-labeled [p](p) links),
+        // splicing the URL into the visible text. The LAST `](` is the
+        // real separator (an earlier one belongs to an image nested in
+        // the label); reference-style constructs have none and are left
+        // alone, as are escapes/percent-encoding (skip quietly).
+        let construct = &body[range.clone()];
+        let Some(sep) = construct.rfind("](") else {
             continue;
         };
-        let abs = range.start + at;
+        let Some(at) = construct[sep + 2..].find(&dest) else {
+            continue;
+        };
+        let abs = range.start + sep + 2 + at;
         reps.push((abs..abs + dest.len(), new));
     }
 
@@ -221,5 +230,33 @@ mod tests {
         assert_eq!(strip_target("a/b#h|shown"), "a/b");
         assert_eq!(display_text("a/b#h|shown"), "shown");
         assert_eq!(display_text("a/b#h"), "a/b#h");
+    }
+
+    /// Regression: for self-labeled links `[p](p)` the rewrite found the
+    /// dest string in the LABEL (it comes first in the construct) and
+    /// spliced `tg://N` into the visible text, leaving the real
+    /// destination a dangling relative path that leaked to the OS opener.
+    #[test]
+    fn relative_link_rewrite_targets_the_destination_not_the_label() {
+        let d = std::env::temp_dir().join(format!("tg-mdview-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("docs")).unwrap();
+        std::fs::write(d.join("docs/setup.md"), "# setup").unwrap();
+        std::fs::write(d.join("pic.png"), "not really a png").unwrap();
+        std::fs::write(d.join("note.md"), "x").unwrap();
+        let g = crate::graph::build(vault::scan(&d).unwrap());
+        let src = g.by_path("note.md").unwrap();
+        let dest = g.by_path("docs/setup.md").unwrap();
+
+        let out = prepare(&g, &d, src, "See [docs/setup.md](docs/setup.md).");
+        assert_eq!(
+            out,
+            format!("See [docs/setup.md]({}).", node_url(dest)),
+            "label stays readable; only the destination becomes tg://"
+        );
+        // the image twin: a self-labeled alt text must survive too
+        let out = prepare(&g, &d, src, "![pic.png](pic.png)");
+        assert_eq!(out, format!("![pic.png]({})", file_url(&d, "pic.png")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
