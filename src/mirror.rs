@@ -31,10 +31,14 @@ pub struct TermGrid {
     pub cells: Vec<TermCell>,
     /// (row, col); None while the application hides the cursor.
     pub cursor: Option<(u16, u16)>,
-    /// The application requested bracketed paste (DECSET 2004) — pasted
-    /// text should be wrapped in ESC[200~ / ESC[201~ markers.
-    pub bracketed_paste: bool,
 }
+
+// NOTE: TermGrid deliberately does NOT expose terminal modes (bracketed
+// paste etc.): every capture replay rebuilds the parser from screen
+// CONTENT, which carries no mode state, so any parser-derived mode flag
+// silently reads false after attach or resize. Behavior that depends on a
+// pane's live modes must ask tmux (pastes go via `paste-buffer -p`, the
+// cursor-visibility query rides the post-replay cursor restore).
 
 enum Pending {
     Ignore,
@@ -176,8 +180,13 @@ impl SessionMirror {
                                 if is_new || resized {
                                     let cmd = format!("capture-pane -peq -t {id}");
                                     self.send(Pending::Capture(id.to_string()), &cmd);
+                                    // cursor_flag rides along: the replay
+                                    // also resets DECTCEM, and without the
+                                    // true visibility a pane that hid its
+                                    // cursor gets a phantom block painted
                                     let cmd = format!(
-                                        "display-message -p -t {id} '#{{cursor_y}},#{{cursor_x}}'"
+                                        "display-message -p -t {id} \
+                                         '#{{cursor_y}},#{{cursor_x}},#{{cursor_flag}}'"
                                     );
                                     self.send(Pending::Cursor(id.to_string()), &cmd);
                                 }
@@ -202,12 +211,23 @@ impl SessionMirror {
                         }
                         Some(Pending::Cursor(id)) if !error => {
                             if let (Some(p), Some(line)) = (self.panes.get_mut(&id), lines.first())
-                                && let Some((y, x)) = line.split_once(',')
-                                && let (Ok(y), Ok(x)) = (y.parse::<u16>(), x.parse::<u16>())
                             {
-                                let cup = format!("\x1b[{};{}H", y + 1, x + 1);
-                                p.process(cup.as_bytes());
-                                changed = true;
+                                let mut it = line.split(',');
+                                if let (Some(Ok(y)), Some(Ok(x))) = (
+                                    it.next().map(str::parse::<u16>),
+                                    it.next().map(str::parse::<u16>),
+                                ) {
+                                    let cup = format!("\x1b[{};{}H", y + 1, x + 1);
+                                    p.process(cup.as_bytes());
+                                    // restore true cursor visibility too —
+                                    // the fresh replay parser defaults to
+                                    // visible even when the app hid it
+                                    p.process(match it.next() {
+                                        Some("0") => b"\x1b[?25l",
+                                        _ => b"\x1b[?25h",
+                                    });
+                                    changed = true;
+                                }
                             }
                         }
                         _ => {}
@@ -368,7 +388,6 @@ fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
         } else {
             Some(s.cursor_position())
         },
-        bracketed_paste: s.bracketed_paste(),
     }
 }
 
@@ -430,7 +449,8 @@ mod tests {
         // 3. capture replay parks the parser cursor at the bottom…
         reply(&tx, &["hello", "world"], false);
         // 4. …and the cursor query must move it back to the true position
-        reply(&tx, &["0,5"], false);
+        //    (cursor_flag 1 = visible)
+        reply(&tx, &["0,5,1"], false);
         // 5. live output then lands at that cursor, not on the last row
         tx.send(TmuxEvent::Output {
             pane: "%5".into(),
@@ -462,9 +482,17 @@ mod tests {
         let g = &m.grids()[0].1;
         assert_eq!((g.cols, g.rows), (30, 10));
         // answer the re-capture + cursor query the resize queued, keeping
-        // the reply FIFO aligned like a real tmux would
+        // the reply FIFO aligned like a real tmux would — this pane HID its
+        // cursor (cursor_flag 0), which the restore must reapply: the fresh
+        // replay parser defaults to visible (phantom-cursor regression)
         reply(&tx, &["resized"], false);
-        reply(&tx, &["0,0"], false);
+        reply(&tx, &["0,0,0"], false);
+        m.pump();
+        assert_eq!(
+            m.grids()[0].1.cursor,
+            None,
+            "hidden cursor must survive a capture replay"
+        );
 
         // 8. pane replaced: %5 gone, %7 appears
         tx.send(TmuxEvent::Changed).unwrap();
@@ -548,19 +576,6 @@ mod tests {
         );
         assert!(tail_lines(&grid(b""), 3).is_empty());
         assert!(tail_lines(&g, 0).is_empty());
-    }
-
-    #[test]
-    fn bracketed_paste_mode_is_tracked() {
-        assert!(!grid(b"plain").bracketed_paste);
-        assert!(
-            grid(b"\x1b[?2004h").bracketed_paste,
-            "DECSET 2004 enables it"
-        );
-        assert!(
-            !grid(b"\x1b[?2004h\x1b[?2004l").bracketed_paste,
-            "DECRST disables"
-        );
     }
 
     #[test]

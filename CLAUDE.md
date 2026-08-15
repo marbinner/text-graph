@@ -82,7 +82,13 @@
   didn't create (it would reflow the user's real terminal view). The corner
   resize grip exists only on `ours` (tg_) cards for exactly this reason. Special keys go as tmux key NAMES
   (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
-  (quoting-proof); Ctrl+C/X arrive from egui as Copy/Cut events, not Key
+  (quoting-proof); PASTES go through tmux's buffer machinery
+  (`keys::paste_cmds`: octal-escaped `set-buffer` + `paste-buffer -p`) so
+  the SERVER decides bracketing from the pane's live mode — never decide
+  it client-side, because capture replays rebuild the parser from screen
+  content and wipe every mode flag (that's also why TermGrid exposes no
+  modes, and why cursor VISIBILITY rides the post-replay cursor query as
+  `#{cursor_flag}`); Ctrl+C/X arrive from egui as Copy/Cut events, not Key
   events. While a terminal is focused, keyboard events are DRAINED from
   egui's input (not just read) so widget focus/shortcuts never fire. After
   a capture replay the pane cursor MUST be restored via the queried

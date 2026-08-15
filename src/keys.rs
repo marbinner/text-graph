@@ -84,6 +84,33 @@ pub fn special_cmd(pane: &str, key: Special, mods: Mods) -> String {
     format!("send-keys -t {pane} {prefixed}")
 }
 
+/// Paste `text` into a pane through tmux's own paste machinery: fill a
+/// buffer (`set-buffer`, every non-alphanumeric byte octal-escaped —
+/// quoting-proof, newlines included), then `paste-buffer -p`, which wraps
+/// the text in ESC[200~/201~ markers ONLY if the pane application has
+/// bracketed paste on. The decision must be tmux's: it tracks the live
+/// mode, while the mirror's parser forgets modes on every capture replay
+/// (attach and resize) — deciding client-side silently un-bracketed
+/// pastes into already-running agents, so each newline submitted the
+/// prompt. Verified against a real server, octal escapes included.
+/// `-d` drops the one-shot buffer after the paste.
+pub fn paste_cmds(pane: &str, text: &str) -> [String; 2] {
+    use std::fmt::Write as _;
+    let buf = format!("tg_paste_{}", pane.trim_start_matches('%'));
+    let mut data = String::with_capacity(text.len());
+    for b in text.bytes() {
+        if b.is_ascii_alphanumeric() {
+            data.push(b as char);
+        } else {
+            let _ = write!(data, "\\{b:03o}");
+        }
+    }
+    [
+        format!("set-buffer -b {buf} \"{data}\""),
+        format!("paste-buffer -dp -b {buf} -t {pane}"),
+    ]
+}
+
 /// Ctrl/Alt chords on printable characters, as raw bytes: Ctrl+letter is the
 /// ASCII control byte, Alt prefixes ESC. Returns None without Ctrl/Alt —
 /// plain characters arrive as text events, not through here.
@@ -183,6 +210,17 @@ mod tests {
             "send-keys -t %1 F12",
             "clamped"
         );
+    }
+
+    #[test]
+    fn paste_goes_through_a_tmux_buffer_octal_escaped() {
+        let [set, paste] = paste_cmds("%3", "hi\n'\"€");
+        // \012 newline, \047 ' , \042 " , \342\202\254 the UTF-8 of €
+        assert_eq!(
+            set,
+            "set-buffer -b tg_paste_3 \"hi\\012\\047\\042\\342\\202\\254\""
+        );
+        assert_eq!(paste, "paste-buffer -dp -b tg_paste_3 -t %3");
     }
 
     #[test]

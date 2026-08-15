@@ -198,8 +198,6 @@ pub(super) struct CachedPane {
     pub(super) total_rows: u16,
     pub(super) rows: Vec<Vec<Run>>, // trailing blank rows trimmed
     pub(super) cursor: Option<(u16, u16)>,
-    /// Pane app requested bracketed paste — pastes get ESC[200~ markers.
-    pub(super) bracketed_paste: bool,
     /// The last few screen lines with real content — a TUI's status line, a
     /// shell's last output. Shown on compact cards as "what it's doing".
     pub(super) tail: Vec<String>,
@@ -279,7 +277,6 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
         total_rows: grid.rows,
         rows,
         cursor: grid.cursor,
-        bracketed_paste: grid.bracketed_paste,
         tail,
     }
 }
@@ -469,22 +466,16 @@ impl Viewer {
                     }
                 }
                 egui::Event::Paste(ref t) if !t.is_empty() => {
-                    // Bracketed paste when the pane app asked for it: without
-                    // the markers, every newline in a multiline paste reads
-                    // as Enter — a REPL or agent prompt submits mid-paste.
-                    let bracketed = self
-                        .terms
-                        .cache
-                        .get(&(session.clone(), pane.clone()))
-                        .is_some_and(|c| c.bracketed_paste);
-                    if bracketed {
-                        let mut bytes = b"\x1b[200~".to_vec();
-                        bytes.extend_from_slice(t.as_bytes());
-                        bytes.extend_from_slice(b"\x1b[201~");
-                        cmds.push(keys::hex_cmd(&pane, &bytes));
-                    } else {
-                        cmds.push(keys::hex_cmd(&pane, t.as_bytes()));
-                    }
+                    // Through tmux's own paste machinery: paste-buffer -p
+                    // adds the ESC[200~/201~ markers iff the pane app has
+                    // bracketed paste ON — without them every newline in a
+                    // multiline paste reads as Enter and a REPL or agent
+                    // prompt submits mid-paste. tmux must make that call:
+                    // our mirror's parser forgets modes on every capture
+                    // replay (attach and resize), so the old client-side
+                    // check silently un-bracketed pastes into panes that
+                    // enabled the mode before we attached.
+                    cmds.extend(keys::paste_cmds(&pane, t));
                 }
                 egui::Event::Copy => cmds.push(keys::hex_cmd(&pane, &[0x03])), // Ctrl+C
                 egui::Event::Cut => cmds.push(keys::hex_cmd(&pane, &[0x18])),  // Ctrl+X

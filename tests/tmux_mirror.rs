@@ -216,6 +216,85 @@ fn launch_creates_uniquely_named_tg_sessions() {
     }
 }
 
+/// Pastes go through tmux's own buffer machinery (`set-buffer` with
+/// octal-escaped bytes + `paste-buffer -p`), so the SERVER decides
+/// bracketing from the pane's live mode. Regression: the old client-side
+/// check read the mirror parser's mode flag, which every capture replay
+/// resets — a pane that enabled ESC[?2004h before we attached got raw
+/// pastes whose newlines each submitted the prompt.
+#[test]
+fn paste_is_bracketed_by_tmux_not_the_client() {
+    let have_tmux = Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !have_tmux {
+        eprintln!("tmux not installed — skipping");
+        return;
+    }
+
+    let socket = format!("tg-test-paste-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
+    // the pane app enables bracketed paste BEFORE the mirror attaches
+    // (cat -v prints control bytes visibly, so the markers land on screen)
+    assert!(
+        tmux(
+            &socket,
+            &[
+                "new-session",
+                "-d",
+                "-s",
+                "tp",
+                "-x",
+                "80",
+                "-y",
+                "24",
+                "printf '\\033[?2004h'; exec cat -v"
+            ]
+        ),
+        "failed to create paste session"
+    );
+
+    let mut m = SessionMirror::attach("tp", Some(&socket), None, || {}).expect("attach");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut pane = None;
+    while Instant::now() < deadline && pane.is_none() {
+        m.pump();
+        pane = m.grids().first().map(|(p, _)| p.clone());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let pane = pane.expect("pane never discovered");
+
+    for cmd in keys::paste_cmds(&pane, "one\ntwo's") {
+        m.command(&cmd);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut seen = String::new();
+    let mut success = false;
+    while Instant::now() < deadline && !success {
+        m.pump();
+        if let Some((_, g)) = m.grids().first() {
+            seen = g
+                .cells
+                .chunks(g.cols as usize)
+                .take(4)
+                .map(|row| row.iter().map(|c| c.ch).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            // cat -v renders the ESC[200~/201~ markers as visible text —
+            // proof tmux bracketed the paste from the pane's own mode
+            success = seen.contains("[200~one") && seen.contains("[201~") && seen.contains("two");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        success,
+        "bracket markers never arrived; screen was:\n{seen}"
+    );
+}
+
 /// tmux format-expands the `new-session -c` start-directory, so a literal
 /// `#` in a launch dir must be doubled by launch_named. Regression: a
 /// folder named `#Home` expanded `#H` to the hostname, the pane fell back
