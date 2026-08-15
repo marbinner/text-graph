@@ -61,9 +61,12 @@
   `create`, `state`, `graph`, `filetype`, `mdview`, …) must stay egui-free
   (headless-testable). `mdview::prepare` rewrites note bodies for display
   ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs);
-  the navigator intercepts `tg://` OpenUrl commands and jumps instead of
-  opening a browser — keep that interception, or wikilink clicks leak to
-  the OS.
+  relative markdown dests resolve against the SOURCE note's directory
+  (standard markdown semantics) and must never escape the vault —
+  absolute and `..`-escaping dests stay untouched, or a preview could
+  mint `file://` URLs outside it. The navigator intercepts `tg://`
+  OpenUrl commands and jumps instead of opening a browser — keep that
+  interception, or wikilink clicks leak to the OS.
   Only the bin's `app/` tree touches egui. Its layout: `mod.rs` = Viewer +
   camera/canvas painting + key dispatch + search; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
@@ -178,10 +181,13 @@
   arrangement. Saves are debounced (3s heartbeat repaint keeps them running
   once the sim settles) and the file is sorted for determinism. The file is
   UNTRUSTED input: restores clamp (center/offsets like zoom), dedup
-  (card/pin lines), and carry unknown line KINDS through load→save
-  verbatim (`ViewState::unknown`) — the first save lands ~3s after open,
-  so anything from_text drops, a newer version loses. Unpinning purges the
-  session's `parked_pins` surplus, or claim() re-pins it next frame.
+  (card/pin lines), allowlist-validate the default agent (it runs through
+  `sh -c` on one keypress), and carry unknown line KINDS through
+  load→save verbatim (`ViewState::unknown`) — the first save lands ~3s
+  after open, so anything from_text drops, a newer version loses; for the
+  same reason saves REFUSE a symlinked `.text-graph`/`view.tmp` (a
+  hostile vault could redirect the write). Unpinning purges the session's
+  `parked_pins` surplus, or claim() re-pins it next frame.
 
 ## egui 0.36 gotchas (cost us compile time already)
 

@@ -384,6 +384,42 @@ recorded here so they read as decisions, not undiscovered bugs:
   so staleness is bounded and self-heals; add a max-latency cap only if a
   real workload shows starvation.
 
+### Second audit (same day, against 77ca418)
+
+An independent external audit added ~30 findings; 14 fixed same-day
+(`6c3954d`…`3004988`): allowlist-validated agent restore, symlink-refusing
+state saves, Enter repeat-guard + child reaping, mdview source-relative
+resolution + path-qualified embeds + footnote-definition protection,
+pid-scoped paste buffers, .mjs/.cjs as text, scrollable diag, pruned
+walker, single-flight scans, byte-safe `%output` (split UTF-8 survives),
+scan failures keep the last pane snapshot, CI `--all-targets` + RustSec.
+Triaged and deliberately deferred:
+
+- **Output flood backpressure**: the event queue only grows while the UI
+  never repaints (minimized window) under a gap-free flood; a bounded fix
+  must resync via recapture or it corrupts screens. Revisit on symptoms.
+- **Thumbnail LRU/byte budget**: decodes are visibility-driven, so growth
+  tracks what was actually viewed. Add budgets (and decoder dimension
+  caps) when an image-heavy vault makes it real.
+- **Watcher-side dir pruning**: notify can't filter during registration,
+  and manual per-dir watches risk silently missing events in freshly
+  created dirs — worse than the descriptor cost. The scanner prunes;
+  overflow→rescan covers event floods.
+- **Replay loses scroll margins/charsets/saved cursor**: capture-pane
+  cannot convey modes (the same reason pastes moved server-side); apps
+  repaint on the next resize/redraw. Unfixable without tmux support.
+- **Mixed wiki+external edge order** (doc order vs grouped): fix when next
+  touching graph.rs — changes link order, needs a fixture re-count.
+- **URL-extractor edge cases** (uppercase scheme, `prefixhttps://`,
+  trailing-paren balancing for Wikipedia URLs, uppercase `WWW.` dedup):
+  queued cleanup pass for the weburl/extractor pair.
+- Non-UTF-8 filename identity, Unicode casefolding, combining marks in
+  cells, `$EDITOR` quoted args, AltGr/Alt-punct chords, full
+  `%begin`-identity validation, per-pane dead-state reconciliation, state
+  read-error clobber (mostly defused by unknown-line round-trip): accepted
+  or awaiting real-world symptoms — the E3 punch-list absorbs the input
+  ones.
+
 ## Phase 2: the intelligence layer
 
 Reframed after milestone E: agents arrive by being *opened in the vault* (terminals
