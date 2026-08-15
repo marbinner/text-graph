@@ -34,6 +34,7 @@
     - size of various text and UI.
     - how far we have to zoom in to see previews etc.
     - graph physics
+- dd
 
 
 # in progress
