@@ -111,24 +111,69 @@ pub fn launch_edit(
 /// unfindable in the pane while being findable in every terminal the user
 /// owns; the pane then dies in milliseconds and the session evaporates
 /// before discovery ever sees it. (`new-session -e PATH=…` was tried and
-/// does not apply to the initial pane.) No server or no global PATH →
-/// None, and the command runs unwrapped as before.
+/// does not apply to the initial pane.) With no server running, the
+/// well-known user bin dirs below are the rescue — the fresh server would
+/// otherwise inherit our stripped env with nothing to borrow.
 fn launch_path(socket: Option<&str>) -> Option<String> {
-    let mut c = Command::new("tmux");
-    if let Some(l) = socket {
-        c.args(["-L", l]);
+    let server = (|| {
+        let mut c = Command::new("tmux");
+        if let Some(l) = socket {
+            c.args(["-L", l]);
+        }
+        c.args(["show-environment", "-g", "PATH"]);
+        let out = c.output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        Some(text.strip_prefix("PATH=")?.trim_end().to_string())
+    })();
+    let client = std::env::var("PATH").ok().filter(|s| !s.is_empty());
+    // Well-known user bin dirs (only those that exist) rescue the
+    // NO-SERVER case: the server we are about to start inherits OUR env,
+    // and there is no healthy global PATH to borrow — without these,
+    // "Launch pi" from an IDE-started viewer dies on a fresh server even
+    // though pi sits in ~/.npm-global/bin.
+    let mut extras: Vec<String> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        for d in [
+            ".local/bin",
+            ".npm-global/bin",
+            ".cargo/bin",
+            ".deno/bin",
+            ".opencode/bin",
+            "bin",
+        ] {
+            let p = format!("{home}/{d}");
+            if std::path::Path::new(&p).is_dir() {
+                extras.push(p);
+            }
+        }
     }
-    c.args(["show-environment", "-g", "PATH"]);
-    let out = c.output().ok()?;
-    if !out.status.success() {
-        return None;
+    if std::path::Path::new("/usr/local/bin").is_dir() {
+        extras.push("/usr/local/bin".into());
     }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let server = text.strip_prefix("PATH=")?.trim_end().to_string();
-    match std::env::var("PATH") {
-        Ok(client) if !client.is_empty() => Some(format!("{server}:{client}")),
-        _ => Some(server),
+    let merged = merge_paths(
+        server
+            .iter()
+            .chain(client.iter())
+            .flat_map(|s| s.split(':'))
+            .chain(extras.iter().map(String::as_str)),
+    );
+    (!merged.is_empty()).then_some(merged)
+}
+
+/// Join PATH components in order, dropping empties and duplicates (first
+/// occurrence wins) — keeps the wrapped command line short and stable.
+fn merge_paths<'a>(parts: impl Iterator<Item = &'a str>) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<&str> = Vec::new();
+    for p in parts {
+        if !p.is_empty() && seen.insert(p) {
+            out.push(p);
+        }
     }
+    out.join(":")
 }
 
 /// The pane command for an agent launch: `PATH='…' exec <cmd>` when a
@@ -434,6 +479,15 @@ mod tests {
         let t1 = t0 + Duration::from_secs(2); // well inside GRACE
         let active = tr.update(&[pane_pid("work", "vim", 999)], &allow, t1);
         assert!(active.is_empty(), "revived onto a new server's pane");
+    }
+
+    #[test]
+    fn merge_paths_dedups_in_order() {
+        assert_eq!(
+            merge_paths(["/a", "", "/b", "/a", "/c", "/b"].into_iter()),
+            "/a:/b:/c"
+        );
+        assert_eq!(merge_paths([].into_iter()), "");
     }
 
     #[test]
