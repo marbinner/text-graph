@@ -128,13 +128,20 @@ pub(super) fn on_path(bin: &str) -> bool {
 
 /// Spawn fully detached from our stdio, so even a mis-detected terminal
 /// editor can never take over the terminal the viewer was launched from.
+/// A reaper thread waits on the child — a dropped Child is never reaped
+/// on Unix, so every editor/browser/xdg-open launch would otherwise sit
+/// as a zombie until the viewer exits.
 pub(super) fn detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
     use std::process::Stdio;
-    cmd.stdin(Stdio::null())
+    let mut child = cmd
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 impl Viewer {

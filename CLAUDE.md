@@ -142,9 +142,10 @@
   launched session is already gone. Launched sessions auto-focus via
   `terms.focus_pending` (deadline-guarded) when discovery first shows
   them.
-- Launch-style keybinds (e/t/a — and l's editor open) must exclude key
-  REPEAT (`pressed_fresh`): a held key would otherwise spawn a session
-  per repeat tick.
+- Launch-style keybinds (e/t/a — and l's and Enter's editor open) must
+  exclude key REPEAT (`pressed_fresh`): a held key would otherwise spawn
+  a session/editor per repeat tick. Anything that ultimately spawns a
+  process belongs in this list.
 - EVERY graph-action keybind branch in handle_keys must check
   `widget_free` — egui widgets read key events without consuming them, so
   an unguarded branch fires while the user types into a text field

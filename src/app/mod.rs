@@ -848,8 +848,10 @@ impl Viewer {
         } else if enter
             // if an egui widget (e.g. the detail pane's button, tab-focused)
             // has focus, Enter already activates it — don't also fire here,
-            // or the editor opens twice
+            // or the editor opens twice. Repeat-guarded like e/t/a/l: a
+            // held Enter would spawn an editor/browser per repeat tick.
             && widget_free
+            && pressed_fresh(ui, Key::Enter)
             && let Some(sel) = self.selected
         {
             self.open_in_editor(sel);
