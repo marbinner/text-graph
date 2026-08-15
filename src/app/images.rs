@@ -66,6 +66,15 @@ impl Thumbs {
     pub(super) fn pump(&mut self, ctx: &egui::Context) {
         let Some(rx) = &self.results else { return };
         while let Ok((key, res)) = rx.try_recv() {
+            // Accept only results still WANTED: if retain_fresh evicted the
+            // Pending entry while this decode was in flight (the file
+            // changed under it), inserting would pin the stale pixels until
+            // the next reload — which may never come if the vault goes
+            // quiet. Dropped results are re-queued by paint-time request()
+            // against the new bytes.
+            if !matches!(self.cache.get(&key), Some(ThumbState::Pending)) {
+                continue;
+            }
             let state = match res {
                 Ok((t, stamp)) => {
                     let img = egui::ColorImage::from_rgba_unmultiplied(
@@ -156,6 +165,40 @@ mod tests {
         assert!(!fresh(&a, None), "vanished file evicts");
         assert!(!fresh(&None, None), "unknown stored stamp never fresh");
         assert!(!fresh(&None, a), "unknown stored stamp never fresh");
+    }
+
+    /// A decode finishing AFTER retain_fresh evicted its key (file changed
+    /// mid-decode, reload landed first) must be discarded — inserting it
+    /// pinned the old pixels for the rest of the session once the vault
+    /// went quiet, since request() early-returns on present keys.
+    #[test]
+    fn pump_discards_results_for_evicted_keys() {
+        let ctx = egui::Context::default();
+        let one_px = || thumb::Thumb {
+            w: 1,
+            h: 1,
+            rgba: vec![0; 4],
+        };
+        let mut th = Thumbs::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        th.results = Some(rx);
+
+        tx.send(("gone.png".to_string(), Ok((one_px(), None))))
+            .unwrap();
+        th.pump(&ctx);
+        assert!(
+            th.cache.is_empty(),
+            "orphaned result must not resurrect an evicted entry"
+        );
+
+        th.cache.insert("live.png".into(), ThumbState::Pending);
+        tx.send(("live.png".to_string(), Ok((one_px(), None))))
+            .unwrap();
+        th.pump(&ctx);
+        assert!(
+            matches!(th.cache.get("live.png"), Some(ThumbState::Ready { .. })),
+            "a still-pending key accepts its decode"
+        );
     }
 
     #[test]
