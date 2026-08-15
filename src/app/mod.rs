@@ -41,6 +41,9 @@ use text_graph::{create, filetype, graph, mdview, state, vault};
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);
 const EDGE: Color32 = Color32::from_rgb(0x3a, 0x40, 0x4d);
+/// Contains (tree) edges — brighter and blue-leaning so the folder
+/// skeleton reads at a glance.
+const EDGE_TREE: Color32 = Color32::from_rgb(0x50, 0x5c, 0x7a);
 const DIR: Color32 = Color32::from_rgb(0x7a, 0xa2, 0xf7);
 const FILE: Color32 = Color32::from_rgb(0xb8, 0xbc, 0xc8);
 /// Non-markdown, non-image leaves (code, config, data) — dimmer than
@@ -177,6 +180,47 @@ fn reveal_near_cursor(
     near.into_iter()
         .map(|(d, id)| (id, 1.0 - d / REVEAL_R))
         .collect()
+}
+
+/// Tapered tree edge: thick at the parent, thin at the child — hierarchy
+/// and direction readable without an arrowhead per edge.
+fn paint_tree_edge(p: &egui::Painter, parent: Pos2, child: Pos2, color: Color32) {
+    let d = child - parent;
+    let len = d.length();
+    if len < 1.0 {
+        return;
+    }
+    let perp = Vec2::new(-d.y, d.x) / len;
+    let (wp, wc) = (1.7, 0.45);
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            parent + perp * wp,
+            parent - perp * wp,
+            child - perp * wc,
+            child + perp * wc,
+        ],
+        color,
+        Stroke::NONE,
+    ));
+}
+
+/// Filled arrowhead with its TIP at `tip`, pointing along `dir`.
+fn paint_arrowhead(p: &egui::Painter, tip: Pos2, dir: Vec2, size: f32, color: Color32) {
+    let len = dir.length();
+    if len < 0.5 {
+        return;
+    }
+    let d = dir / len;
+    let perp = Vec2::new(-d.y, d.x);
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            tip,
+            tip - d * size + perp * (size * 0.45),
+            tip - d * size - perp * (size * 0.45),
+        ],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 /// Photo silhouette: a punched-out landscape frame with a sun dot and a
@@ -1355,8 +1399,13 @@ impl Viewer {
                 continue;
             }
             let on = lit[i] && lit[parent.0 as usize];
-            let color = if on { EDGE } else { EDGE.gamma_multiply(DIM) };
-            painter.line_segment([sa, sb], Stroke::new(1.0, color));
+            let color = if on {
+                EDGE_TREE
+            } else {
+                EDGE_TREE.gamma_multiply(DIM)
+            };
+            // sa = child, sb = parent — the wedge thins toward the child
+            paint_tree_edge(&painter, sb, sa, color);
         }
 
         // wikilink edges — always visible as faint curves, bright when they
@@ -1394,6 +1443,14 @@ impl Viewer {
                 Color32::TRANSPARENT,
                 Stroke::new(width, color),
             ));
+            // arrowhead at the target end, pulled back to the node's rim so
+            // the icon painted on top doesn't swallow it
+            let tr = (self.radius[l.to.0 as usize] * self.zoom).clamp(1.5, 16.0) + 4.0;
+            let tangent = sb - ctrl;
+            if (sb - sa).length() > tr + 14.0 && tangent.length() > 0.5 {
+                let tip = sb - tangent.normalized() * tr;
+                paint_arrowhead(&painter, tip, tangent, width * 2.2 + 3.0, color);
+            }
         }
 
         // Card tethers belong with the edges — UNDER node icons — but their
