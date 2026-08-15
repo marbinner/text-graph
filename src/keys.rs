@@ -1,11 +1,15 @@
-//! Keyboard input → tmux `send-keys` commands.
+//! Keyboard input → tmux commands.
 //!
-//! Two channels, chosen to dodge the two classic failure modes:
+//! Three channels, each dodging a classic failure mode:
 //! - **Raw hex** (`send-keys -H`) for typed text and Ctrl/Alt chords — no
 //!   command-line quoting problems, ever.
 //! - **tmux key names** (`send-keys Up`, `BTab`, …) for special keys — tmux
 //!   translates them according to the pane's current terminal modes
 //!   (application cursor keys etc.), so we never have to guess encodings.
+//! - **tmux buffers** (`set-buffer` octal-escaped + `paste-buffer -p`) for
+//!   pastes — the SERVER wraps in bracketed-paste markers iff the pane app
+//!   requested them, because our mirror can't know (capture replays reset
+//!   parser modes).
 //!
 //! egui-free: the app maps its events into these types; everything here is
 //! headless-testable.

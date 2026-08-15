@@ -158,7 +158,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     // walk errors too: the walker yields them in raw readdir order, and
     // g.errors flows verbatim into stats output and the diag window (read
     // errors, appended below, already follow sorted path order)
-    errors.sort_by(|a: &ScanError, b| (&a.rel_path, &a.message).cmp(&(&b.rel_path, &b.message)));
+    errors.sort_by(|a, b| (&a.rel_path, &a.message).cmp(&(&b.rel_path, &b.message)));
 
     let mut files = Vec::with_capacity(paths.len());
     for (rel, path) in paths {

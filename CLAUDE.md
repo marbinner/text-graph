@@ -145,6 +145,15 @@
 - Launch-style keybinds (e/t/a — and l's editor open) must exclude key
   REPEAT (`pressed_fresh`): a held key would otherwise spawn a session
   per repeat tick.
+- EVERY graph-action keybind branch in handle_keys must check
+  `widget_free` — egui widgets read key events without consuming them, so
+  an unguarded branch fires while the user types into a text field
+  (regression: '0' in the find prompt re-fit the camera). Esc is special:
+  egui surrenders widget focus at frame START on Escape, so
+  guard-by-focus can't see the prompt — transient text inputs (like
+  `nav_find`) must be their OWN first stage of the Esc dismiss chain.
+  The search bar's branch is the one deliberate exception (its Enter/Esc
+  act while its field is focused).
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
@@ -166,7 +175,12 @@
   keyed by SESSION NAME and parked in `terms.parked` when a session is
   absent (pane ids change across tmux restarts) — never hard-drop an
   arrangement. Saves are debounced (3s heartbeat repaint keeps them running
-  once the sim settles) and the file is sorted for determinism.
+  once the sim settles) and the file is sorted for determinism. The file is
+  UNTRUSTED input: restores clamp (center/offsets like zoom), dedup
+  (card/pin lines), and carry unknown line KINDS through load→save
+  verbatim (`ViewState::unknown`) — the first save lands ~3s after open,
+  so anything from_text drops, a newer version loses. Unpinning purges the
+  session's `parked_pins` surplus, or claim() re-pins it next frame.
 
 ## egui 0.36 gotchas (cost us compile time already)
 
