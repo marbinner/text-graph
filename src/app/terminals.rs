@@ -106,6 +106,19 @@ impl Terminals {
             || self.cursor.as_ref() == Some(key)
             || self.pinned.contains_key(key)
     }
+
+    /// Ctrl+click: pin ⇄ unpin. Unpinning also drops the session's PARKED
+    /// pins — a leftover (saved pins outnumbering the session's live panes
+    /// after a tmux restart) would otherwise be claim()ed right back onto
+    /// this freshly unpinned pane next frame, silently reverting the
+    /// gesture.
+    pub(super) fn toggle_pin(&mut self, key: (String, String)) {
+        if self.pinned.remove(&key).is_none() {
+            self.pinned.insert(key, ());
+        } else {
+            self.parked_pins.remove(&key.0);
+        }
+    }
 }
 
 /// Zoom level a double-clicked card flies to — full styled screen, readable.
@@ -1184,6 +1197,32 @@ impl Viewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: a session coming back (tmux restart) with fewer panes
+    /// than saved pins strands a leftover in parked_pins; claim's
+    /// fallback pass handed it to any unpinned pane EVERY frame, so
+    /// Ctrl+click-unpin was reverted before the card ever painted
+    /// unpinned. Unpinning must purge the session's parked pins.
+    #[test]
+    fn unpin_purges_parked_pins_so_claim_cannot_revert_it() {
+        let key = ("tg_claude".to_string(), "%0".to_string());
+        // startup: two pins saved for tg_claude, only pane %0 came back
+        let parked_pins = HashMap::from([(
+            "tg_claude".to_string(),
+            vec![("%1".to_string(), ()), ("%2".to_string(), ())],
+        )]);
+        let mut t = Terminals::new(HashMap::new(), parked_pins);
+        let live = vec![key.clone()];
+        state::claim(&mut t.pinned, &mut t.parked_pins, &live);
+        assert!(t.pinned.contains_key(&key), "restore pins the survivor");
+
+        t.toggle_pin(key.clone()); // Ctrl+click: unpin
+        state::claim(&mut t.pinned, &mut t.parked_pins, &live); // next frame
+        assert!(
+            !t.pinned.contains_key(&key),
+            "the unpin must stick — no leftover may re-pin the pane"
+        );
+    }
 
     #[test]
     fn pinned_cards_count_as_expanded() {

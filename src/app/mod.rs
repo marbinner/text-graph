@@ -1497,9 +1497,7 @@ impl Viewer {
                     // Ctrl+click pins the card open (expanded at any zoom,
                     // several at once) without touching keyboard focus;
                     // Ctrl+click again unpins
-                    if self.terms.pinned.remove(&t).is_none() {
-                        self.terms.pinned.insert(t, ());
-                    }
+                    self.terms.toggle_pin(t);
                 } else {
                     self.terms.cursor = Some(t.clone());
                     self.terms.focused = Some(t);
