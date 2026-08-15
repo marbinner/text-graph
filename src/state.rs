@@ -3,8 +3,10 @@
 //! Lives at `<vault>/.text-graph/view`. The dot-dir is hidden, so the vault
 //! walker and the live-reload watcher never see it — writes here can't cause
 //! reload loops. Plain tab-separated lines with the session name LAST (a tab
-//! inside a session name can't shear the record); unknown lines are ignored
-//! for forward compatibility, and any unparsable line is simply dropped.
+//! inside a session name can't shear the record). Unknown line KINDS are
+//! carried through load→save verbatim, so opening a vault with an older
+//! binary can't erase a newer version's settings (forward compatibility);
+//! corrupt lines of a known kind are simply dropped.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -25,6 +27,9 @@ pub struct ViewState {
     /// Agent the one-click "Launch <agent>" menu button starts; None =
     /// the built-in default (pi).
     pub default_agent: Option<String>,
+    /// Line kinds this version doesn't understand, verbatim in file order.
+    /// Loaded so a save can write them back — the forward-compat promise.
+    pub unknown: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,6 +65,10 @@ pub fn to_text(s: &ViewState) -> String {
     }
     if let Some(a) = &s.default_agent {
         out.push_str(&format!("agent\t{a}\n"));
+    }
+    for l in &s.unknown {
+        out.push_str(l);
+        out.push('\n');
     }
     out
 }
@@ -112,7 +121,14 @@ pub fn from_text(text: &str) -> ViewState {
                     s.pins.push((session.to_string(), pane.to_string()));
                 }
             }
-            _ => {} // header / unknown line kinds
+            _ => {
+                // keep unknown line KINDS for the next save (a newer
+                // version's settings must survive an older binary); the
+                // header is ours and empty lines are noise
+                if !line.trim().is_empty() && !line.starts_with("text-graph view") {
+                    s.unknown.push(line.to_string());
+                }
+            }
         }
     }
     s
@@ -224,8 +240,13 @@ mod tests {
             hide_web: true,
             light: true,
             default_agent: Some("claude".into()),
+            unknown: vec!["future-thing\tdata".to_string()],
         };
-        assert_eq!(from_text(&to_text(&s)), s);
+        assert_eq!(
+            from_text(&to_text(&s)),
+            s,
+            "unknown line kinds round-trip too"
+        );
     }
 
     #[test]
@@ -237,6 +258,7 @@ mod tests {
             hide_web: false,
             light: false,
             default_agent: None,
+            unknown: Vec::new(),
         };
         assert_eq!(from_text(&to_text(&s)), s);
     }
@@ -256,6 +278,12 @@ mod tests {
             s.pins,
             vec![("s".to_string(), "%2".to_string())],
             "truncated pin line dropped, valid one kept"
+        );
+        assert_eq!(
+            s.unknown,
+            vec!["nonsense".to_string(), "future-thing\tdata".to_string()],
+            "unknown KINDS are kept for the next save; corrupt lines of \
+             known kinds and the header are not"
         );
     }
 

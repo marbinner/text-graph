@@ -218,6 +218,7 @@ impl Viewer {
             hide_web: !self.show_web,
             light: self.theme.light,
             default_agent: Some(self.default_agent.clone()),
+            unknown: self.view_unknown.clone(),
         }
     }
 

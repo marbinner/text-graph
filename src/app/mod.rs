@@ -510,6 +510,9 @@ struct Viewer {
     // ---- view-state persistence ----
     /// View state as last written to `.text-graph/view` (skip no-op saves).
     saved_state: Option<state::ViewState>,
+    /// Line kinds the loaded view file had that this version doesn't know —
+    /// written back verbatim on every save (forward compatibility).
+    view_unknown: Vec<String>,
     last_save: Instant,
     save_warned: bool,
     // ---- tree navigation ----
@@ -693,6 +696,7 @@ impl Viewer {
             thumbs: images::Thumbs::new(),
             previews: previews::Previews::default(),
             saved_state: None,
+            view_unknown: vs.unknown,
             last_save: Instant::now(),
             save_warned: false,
             pending_g: None,
