@@ -68,6 +68,28 @@ fn file_url(root: &Path, rel: &str) -> String {
     format!("<file://{}>", root.join(rel).display())
 }
 
+/// Resolve a markdown-relative destination against the source note's
+/// directory ("" = vault root), normalizing `.`/`..` — standard markdown
+/// resolves relative to the FILE, not the collection root. None for
+/// absolute paths and anything that escapes the vault: a rewrite there
+/// could mint `file://` URLs outside it.
+fn resolve_relative(source_dir: &str, dest: &str) -> Option<String> {
+    if dest.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<&str> = source_dir.split('/').filter(|s| !s.is_empty()).collect();
+    for c in dest.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?; // pop of an empty stack = escape above root
+            }
+            seg => parts.push(seg),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 /// Rewrite `body` (the source node's `read_body` output) for display.
 pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
     let excluded = vault::excluded_ranges(body);
@@ -170,6 +192,10 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
     }
 
     // ---- relative destinations in standard markdown links/images ----
+    // Resolved against the SOURCE note's directory (regression:
+    // docs/source.md linking setup.md used to look up the vault root's
+    // setup.md instead of docs/setup.md).
+    let source_dir = g.node(source).path.rsplit_once('/').map_or("", |(d, _)| d);
     for (event, range) in Parser::new(body).into_offset_iter() {
         let (dest, image) = match &event {
             Event::Start(Tag::Link { dest_url, .. }) => (dest_url.to_string(), false),
@@ -179,10 +205,18 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         if dest.is_empty() || dest.contains("://") || dest.starts_with('#') {
             continue;
         }
+        // resolve ignoring any #fragment (the rewrite replaces the whole
+        // dest span — a tg:// jump has no use for the fragment)
+        let path_part = dest.split_once('#').map_or(dest.as_str(), |(p, _)| p);
+        let Some(resolved) = resolve_relative(source_dir, path_part) else {
+            continue;
+        };
         let new = if image {
-            root.join(&dest).exists().then(|| file_url(root, &dest))
+            root.join(&resolved)
+                .exists()
+                .then(|| file_url(root, &resolved))
         } else {
-            g.by_path(&dest).map(node_url)
+            g.by_path(&resolved).map(node_url)
         };
         let Some(new) = new else { continue };
         // the destination appears verbatim AFTER the `](` separator —
@@ -200,7 +234,17 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
             continue;
         };
         let abs = range.start + sep + 2 + at;
-        reps.push((abs..abs + dest.len(), new));
+        let mut span = abs..abs + dest.len();
+        // `[x](<dest with spaces>)`: the angle brackets belong to the
+        // dest — widen the span so the rewrite doesn't nest them
+        // (`<<file://…>>` renders broken)
+        if span.start > 0
+            && body.as_bytes().get(span.start - 1) == Some(&b'<')
+            && body.as_bytes().get(span.end) == Some(&b'>')
+        {
+            span = span.start - 1..span.end + 1;
+        }
+        reps.push((span, new));
     }
 
     // apply back-to-front so earlier offsets stay valid; drop overlaps
@@ -230,6 +274,60 @@ mod tests {
         assert_eq!(strip_target("a/b#h|shown"), "a/b");
         assert_eq!(display_text("a/b#h|shown"), "shown");
         assert_eq!(display_text("a/b#h"), "a/b#h");
+    }
+
+    /// Standard markdown resolves relative to the FILE: docs/source.md
+    /// linking `setup.md` means docs/setup.md (regression: it resolved
+    /// against the vault root). `..` normalizes; escapes and absolute
+    /// paths stay untouched so `file://` can never point outside the
+    /// vault; a `<bracketed>` dest must not gain nested brackets.
+    #[test]
+    fn relative_dests_resolve_against_the_source_note_directory() {
+        let d = std::env::temp_dir().join(format!("tg-mdview-rel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("docs")).unwrap();
+        std::fs::write(d.join("docs/source.md"), "x").unwrap();
+        std::fs::write(d.join("docs/setup.md"), "x").unwrap();
+        std::fs::write(d.join("docs/pic.png"), "x").unwrap();
+        std::fs::write(d.join("root.md"), "x").unwrap();
+        std::fs::write(d.join("setup.md"), "DECOY at root").unwrap();
+        let g = crate::graph::build(vault::scan(&d).unwrap());
+        let src = g.by_path("docs/source.md").unwrap();
+        let in_docs = g.by_path("docs/setup.md").unwrap();
+        let at_root = g.by_path("root.md").unwrap();
+
+        let out = prepare(
+            &g,
+            &d,
+            src,
+            "[s](setup.md) [r](../root.md) [f](./setup.md#sec)",
+        );
+        assert_eq!(
+            out,
+            format!(
+                "[s]({}) [r]({}) [f]({})",
+                node_url(in_docs),
+                node_url(at_root),
+                node_url(in_docs)
+            ),
+            "file-relative, .. and ./ + #fragment all resolve from docs/"
+        );
+
+        let out = prepare(&g, &d, src, "![p](pic.png) ![b](<pic.png>)");
+        let url = file_url(&d, "docs/pic.png");
+        assert_eq!(
+            out,
+            format!("![p]({url}) ![b]({url})"),
+            "images resolve from the source dir; <> dests don't nest brackets"
+        );
+
+        let hostile = "[e](../../etc/passwd) [a](/etc/passwd) ![i](../../../etc/passwd)";
+        assert_eq!(
+            prepare(&g, &d, src, hostile),
+            hostile,
+            "escapes above the vault and absolute paths are never rewritten"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Regression: for self-labeled links `[p](p)` the rewrite found the
