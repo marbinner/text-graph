@@ -224,6 +224,8 @@ struct Viewer {
     selected: Option<NodeId>,
     drag_node: Option<NodeId>,
     fitted: bool,
+    /// Canvas rect of the previous frame — camera compensation on change.
+    last_canvas_rect: Option<Rect>,
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
@@ -385,6 +387,7 @@ impl Viewer {
             selected: None,
             drag_node: None,
             fitted: cam.is_some(), // a restored camera must not be re-fit away
+            last_canvas_rect: None,
             n_files,
             n_dirs,
             n_images,
@@ -837,6 +840,18 @@ impl Viewer {
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        // The world is anchored to the rect CENTER, so the side panel
+        // opening/closing (or resizing, or a window resize) would slide the
+        // whole scene sideways — the node just clicked escapes the cursor
+        // and the second click of a double-click misses. Shift the camera by
+        // the same amount so every world point keeps its screen position;
+        // only the visible clip changes.
+        if let Some(last) = self.last_canvas_rect
+            && last.center() != rect.center()
+        {
+            self.center += (rect.center() - last.center()) / self.zoom;
+        }
+        self.last_canvas_rect = Some(rect);
         if !self.fitted {
             self.fit(rect);
             self.fitted = true;
