@@ -6,6 +6,22 @@ use super::*;
 
 pub(super) type ReloadMsg = (u64, anyhow::Result<Graph>);
 
+/// Should this watcher callback schedule a rebuild? A kernel queue
+/// overflow arrives as a Rescan-flagged event with NO paths — the one
+/// signal that says events were LOST — and a watch error can mean the
+/// same; both must count, or the graph goes silently stale after a burst
+/// (an in-vault `cargo build` or `git checkout` floods the same queue,
+/// since the recursive watch covers even dirs the relevance filter skips).
+/// A rebuild here is always a full rescan, so over-triggering is safe.
+fn reload_worthy(root: &Path, res: &Result<notify::Event, notify::Error>) -> bool {
+    match res {
+        Ok(event) => {
+            event.need_rescan() || event.paths.iter().any(|p| vault::watch_relevant(root, p))
+        }
+        Err(_) => true,
+    }
+}
+
 impl Viewer {
     /// Watch the vault; on a relevant event, stamp the debounce clock and
     /// wake the UI thread. Failure to watch just means no live reload.
@@ -14,9 +30,7 @@ impl Viewer {
         let state = self.reload_at.clone();
         let root = self.root.clone();
         let handler = move |res: Result<notify::Event, notify::Error>| {
-            let Ok(event) = res else { return };
-            let relevant = event.paths.iter().any(|p| vault::watch_relevant(&root, p));
-            if relevant {
+            if reload_worthy(&root, &res) {
                 *state.lock().unwrap() = Some(Instant::now());
                 ctx.request_repaint();
             }
@@ -291,6 +305,29 @@ mod tests {
         let g = graph::build(vault::scan(&d).expect("tiny scans"));
         let _ = std::fs::remove_dir_all(&d);
         g
+    }
+
+    #[test]
+    fn overflow_and_errors_trigger_a_rescan_but_irrelevant_paths_do_not() {
+        let root = PathBuf::from("/v");
+        // inotify queue overflow: Rescan flag, empty paths — events were
+        // lost, the rebuild MUST fire (regression: `.any()` over no paths
+        // was false and the graph went permanently stale)
+        let overflow =
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        assert!(reload_worthy(&root, &Ok(overflow)));
+        // watcher errors likewise mean "assume something was missed"
+        assert!(reload_worthy(
+            &root,
+            &Err(notify::Error::generic("inotify broke"))
+        ));
+        // but ordinary events keep the relevance filter: hidden dot-dir
+        // saves must never schedule a rebuild (reload-loop guard)
+        let save =
+            notify::Event::new(notify::EventKind::Other).add_path(root.join(".text-graph/view"));
+        assert!(!reload_worthy(&root, &Ok(save)));
+        let edit = notify::Event::new(notify::EventKind::Other).add_path(root.join("note.md"));
+        assert!(reload_worthy(&root, &Ok(edit)));
     }
 
     #[test]
