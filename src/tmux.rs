@@ -91,15 +91,18 @@ fn reader_loop(stdout: ChildStdout, tx: Sender<TmuxEvent>, wake: impl Fn()) {
     loop {
         buf.clear();
         // Bytes, not read_line: tmux only octal-escapes < 0x20 and '\\' in
-        // %output, so raw 0x80..=0xFF from a pane (binary spew, Latin-1)
-        // reaches us verbatim. read_line would Err on invalid UTF-8 and
-        // kill the whole mirror; lossy conversion just mangles that cell.
+        // %output, so raw 0x80..=0xFF from a pane reaches us verbatim —
+        // read_line would Err on invalid UTF-8 and kill the whole mirror.
+        // The payload STAYS bytes through parse_bytes (see there).
         match reader.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
-        let line = String::from_utf8_lossy(&buf);
-        if let Some(ev) = parse_line(line.trim_end_matches(['\r', '\n']), &mut state) {
+        let mut raw: &[u8] = &buf;
+        while let [head @ .., b'\n' | b'\r'] = raw {
+            raw = head;
+        }
+        if let Some(ev) = parse_bytes(raw, &mut state) {
             if tx.send(ev).is_err() {
                 break;
             }
@@ -124,13 +127,39 @@ const CHANGED: &[&str] = &[
     "%pane-mode-changed",
 ];
 
-/// One protocol line → at most one event. Command output blocks are atomic
-/// (tmux does not interleave notifications inside `%begin`…`%end`), and only
-/// the `%end`/`%error` carrying the SAME command number terminates a block —
-/// captured screen text that merely looks like protocol lines (a pane
-/// showing tmux logs, or this project's own debug output) is data, not
-/// control flow. Without the number check such text could truncate replies,
-/// fire a bogus Exit, and desync the pending FIFO permanently.
+/// One raw protocol line (EOL trimmed) → at most one event. `%output` is
+/// handled at the BYTE level: tmux only octal-escapes < 0x20 and `\` in
+/// its payload, so raw 0x80..=0xFF pass through — and a UTF-8 character
+/// SPLIT across two `%output` notifications (pty reads cut anywhere) must
+/// reach the vt100 parser as bytes. The old per-line lossy decode turned
+/// each fragment into replacement chars before the parser could reassemble
+/// them (vte buffers partial UTF-8 across process() calls). Everything
+/// else is ASCII protocol or reply data, where lossy decoding is safe:
+/// reply lines are complete, so valid UTF-8 in them survives intact.
+fn parse_bytes(raw: &[u8], state: &mut ReaderState) -> Option<TmuxEvent> {
+    // inside a %begin block even %output-shaped text is DATA — byte
+    // handling must respect that, like every other protocol shape
+    if state.reply.is_none()
+        && let Some(rest) = raw.strip_prefix(b"%output ")
+    {
+        let sep = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
+        let (pane, data) = rest.split_at(sep);
+        return Some(TmuxEvent::Output {
+            pane: String::from_utf8_lossy(pane).into_owned(), // ids are ASCII
+            bytes: unescape_octal(data.strip_prefix(b" ").unwrap_or(data)),
+        });
+    }
+    let line = String::from_utf8_lossy(raw);
+    parse_line(&line, state)
+}
+
+/// Command output blocks are atomic (tmux does not interleave
+/// notifications inside `%begin`…`%end`), and only the `%end`/`%error`
+/// carrying the SAME command number terminates a block — captured screen
+/// text that merely looks like protocol lines (a pane showing tmux logs,
+/// or this project's own debug output) is data, not control flow. Without
+/// the number check such text could truncate replies, fire a bogus Exit,
+/// and desync the pending FIFO permanently.
 fn parse_line(l: &str, state: &mut ReaderState) -> Option<TmuxEvent> {
     if state.reply.is_some() {
         let is_err = l.starts_with("%error ");
@@ -148,13 +177,8 @@ fn parse_line(l: &str, state: &mut ReaderState) -> Option<TmuxEvent> {
         }
         return None;
     }
-    if let Some(rest) = l.strip_prefix("%output ") {
-        let (pane, data) = rest.split_once(' ').unwrap_or((rest, ""));
-        return Some(TmuxEvent::Output {
-            pane: pane.to_string(),
-            bytes: unescape_octal(data),
-        });
-    }
+    // NOTE: %output never reaches here — parse_bytes handles it before
+    // lossy decoding (see above)
     if l.starts_with("%begin ") {
         state.reply = Some((block_num(l).unwrap_or_default().to_string(), Vec::new()));
         return None;
@@ -174,8 +198,8 @@ fn block_num(l: &str) -> Option<&str> {
 }
 
 /// tmux escapes control bytes and backslash in `%output` data as `\ooo`.
-pub fn unescape_octal(s: &str) -> Vec<u8> {
-    let b = s.as_bytes();
+/// Bytes in, bytes out — raw >=0x80 must pass through untouched.
+pub fn unescape_octal(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     let oct = |c: u8| (b'0'..=b'7').contains(&c);
@@ -200,10 +224,32 @@ mod tests {
 
     #[test]
     fn unescape() {
-        assert_eq!(unescape_octal("A\\033[31mB"), b"A\x1b[31mB");
-        assert_eq!(unescape_octal("back\\134slash"), b"back\\slash");
-        assert_eq!(unescape_octal("plain"), b"plain");
-        assert_eq!(unescape_octal("dangling\\03"), b"dangling\\03");
+        assert_eq!(unescape_octal(b"A\\033[31mB"), b"A\x1b[31mB");
+        assert_eq!(unescape_octal(b"back\\134slash"), b"back\\slash");
+        assert_eq!(unescape_octal(b"plain"), b"plain");
+        assert_eq!(unescape_octal(b"dangling\\03"), b"dangling\\03");
+        // raw high bytes pass through untouched (tmux does not escape them)
+        assert_eq!(unescape_octal(&[0xe2, 0x82, 0xac]), vec![0xe2, 0x82, 0xac]);
+    }
+
+    /// A UTF-8 char split across two %output notifications (pty reads cut
+    /// anywhere) must survive: the payloads stay BYTES end to end, so the
+    /// vt100 parser can reassemble the fragments. Per-line lossy decoding
+    /// used to turn each fragment into replacement chars — unrecoverable.
+    #[test]
+    fn split_multibyte_output_survives_as_bytes() {
+        let mut st = ReaderState::default();
+        let euro = "€".as_bytes(); // e2 82 ac
+        let mut l1 = b"%output %1 ".to_vec();
+        l1.extend_from_slice(&euro[..2]);
+        let mut l2 = b"%output %1 ".to_vec();
+        l2.extend_from_slice(&euro[2..]);
+        let (Some(TmuxEvent::Output { bytes: b1, .. }), Some(TmuxEvent::Output { bytes: b2, .. })) =
+            (parse_bytes(&l1, &mut st), parse_bytes(&l2, &mut st))
+        else {
+            panic!("both fragments must parse as output");
+        };
+        assert_eq!(String::from_utf8([b1, b2].concat()).unwrap(), "€");
     }
 
     #[test]
@@ -225,7 +271,7 @@ mod tests {
         let mut st = ReaderState::default();
         let evs: Vec<_> = lines
             .iter()
-            .filter_map(|l| parse_line(l, &mut st))
+            .filter_map(|l| parse_bytes(l.as_bytes(), &mut st))
             .collect();
         assert_eq!(
             evs,
@@ -266,7 +312,7 @@ mod tests {
         let mut st = ReaderState::default();
         let evs: Vec<_> = lines
             .iter()
-            .filter_map(|l| parse_line(l, &mut st))
+            .filter_map(|l| parse_bytes(l.as_bytes(), &mut st))
             .collect();
         assert_eq!(
             evs,
