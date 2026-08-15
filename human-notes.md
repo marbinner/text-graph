@@ -20,12 +20,12 @@
     - default agent and then when I click the launch agent button without selecting a specific one it launches the default one.
     - 
 - fuzzy search across the entire graph including contents of the text files.
-- when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to.
 - make it so I can drag and drop files and paste shit into the gui.
 - there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
 
-# in progress
 
+# in progress
+- when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to. And also make it maintain the same zoom the camera already has, but the camera just refocuses location.
 
 # done
 - make graph edges directed and make folder edges more noticable. The folder structure should be clear glancing at the graph.
