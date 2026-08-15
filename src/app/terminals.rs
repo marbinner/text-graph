@@ -39,6 +39,9 @@ pub(super) struct Terminals {
     pub(super) cycle: usize,
     /// The card the terminal cursor is on: highlighted, Enter focuses it.
     pub(super) cursor: Option<(String, String)>,
+    /// (card, dwell start, screen anchor) — drives the hover peek popup on
+    /// compact cards, like `Viewer::hover_since` does for nodes.
+    pub(super) hover_since: Option<((String, String), Instant, Pos2)>,
     /// Cards pinned open by Ctrl+click: expanded at any zoom, independent
     /// of focus/cursor — several agents watchable at once. Value-less map
     /// (not a set) so state.rs park/claim shepherd pins across tmux
@@ -79,6 +82,7 @@ impl Terminals {
             fly_to: None,
             cycle: 0,
             cursor: None,
+            hover_since: None,
             pinned: HashMap::new(),
             parked_pins,
             bg_flash: Arc::new(Mutex::new(Vec::new())),
@@ -258,6 +262,51 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
         cursor: grid.cursor,
         bracketed_paste: grid.bracketed_paste,
         summary,
+    }
+}
+
+/// Paint a cached pane's rows (and cursor block) at `origin` with the
+/// given monospace metrics — shared by the cards and the hover peek popup.
+pub(super) fn paint_pane_rows(
+    p: &egui::Painter,
+    origin: Pos2,
+    c: &CachedPane,
+    font: &FontId,
+    adv: f32,
+    line_h: f32,
+) {
+    for (r, row) in c.rows.iter().enumerate() {
+        let y = origin.y + r as f32 * line_h;
+        let mut job = egui::text::LayoutJob::default();
+        for run in row {
+            if let Some(bg) = run.bg {
+                let x0 = origin.x + run.start_col as f32 * adv;
+                let w = run.text.chars().count() as f32 * adv;
+                p.rect_filled(
+                    Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, line_h)),
+                    0.0,
+                    bg,
+                );
+            }
+            let mut fmt = egui::TextFormat::simple(font.clone(), run.fg);
+            fmt.italics = run.italic;
+            if run.underline {
+                fmt.underline = Stroke::new(1.0, run.fg);
+            }
+            job.append(&run.text, 0.0, fmt);
+        }
+        let galley = p.layout_job(job);
+        p.galley(Pos2::new(origin.x, y), galley, Color32::WHITE);
+    }
+    if let Some((cr, cc)) = c.cursor
+        && (cr as usize) < c.rows.len()
+    {
+        let p0 = Pos2::new(origin.x + cc as f32 * adv, origin.y + cr as f32 * line_h);
+        p.rect_filled(
+            Rect::from_min_size(p0, Vec2::new(adv.max(2.0), line_h)),
+            0.0,
+            HOVER.gamma_multiply(0.55),
+        );
     }
 }
 
@@ -791,43 +840,86 @@ impl Viewer {
             }
 
             let origin = card.left_top() + Vec2::new(pad, title_h + pad);
-            for (r, row) in c.rows.iter().enumerate() {
-                let y = origin.y + r as f32 * line_h;
-                let mut job = egui::text::LayoutJob::default();
-                for run in row {
-                    if let Some(bg) = run.bg {
-                        let x0 = origin.x + run.start_col as f32 * adv;
-                        let w = run.text.chars().count() as f32 * adv;
-                        cp.rect_filled(
-                            Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, line_h)),
-                            0.0,
-                            bg,
-                        );
-                    }
-                    let mut fmt = egui::TextFormat::simple(font.clone(), run.fg);
-                    fmt.italics = run.italic;
-                    if run.underline {
-                        fmt.underline = Stroke::new(1.0, run.fg);
-                    }
-                    job.append(&run.text, 0.0, fmt);
-                }
-                let galley = cp.layout_job(job);
-                cp.galley(Pos2::new(origin.x, y), galley, Color32::WHITE);
-            }
-            if let Some((cr, cc)) = c.cursor
-                && (cr as usize) < c.rows.len()
-            {
-                let p0 = Pos2::new(origin.x + cc as f32 * adv, origin.y + cr as f32 * line_h);
-                cp.rect_filled(
-                    Rect::from_min_size(p0, Vec2::new(adv.max(2.0), line_h)),
-                    0.0,
-                    HOVER.gamma_multiply(0.55),
-                );
-            }
+            paint_pane_rows(&cp, origin, c, &font, adv, line_h);
             if a.ours {
                 paint_resize_grip(&cp, card, border);
             }
         }
+    }
+
+    /// Peek popup: dwell on a COMPACT card and its full screen renders at a
+    /// readable size on the tooltip layer — inspect what an agent is doing
+    /// without zooming in, focusing, or pinning. Expanded cards already
+    /// show everything, so they never peek.
+    pub(super) fn hover_peek_ui(&self, ui: &egui::Ui) {
+        let Some((key, since, anchor)) = self.terms.hover_since.clone() else {
+            return;
+        };
+        let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0 && !self.terms.is_expanded(&key);
+        if !compact {
+            return;
+        }
+        let elapsed = since.elapsed();
+        if elapsed < super::previews::HOVER_DELAY {
+            ui.ctx()
+                .request_repaint_after(super::previews::HOVER_DELAY - elapsed);
+            return;
+        }
+        let Some(c) = self.terms.cache.get(&key) else {
+            return;
+        };
+        let title = self
+            .terms
+            .panes
+            .iter()
+            .find(|a| a.session == key.0 && a.pane == key.1)
+            .map(|a| format!("{} · {} {}", a.agent, a.session, a.pane))
+            .unwrap_or_else(|| format!("{} {}", key.0, key.1));
+        let screen = ui.ctx().content_rect();
+        // fit wide panes: shrink the font until the full width fits
+        let mut f = 11.5;
+        let probe = |ui: &egui::Ui, f: f32| {
+            let g = ui
+                .painter()
+                .layout_no_wrap("M".into(), FontId::monospace(f), Color32::WHITE);
+            (g.size().x, g.size().y)
+        };
+        let (mut adv, mut line_h) = probe(ui, f);
+        let max_w = screen.width() * 0.85;
+        if c.cols as f32 * adv > max_w {
+            f *= max_w / (c.cols as f32 * adv);
+            (adv, line_h) = probe(ui, f);
+        }
+        let font = FontId::monospace(f);
+        let size = Vec2::new(c.cols as f32 * adv, c.rows.len() as f32 * line_h);
+        let pivot = super::previews::popup_pivot(anchor, screen);
+        let off = Vec2::new(
+            if pivot.0[0] == egui::Align::Min {
+                16.0
+            } else {
+                -16.0
+            },
+            if pivot.0[1] == egui::Align::Min {
+                14.0
+            } else {
+                -14.0
+            },
+        );
+        egui::Area::new(egui::Id::new("term-peek"))
+            .order(egui::Order::Tooltip)
+            .interactable(false)
+            .pivot(pivot)
+            .fixed_pos(anchor + off)
+            .constrain_to(screen.shrink(6.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(egui::RichText::new(title).strong());
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    let p = ui.painter_at(rect.expand(2.0));
+                    p.rect_filled(rect.expand(2.0), 2.0, TERM_BG);
+                    paint_pane_rows(&p, rect.min, c, &font, adv, line_h);
+                });
+            });
     }
 
     /// Jump the view into a card: readable zoom now, exact centering on the

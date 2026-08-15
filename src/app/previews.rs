@@ -66,15 +66,16 @@ impl Previews {
 }
 
 /// Dwell before the hover preview opens — sweeping the cursor across nodes
-/// must not strobe popups.
-const HOVER_DELAY: Duration = Duration::from_millis(350);
+/// must not strobe popups. Shared with the terminal-card peek.
+pub(super) const HOVER_DELAY: Duration = Duration::from_millis(350);
 /// Popup content width; images fit within it, text wraps to it.
 const POPUP_W: f32 = 430.0;
 const POPUP_MAX_H: f32 = 460.0;
 
 /// Which corner of the popup sits on the anchor: pick the quadrant that
-/// opens toward screen center, so the popup always has room.
-fn popup_pivot(anchor: Pos2, screen: Rect) -> Align2 {
+/// opens toward screen center, so the popup always has room. Shared with
+/// the terminal-card peek.
+pub(super) fn popup_pivot(anchor: Pos2, screen: Rect) -> Align2 {
     match (anchor.x < screen.center().x, anchor.y < screen.center().y) {
         (true, true) => Align2::LEFT_TOP,
         (true, false) => Align2::LEFT_BOTTOM,

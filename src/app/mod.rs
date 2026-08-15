@@ -1135,6 +1135,7 @@ impl Viewer {
         // (pan, node, card) resets it
         if response.dragged() {
             self.hover_since = None;
+            self.terms.hover_since = None;
         } else {
             match (self.hover, self.hover_since) {
                 (Some(h), Some((id, ..))) if id == h => {}
@@ -1143,6 +1144,15 @@ impl Viewer {
                     self.hover_since = Some((h, Instant::now(), a));
                 }
                 (None, _) => self.hover_since = None,
+            }
+            // same dwell tracking for terminal cards (drives the peek popup)
+            match (&over_card, &self.terms.hover_since) {
+                (Some(k), Some((hk, ..))) if hk == k => {}
+                (Some(k), _) => {
+                    let a = response.hover_pos().unwrap_or_else(|| rect.center());
+                    self.terms.hover_since = Some((k.clone(), Instant::now(), a));
+                }
+                (None, _) => self.terms.hover_since = None,
             }
         }
         if response.clicked() {
@@ -1515,6 +1525,8 @@ impl Viewer {
 
         // full-content hover preview (dwell to open; tooltip layer)
         self.hover_preview_ui(ui);
+        // terminal peek: dwell on a compact card shows its full screen
+        self.hover_peek_ui(ui);
 
         // status line
         if self
