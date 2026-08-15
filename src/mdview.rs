@@ -134,6 +134,41 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         }
     }
 
+    // ---- footnote-style citations: [^target] where target is a vault
+    // file (a wiki convention: sources cited by path). The label resolves
+    // by exact path, path + ".md", then bare-name lookup; the link shows
+    // the note's display name. Real footnotes ([^1], and any [^x]:
+    // definition line) stay untouched. ----
+    let mut i = 0;
+    while let Some(found) = body[i..].find("[^") {
+        let start = i + found;
+        let label_start = start + 2;
+        let Some(close) = body[label_start..].find(']') else {
+            break;
+        };
+        let label_end = label_start + close;
+        i = label_end + 1;
+        let label = &body[label_start..label_end];
+        if in_code(start) || label.is_empty() || label.contains('\n') || label.contains('[') {
+            continue;
+        }
+        if body[label_end + 1..].starts_with(':') {
+            continue; // a footnote definition, not a reference
+        }
+        let id = g
+            .by_path(label)
+            .or_else(|| g.by_path(&format!("{label}.md")))
+            .or_else(|| resolve_name(g, label));
+        if let Some(id) = id {
+            let name = g
+                .node(id)
+                .display_name()
+                .replace('[', "\\[")
+                .replace(']', "\\]");
+            reps.push((start..label_end + 1, format!("[^{name}]({})", node_url(id))));
+        }
+    }
+
     // ---- relative destinations in standard markdown links/images ----
     for (event, range) in Parser::new(body).into_offset_iter() {
         let (dest, image) = match &event {

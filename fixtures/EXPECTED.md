@@ -35,6 +35,7 @@ commit.
 | CRLF tolerated | `notes/daily/2026-08-14.md` (both its links must extract) |
 | Unicode filenames | `topics/grafér.md` |
 | External http(s) URLs extracted as metadata, never edges | `projects/ideas.md` carries 2 (md-link + bare URL, trailing `.` trimmed) |
+| Footnote-style citations `[^path]` are display-only (mdview), never edges | index.md cites `[^notes/readme.md]` and `[^readme]`; `[^1]` + its definition stay real footnotes |
 
 ## Expected node counts
 

@@ -25,3 +25,8 @@ This fenced block mentions [[trap-link]] and must NOT create an edge.
 ```
 
 Inline code: `[[inline-trap]]` must not create an edge either.
+
+Source citations, wiki-style: [^notes/readme.md] and by name [^readme].
+A real footnote [^1] stays a footnote.
+
+[^1]: plain footnotes are untouched.

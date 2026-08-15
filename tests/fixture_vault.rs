@@ -181,6 +181,17 @@ fn mdview_prepare_renders_obsidian_flavor() {
     // code traps stay byte-for-byte
     assert!(out.contains("[[trap-link]]"));
     assert!(out.contains("`[[inline-trap]]`"));
+    // footnote-style citations link to the cited note (by path or name),
+    // showing its display name; real footnotes stay untouched
+    let readme = find(&g, "notes/readme.md");
+    let cite = format!("[^{}](tg://{})", g.node(readme).display_name(), readme.0);
+    assert_eq!(
+        out.matches(&cite).count(),
+        2,
+        "both [^notes/readme.md] and [^readme] link: {out}"
+    );
+    assert!(out.contains("[^1] stays a footnote"));
+    assert!(out.contains("[^1]: plain footnotes are untouched."));
 }
 
 #[test]

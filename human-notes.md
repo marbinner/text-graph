@@ -22,6 +22,8 @@
     - default agent.
     - 
 - when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to.
+- make it so I can drag and drop files and paste shit into the gui.
+- make it so the focused pane/terminal is always on top of the non-focused one. Currently other terminals appear on top of the focues one.
 
 # in progress
 - Make the ranger style navigator and file viewer in the side bar prettier. Currently we don't have good icons for files or folders, and also we need to render the markdown files well and take into account obsidian style references to stuff like [[ref]] and also for external links and images. 
