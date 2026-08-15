@@ -80,6 +80,10 @@ pub fn from_text(text: &str) -> ViewState {
                 let fields: Vec<&str> = line.splitn(5, '\t').collect();
                 if let [_, dx, dy, pane, session] = fields[..]
                     && let (Some(dx), Some(dy)) = (num(Some(dx)), num(Some(dy)))
+                    // first occurrence wins: a duplicated line (git merge,
+                    // hand edit) would otherwise ride claim()'s fallback
+                    // pass onto a pane the user never arranged
+                    && !s.cards.iter().any(|c| c.session == session && c.pane == pane)
                 {
                     s.cards.push(CardPos {
                         session: session.to_string(),
@@ -100,7 +104,11 @@ pub fn from_text(text: &str) -> ViewState {
             }
             Some("pin") => {
                 let fields: Vec<&str> = line.splitn(3, '\t').collect();
-                if let [_, pane, session] = fields[..] {
+                if let [_, pane, session] = fields[..]
+                    // dedup like cards: a doubled pin line spontaneously
+                    // pins a second pane of the session via claim()
+                    && !s.pins.iter().any(|(se, p)| se == session && p == pane)
+                {
                     s.pins.push((session.to_string(), pane.to_string()));
                 }
             }
@@ -249,6 +257,23 @@ mod tests {
             vec![("s".to_string(), "%2".to_string())],
             "truncated pin line dropped, valid one kept"
         );
+    }
+
+    /// A duplicated card/pin line (git merge, hand edit) must collapse to
+    /// one on load — the copies fed claim()'s fallback pass, which pinned
+    /// or stacked panes the user never touched, and re-saving perpetuated
+    /// the corruption.
+    #[test]
+    fn duplicate_card_and_pin_lines_collapse_on_load() {
+        let text = "card\t1\t2\t%1\ts\ncard\t9\t9\t%1\ts\ncard\t3\t4\t%2\ts\n\
+                    pin\t%1\ts\npin\t%1\ts\n";
+        let s = from_text(text);
+        assert_eq!(
+            s.cards,
+            vec![card("s", "%1", 1.0, 2.0), card("s", "%2", 3.0, 4.0)],
+            "first occurrence wins; distinct panes all load"
+        );
+        assert_eq!(s.pins, vec![("s".to_string(), "%1".to_string())]);
     }
 
     #[test]
