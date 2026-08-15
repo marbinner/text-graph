@@ -15,19 +15,20 @@
     - each file should have some mandatory metadata like date created, date modified, immutable id.
     - quick description and purpose of this file.
     - tags
-- there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
 - have a menu for settings.
     - light mode vs. dark mode
-    - default agent.
+    - default agent and then when I click the launch agent button without selecting a specific one it launches the default one.
     - 
+- fuzzy search across the entire graph including contents of the text files.
 - when I'm the rangelike navigation and the camera jumps around, please make it so that it doesn't instantly snap, but instead does a quick movement. This will make it easdier to see where we're jumping from and where we're jumping to.
 - make it so I can drag and drop files and paste shit into the gui.
+- there should be a quick option to open a text file in a terminal with my default terminal editor. and then that terminal gets linked to that specific text node.
 
 # in progress
-- make graph edges directed and make folder edges more noticable. The folder structure should be clear glancing at the graph.
 
 
 # done
+- make graph edges directed and make folder edges more noticable. The folder structure should be clear glancing at the graph.
 - make it so the focused pane/terminal is always on top of the non-focused one. Currently other terminals appear on top of the focues one.
 - make it so node icons render on top of edges. Currently the terminal edges going from a folder to a terminal with the dotted eges goes on top of the folder icon which is wrong.
 - external web links

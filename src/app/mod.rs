@@ -1683,6 +1683,9 @@ impl Viewer {
             _ => HashMap::new(),
         };
         for &(id, s, r) in &visible {
+            if active == Some(id) {
+                continue; // painted LAST, on a backdrop — see below
+            }
             let node = self.g.node(id);
             // full strength for the active/partner/search cases; otherwise
             // the LOD ramp and the cursor flashlight compete — whichever
@@ -1731,6 +1734,30 @@ impl Viewer {
                 font,
                 color,
             );
+        }
+
+        // The hovered/selected node's label paints last of all, over a
+        // dark backdrop — whatever the cursor is on must be readable, not
+        // buried in the label soup or under a neighbor's preview box.
+        if let Some(aid) = active
+            && let Some(&(_, s, r)) = visible.iter().find(|(id, ..)| *id == aid)
+        {
+            let node = self.g.node(aid);
+            let font = if node.kind == NodeKind::Dir {
+                FontId::proportional((r * 1.15).clamp(11.5, 16.5))
+            } else {
+                FontId::proportional(11.5)
+            };
+            let anchor = if let Some(b) = self.node_box(aid, s, r) {
+                Pos2::new(b.max.x + 5.0, s.y)
+            } else {
+                s + Vec2::new(r + 5.0, 0.0)
+            };
+            let galley = painter.layout_no_wrap(node.display_name().into(), font, HOVER);
+            let pos = Pos2::new(anchor.x, anchor.y - galley.size().y * 0.5);
+            let back = Rect::from_min_size(pos, galley.size()).expand2(Vec2::new(4.0, 2.0));
+            painter.rect_filled(back, 4.0, BG.gamma_multiply(0.88));
+            painter.galley(pos, galley, HOVER);
         }
 
         // terminal cards, on top of the graph (their tethers fill the
