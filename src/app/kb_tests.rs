@@ -247,6 +247,60 @@ fn f_opens_the_find_prompt_only_in_nav_mode() {
     assert!(h.state().nav_find.is_some(), "f opens find-in-directory");
 }
 
+/// egui widgets read key events without consuming them, so every global
+/// keybind must check `widget_free`. Regression: typing a filename like
+/// "2026-08-10" into the find-in-directory prompt re-fit the camera on
+/// each '0', '/' opened the search bar, 'z' framed, and Esc deselected —
+/// slamming the navigator shut mid-typing.
+#[test]
+fn global_keys_do_not_fire_while_a_text_field_has_focus() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root);
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            // a stand-in for the find prompt: any focused TextEdit
+            ui.text_edit_singleline(&mut v.query).request_focus();
+        },
+        viewer,
+    );
+    h.step();
+    select(&mut h, "index.md");
+    h.state_mut().fitted = true;
+    h.step();
+
+    press(&mut h, Key::Num0);
+    assert!(
+        h.state().fitted,
+        "'0' while typing must not re-fit the camera"
+    );
+    press(&mut h, Key::Slash);
+    assert!(
+        !h.state().search_open,
+        "'/' while typing must not open the search bar"
+    );
+    press(&mut h, Key::Z);
+    assert!(
+        h.state().cam_anim.is_none(),
+        "'z' while typing must not start a camera glide"
+    );
+    // Esc is special: egui surrenders widget focus at frame START on
+    // Escape, so the focus guard alone can't see the prompt — the find
+    // prompt must be its own stage of the dismiss chain
+    h.state_mut().nav_find = Some("2026".into());
+    press(&mut h, Key::Escape);
+    assert!(
+        h.state().nav_find.is_none(),
+        "Esc closes the find prompt first…"
+    );
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("index.md"),
+        "…without deselecting (the navigator must not slam shut)"
+    );
+}
+
 #[test]
 fn search_enter_jumps_to_the_best_node_and_clears_stale_term_cursor() {
     let mut h = harness();

@@ -751,6 +751,14 @@ impl Viewer {
             no_mods && pressed_fresh(ui, Key::E),
             no_mods && pressed_fresh(ui, Key::A),
         );
+        // EVERY graph action below must hold this: egui widgets read input
+        // without consuming it, so keys typed into a focused text field
+        // (the find-in-directory prompt) reach here too. Unguarded branches
+        // re-fit the camera on '0', opened search on '/', and deselected on
+        // Esc — all mid-typing. (The search bar's own branch stays
+        // unguarded on purpose: its Enter/Esc act WHILE its field is
+        // focused.)
+        let widget_free = ui.memory(|m| m.focused().is_none());
         if self.search_open {
             if esc {
                 self.close_search();
@@ -783,16 +791,23 @@ impl Viewer {
                 }
                 self.close_search();
             }
-        } else if open_key {
+        } else if open_key && widget_free {
             self.search_open = true;
             self.search_focus_pending = true;
-        } else if esc {
-            // dismiss order: link cursor, then terminal cursor, then selection
-            if self.conn_cursor.take().is_none() && self.terms.cursor.take().is_none() {
+        } else if esc && widget_free {
+            // dismiss order: find prompt, link cursor, terminal cursor,
+            // then selection. The prompt is a stage of ITS OWN here because
+            // egui surrenders widget focus at frame START on Escape — by
+            // the time we run, the prompt's field already reads unfocused,
+            // so without this stage the same Esc would fall through and
+            // slam the navigator shut mid-typing.
+            if self.nav_find.take().is_some() {
+                self.nav_find_last.clear();
+            } else if self.conn_cursor.take().is_none() && self.terms.cursor.take().is_none() {
                 self.selected = None;
             }
         } else if enter
-            && ui.memory(|m| m.focused().is_none())
+            && widget_free
             && let Some(sel) = self.selected
             && let Some(ci) = self.conn_cursor
         {
@@ -804,7 +819,7 @@ impl Viewer {
             }
             self.conn_cursor = None;
         } else if enter
-            && ui.memory(|m| m.focused().is_none())
+            && widget_free
             && let Some(k) = self.terms.cursor.clone()
         {
             // Enter on the terminal cursor = start typing into it
@@ -813,16 +828,19 @@ impl Viewer {
             // if an egui widget (e.g. the detail pane's button, tab-focused)
             // has focus, Enter already activates it — don't also fire here,
             // or the editor opens twice
-            && ui.memory(|m| m.focused().is_none())
+            && widget_free
             && let Some(sel) = self.selected
         {
             self.open_in_editor(sel);
-        } else if frame_key && let Some(sel) = self.selected {
+        } else if frame_key
+            && widget_free
+            && let Some(sel) = self.selected
+        {
             self.frame_node(sel);
-        } else if reset {
+        } else if reset && widget_free {
             self.fitted = false; // canvas re-fits on the next frame
         } else if edit_key
-            && ui.memory(|m| m.focused().is_none())
+            && widget_free
             && let Some(sel) = self.selected
             && self.editable(sel)
             && self.terms.tmux_ok
@@ -830,7 +848,7 @@ impl Viewer {
             // e = edit the selected text file in a graph terminal card
             let ctx = ui.ctx().clone();
             self.edit_in_graph_terminal(&ctx, sel);
-        } else if web_key && ui.memory(|m| m.focused().is_none()) {
+        } else if web_key && widget_free {
             // toggle web (cited-URL) nodes — the sim keeps simulating them,
             // so this never reflows the layout
             self.show_web = !self.show_web;
@@ -843,7 +861,7 @@ impl Viewer {
                 .into(),
             );
         } else if term_key
-            && ui.memory(|m| m.focused().is_none())
+            && widget_free
             && self.terms.tmux_ok
             && let Some(sel) = self.selected
         {
@@ -851,7 +869,7 @@ impl Viewer {
             let dir = self.node_dir(sel);
             self.new_terminal(&dir);
         } else if agent_key
-            && ui.memory(|m| m.focused().is_none())
+            && widget_free
             && self.terms.tmux_ok
             && let Some(sel) = self.selected
         {
@@ -865,7 +883,7 @@ impl Viewer {
         // Ranger-style tree walk — SELECTION IS THE MODE: with a node
         // selected, hjkl walks the Contains tree (discrete steps, key
         // repeat); with nothing selected they pan. Esc switches back.
-        let tree_nav = self.selected.is_some() && ui.memory(|m| m.focused().is_none());
+        let tree_nav = self.selected.is_some() && widget_free;
         if let Some(sel) = self.selected.filter(|_| tree_nav) {
             let (h, j, k, l, g, sg, find, out_jump, back_jump) = ui.input(|i| {
                 let m = i.modifiers.is_none();
@@ -968,7 +986,7 @@ impl Viewer {
 
         // vim-style camera: hjkl pans (when no node is selected), d/u zooms
         // — continuous while held
-        if ui.memory(|m| m.focused().is_none()) {
+        if widget_free {
             let (dt, h, j, k, l, d, u) = ui.input(|i| {
                 let m = i.modifiers.is_none() && !tree_nav;
                 (
