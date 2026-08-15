@@ -100,7 +100,13 @@ pub fn special_cmd(pane: &str, key: Special, mods: Mods) -> String {
 /// `-d` drops the one-shot buffer after the paste.
 pub fn paste_cmds(pane: &str, text: &str) -> [String; 2] {
     use std::fmt::Write as _;
-    let buf = format!("tg_paste_{}", pane.trim_start_matches('%'));
+    // pid-scoped buffer name: two viewer instances pasting concurrently
+    // must not overwrite each other's buffer between set and paste
+    let buf = format!(
+        "tg_paste_{}_{}",
+        std::process::id(),
+        pane.trim_start_matches('%')
+    );
     let mut data = String::with_capacity(text.len());
     for b in text.bytes() {
         if b.is_ascii_alphanumeric() {
@@ -219,12 +225,13 @@ mod tests {
     #[test]
     fn paste_goes_through_a_tmux_buffer_octal_escaped() {
         let [set, paste] = paste_cmds("%3", "hi\n'\"€");
+        let buf = format!("tg_paste_{}_3", std::process::id());
         // \012 newline, \047 ' , \042 " , \342\202\254 the UTF-8 of €
         assert_eq!(
             set,
-            "set-buffer -b tg_paste_3 \"hi\\012\\047\\042\\342\\202\\254\""
+            format!("set-buffer -b {buf} \"hi\\012\\047\\042\\342\\202\\254\"")
         );
-        assert_eq!(paste, "paste-buffer -dp -b tg_paste_3 -t %3");
+        assert_eq!(paste, format!("paste-buffer -dp -b {buf} -t %3"));
     }
 
     #[test]
