@@ -317,6 +317,35 @@ MCP stays deferred to Phase 2 as a thin adapter over the same files. No
 sockets, no daemons: message latency is dominated by agent thinking time,
 and every layer stays inspectable as plain files.
 
+**G — external web links as nodes (planned 2026-08-15).** URLs cited in
+notes become first-class leaf nodes, modeled on ghosts: no tree parent,
+seeded near the first referencer, identity = the normalized URL (can never
+collide with a path — paths don't contain `://`). Deduplication is the
+point: one node per URL however many notes cite it, so shared sources
+become visible bridges between notes that never wikilink each other (and
+the raw-note convention composes: analysis → citation → raw note →
+external edge → source). Decisions made: per-URL granularity (not
+per-domain — presentation carries the domain story: small nodes, globe
+glyph, host-only labels, full URL in popup/status); `LinkKind::External`
+edges drawn fainter than wikilinks; mild deterministic normalization
+(lowercase host, strip fragment + utm_*/fbclid/gclid, trailing slash;
+KEEP other query params); on by default with a `w` toggle persisted in
+view state — hidden means skipped at render/hit-test only, the sim keeps
+simulating so toggling never reflows; click selects (navigator: URL +
+open-in-browser + citers via backlinks), Enter/double-click opens the
+browser. NO network in v1 (no favicons, no fetched titles — offline and
+deterministic); those are a later opt-in.
+
+1. **G1 — normalization.** `weburl::normalize` (pure, tested);
+   extraction keeps offsets.
+2. **G2 — data model.** `NodeKind::Web` + `LinkKind::External`;
+   resolution creates deduped web nodes + edges (encounter order, like
+   ghosts); `Node.externals` metadata dissolves into real edges; sim
+   seeding/charge/springs; stats; fixture re-count; minimal disc render.
+3. **G3 — presentation.** Globe glyph into the font subset; edge style;
+   navigator/hover arms; open-in-browser; host labels.
+4. **G4 — the `w` toggle**, persisted; kb test.
+
 ---
 
 ## Phase 2: the intelligence layer
