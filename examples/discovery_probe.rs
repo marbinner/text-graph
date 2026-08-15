@@ -5,7 +5,13 @@ fn main() {
     let vault = std::path::PathBuf::from(std::env::args().nth(1).expect("vault path"));
     let allow = text_graph::agents::default_allowlist();
     let mut tr = text_graph::agents::Tracker::new();
-    let panes = text_graph::agents::scan(&vault);
+    let panes = match text_graph::agents::scan(&vault) {
+        Ok(p) => p,
+        Err(e) => {
+            println!("scan FAILED (server present but list-panes errored): {e}");
+            return;
+        }
+    };
     println!("scan: {} panes with cwd in vault", panes.len());
     for p in &panes {
         println!(
