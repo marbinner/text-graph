@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use eframe::egui::Key;
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 use text_graph::{graph, vault};
 
 use super::Viewer;
@@ -41,6 +42,66 @@ fn select(h: &mut Harness<'_, Viewer>, path: &str) {
 fn press(h: &mut Harness<'_, Viewer>, key: Key) {
     h.key_press(key);
     h.step();
+}
+
+#[test]
+fn hover_dwell_renders_a_popup_with_the_file_body() {
+    use std::time::{Duration, Instant};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root);
+    let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.hover_preview_ui(ui), viewer);
+    let id = h.state().g.by_path("index.md").expect("index exists");
+    let since = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    h.state_mut().hover_since = Some((id, since, eframe::egui::Pos2::new(80.0, 80.0)));
+    h.step();
+    h.step();
+    // the popup carries the display name and the rendered body; index.md's
+    // body contains "Heading One"
+    assert!(
+        h.query_by_label("Index").is_some(),
+        "popup title label missing — hover preview did not render"
+    );
+    assert!(
+        h.query_by_label_contains("Heading One").is_some(),
+        "popup body missing — file content did not render"
+    );
+}
+
+#[test]
+fn structure_identical_reload_keeps_sim_still_and_dwell_alive() {
+    use std::time::Instant;
+    let mut h = harness();
+    for _ in 0..10_000 {
+        if !h.state().sim.active() {
+            break;
+        }
+        h.state_mut().sim.tick(16);
+    }
+    assert!(!h.state().sim.active(), "sim must settle");
+    let id = h.state().g.by_path("index.md").expect("index exists");
+    h.state_mut().hover_since = Some((id, Instant::now(), eframe::egui::Pos2::new(5.0, 5.0)));
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let rebuilt = graph::build(vault::scan(&root).expect("rescan"));
+    h.state_mut().apply_graph(rebuilt);
+    assert!(
+        !h.state().sim.active(),
+        "an agent saving text (no structural change) must not set the graph in motion"
+    );
+    assert_eq!(
+        h.state().hover_since.map(|(i, ..)| i),
+        Some(id),
+        "the hover dwell survives a reload (remapped by ident)"
+    );
+
+    // a structural change (different links) still reheats
+    let mut changed = graph::build(vault::scan(&root).expect("rescan"));
+    changed.links.pop();
+    h.state_mut().apply_graph(changed);
+    assert!(h.state().sim.active(), "structural reloads still re-settle");
 }
 
 #[test]

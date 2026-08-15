@@ -1107,6 +1107,7 @@ impl Viewer {
         if let Some(id) = self.drag_node {
             self.hover = Some(id);
         } else {
+            let prev = self.hover;
             self.hover = None;
             if over_card.is_none()
                 && let Some(cursor) = response.hover_pos()
@@ -1117,11 +1118,14 @@ impl Viewer {
                     // an expanded node (thumbnail / preview card) is wider
                     // than its nominal radius — hover anywhere on it, not a
                     // circle around its center (the mismatch made hover
-                    // flicker at the corners of wide boxes)
+                    // flicker at the corners of wide boxes). The previously
+                    // hovered node gets hysteresis slack: while the sim
+                    // drifts (settling, reload ripples) a node must not
+                    // escape the stationary cursor mid-dwell.
                     let hit = if let Some(bx) = self.node_box(id, s, r) {
                         bx.expand(4.0).contains(cursor)
                     } else {
-                        d < r + 4.0
+                        d < r + 4.0 || (prev == Some(id) && d < r + 16.0)
                     };
                     if hit && d < best {
                         best = d;

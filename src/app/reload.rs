@@ -38,21 +38,45 @@ impl Viewer {
         self.last_reload = Some(Instant::now());
         self.reload_error = None;
 
-        let old_pos: HashMap<String, (f32, f32)> = self
-            .g
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.ident(), (self.sim.x[i], self.sim.y[i])))
-            .collect();
-        let mut sim = Sim::new(&g);
-        for (i, node) in g.nodes.iter().enumerate() {
-            if let Some(&(x, y)) = old_pos.get(&node.ident()) {
-                sim.x[i] = x;
-                sim.y[i] = y;
+        // A reload that changes no node identities and no link endpoints
+        // (an agent streaming text into existing notes — the common case)
+        // keeps the CURRENT sim untouched: zero motion. Reheating on every
+        // save kept the graph in near-constant drift under busy agents,
+        // which made node hover (and its dwell popup) impossible to land.
+        let same_structure = self.g.nodes.len() == g.nodes.len()
+            && self
+                .g
+                .nodes
+                .iter()
+                .zip(&g.nodes)
+                .all(|(a, b)| a.ident() == b.ident())
+            && self.g.links.len() == g.links.len()
+            && self
+                .g
+                .links
+                .iter()
+                .zip(&g.links)
+                .all(|(a, b)| (a.from, a.to) == (b.from, b.to));
+        let sim = if same_structure {
+            None
+        } else {
+            let old_pos: HashMap<String, (f32, f32)> = self
+                .g
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.ident(), (self.sim.x[i], self.sim.y[i])))
+                .collect();
+            let mut sim = Sim::new(&g);
+            for (i, node) in g.nodes.iter().enumerate() {
+                if let Some(&(x, y)) = old_pos.get(&node.ident()) {
+                    sim.x[i] = x;
+                    sim.y[i] = y;
+                }
             }
-        }
-        sim.calm();
+            sim.calm();
+            Some(sim)
+        };
 
         let by_ident: HashMap<String, NodeId> = g
             .nodes
@@ -71,9 +95,18 @@ impl Viewer {
         self.ctx_node = self
             .ctx_node
             .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
-        self.hover = None;
-        self.hover_since = None; // NodeIds remap across reloads
-        self.hover_body = None;
+        // hover and its dwell REMAP like the selection — clearing them made
+        // the preview popup unlandable under busy agents (a reload every
+        // few seconds reset the dwell forever)
+        self.hover = self
+            .hover
+            .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
+        self.hover_since = self.hover_since.take().and_then(|(id, t, a)| {
+            by_ident
+                .get(&self.g.node(id).ident())
+                .map(|&nid| (nid, t, a))
+        });
+        self.hover_body = None; // body may have changed on disk — re-read
         self.conn_cursor = None; // indexes the old graph's link lists
         self.best = None;
 
@@ -102,7 +135,9 @@ impl Viewer {
         self.thumbs.retain_fresh(&self.root);
         self.previews.retain_fresh(&self.root);
         self.g = g;
-        self.sim = sim;
+        if let Some(sim) = sim {
+            self.sim = sim;
+        }
 
         // a note we just created: select and frame it the moment it lands
         if let Some(p) = self.pending_select.clone()
