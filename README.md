@@ -6,7 +6,7 @@ as-is) and get an Obsidian-style force-directed graph you can drive
 entirely from the keyboard, ranger-style. Terminal agents (claude, codex,
 pi, …) running in the vault appear as **live, typeable terminal cards**
 tethered to the folder they work in: watch them stream, jump in to type,
-and watch the graph ripple as they write notes. One static Rust binary —
+and watch the graph ripple as they write notes. One native Rust binary —
 no Electron, no webview, no runtime.
 
 ```

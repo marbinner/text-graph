@@ -20,4 +20,14 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: cargo fmt -- --check
       - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      # --all-targets compiles benches/examples too, not just lib+bins+tests
+      - run: cargo test --all-targets
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # RustSec advisory check over Cargo.lock; fails on known-vulnerable deps
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
