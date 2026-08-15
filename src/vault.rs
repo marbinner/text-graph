@@ -22,6 +22,9 @@ pub struct RawFile {
     pub aliases: Vec<String>,
     /// Extracted wikilink targets, in document order.
     pub links: Vec<RawLink>,
+    /// External http(s) URLs found in the body, deduplicated, in document
+    /// order. Metadata (hover popups), not edges.
+    pub externals: Vec<String>,
     /// Non-fatal parse problem (e.g. invalid frontmatter YAML).
     pub warning: Option<String>,
 }
@@ -189,11 +192,13 @@ fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
 
     let (fm, body, warning) = split_frontmatter(text);
     let links = extract_links(body);
+    let externals = extract_externals(body);
     RawFile {
         rel_path,
         title: fm.title,
         aliases: fm.aliases,
         links,
+        externals,
         warning,
     }
 }
@@ -330,6 +335,46 @@ fn excluded_ranges(body: &str) -> Vec<Range<usize>> {
 /// Scan `body` for `[[...]]` wikilinks. `![[embeds]]` and links inside
 /// excluded ranges are dropped. Alias (`|`) and heading/block (`#`) suffixes
 /// are stripped from the returned target.
+/// Extract external http(s) URLs from a body — markdown link targets,
+/// autolinks, and bare URLs alike — skipping code (fenced and inline).
+/// Deduplicated, document order. Metadata for popups, never edges.
+pub fn extract_externals(body: &str) -> Vec<String> {
+    let excluded = excluded_ranges(body);
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(found) = body[i..].find("http") {
+        let start = i + found;
+        let rest = &body[start..];
+        let scheme_len = if rest.starts_with("https://") {
+            8
+        } else if rest.starts_with("http://") {
+            7
+        } else {
+            i = start + 4;
+            continue;
+        };
+        // URL runs until a delimiter that can't be part of it in markdown
+        let end = rest
+            .char_indices()
+            .find(|(j, ch)| {
+                *j >= scheme_len
+                    && (ch.is_whitespace()
+                        || matches!(ch, ')' | ']' | '>' | '"' | '\'' | '`' | '|'))
+            })
+            .map_or(rest.len(), |(j, _)| j);
+        i = start + end;
+        if excluded.iter().any(|r| r.contains(&start)) {
+            continue;
+        }
+        // trailing sentence punctuation is prose, not URL
+        let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if url.len() > scheme_len && !out.iter().any(|u| u == url) {
+            out.push(url.to_string());
+        }
+    }
+    out
+}
+
 pub fn extract_links(body: &str) -> Vec<RawLink> {
     let excluded = excluded_ranges(body);
     let bytes = body.as_bytes();
@@ -411,6 +456,31 @@ mod tests {
 
     fn targets(body: &str) -> Vec<String> {
         extract_links(body).into_iter().map(|l| l.target).collect()
+    }
+
+    #[test]
+    fn externals_from_md_links_autolinks_and_bare_urls() {
+        let body = "see [docs](https://docs.rs/tmux) or <https://example.com/a>\n\
+                    bare https://foo.bar/baz. and dup https://docs.rs/tmux\n\
+                    ```\nhttps://in-code.example\n```\n\
+                    not a url: httpx://nope http alone";
+        assert_eq!(
+            extract_externals(body),
+            [
+                "https://docs.rs/tmux",
+                "https://example.com/a",
+                "https://foo.bar/baz"
+            ]
+        );
+        assert!(extract_externals("no links here").is_empty());
+        assert!(
+            extract_externals("`https://inline.example`").is_empty(),
+            "inline code is excluded"
+        );
+        assert!(
+            extract_externals("https://").is_empty(),
+            "a bare scheme is not a URL"
+        );
     }
 
     #[test]

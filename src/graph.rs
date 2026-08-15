@@ -35,6 +35,9 @@ pub struct Node {
     pub title: Option<String>,
     /// `aliases:` from frontmatter, files only — alternate link names.
     pub aliases: Vec<String>,
+    /// External http(s) URLs in the body, files only — popup metadata,
+    /// never edges.
+    pub externals: Vec<String>,
     /// Contains-parent. None for the root and for ghosts.
     pub parent: Option<NodeId>,
     /// Sorted: dirs first, then by name.
@@ -80,6 +83,19 @@ pub struct Link {
     /// frontmatter stripped), not the raw file. Duplicate occurrences are
     /// deduplicated; the first wins.
     pub offset: usize,
+}
+
+/// Recursive per-kind totals for a subtree — see [`Graph::subtree_stats`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SubtreeStats {
+    pub files: usize,
+    pub dirs: usize,
+    pub images: usize,
+    pub assets: usize,
+    /// Wikilinks going OUT of the subtree's files (any target).
+    pub wiki_out: usize,
+    /// External URLs in the subtree's files.
+    pub external_out: usize,
 }
 
 /// A basename link that matched several files; resolution picked the first
@@ -218,6 +234,30 @@ impl Graph {
         self.ident_index.get(ident).copied()
     }
 
+    /// Recursive counts for the subtree UNDER `id` (`id` itself excluded):
+    /// per-kind leaf/dir totals plus outgoing links from contained files.
+    /// Needs `finish_indexes`. Powers the folder hover popup.
+    pub fn subtree_stats(&self, id: NodeId) -> SubtreeStats {
+        let mut s = SubtreeStats::default();
+        let mut stack: Vec<NodeId> = self.node(id).children.clone();
+        while let Some(n) = stack.pop() {
+            let node = self.node(n);
+            match node.kind {
+                NodeKind::Dir => s.dirs += 1,
+                NodeKind::File => {
+                    s.files += 1;
+                    s.wiki_out += self.links_out[n.0 as usize].len();
+                    s.external_out += node.externals.len();
+                }
+                NodeKind::Image => s.images += 1,
+                NodeKind::Asset => s.assets += 1,
+                NodeKind::Ghost => {}
+            }
+            stack.extend(node.children.iter().copied());
+        }
+        s
+    }
+
     /// Build the adjacency and ident indexes. Called once at the end of
     /// `build`, after resolution has added ghosts and links.
     pub(crate) fn finish_indexes(&mut self) {
@@ -256,6 +296,7 @@ pub fn build(scan: VaultScan) -> Graph {
         name: root_name,
         title: None,
         aliases: Vec::new(),
+        externals: Vec::new(),
         parent: None,
         children: Vec::new(),
     });
@@ -292,6 +333,7 @@ pub fn build(scan: VaultScan) -> Graph {
                     name: file_stem(&rel),
                     title: file.title,
                     aliases: file.aliases,
+                    externals: file.externals,
                     parent: Some(parent),
                     children: Vec::new(),
                 });
@@ -317,6 +359,7 @@ pub fn build(scan: VaultScan) -> Graph {
                     name,
                     title: None,
                     aliases: Vec::new(),
+                    externals: Vec::new(),
                     parent: Some(parent),
                     children: Vec::new(),
                 })
@@ -353,6 +396,7 @@ fn ensure_dirs(g: &mut Graph, dir_ids: &mut HashMap<String, NodeId>, rel_path: &
                     name: comp.to_string(),
                     title: None,
                     aliases: Vec::new(),
+                    externals: Vec::new(),
                     parent: Some(parent),
                     children: Vec::new(),
                 });
@@ -399,6 +443,7 @@ mod tests {
             name: path.to_string(),
             title: None,
             aliases: Vec::new(),
+            externals: Vec::new(),
             parent: None,
             children: Vec::new(),
         }

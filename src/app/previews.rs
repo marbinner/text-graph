@@ -130,8 +130,60 @@ impl Viewer {
                     ui.set_max_width(POPUP_W);
                     let node = self.g.node(id);
                     let (name, path) = (node.display_name().to_string(), node.path.clone());
+                    let externals = node.externals.clone();
                     ui.label(egui::RichText::new(name).strong());
                     ui.label(egui::RichText::new(&path).small().color(TEXT));
+                    // ---- metadata: times, size, reference counts ----
+                    if matches!(kind, NodeKind::File | NodeKind::Asset | NodeKind::Image)
+                        && let Ok(meta) = std::fs::metadata(self.root.join(&path))
+                    {
+                        let mut bits: Vec<String> = Vec::new();
+                        if let Ok(m) = meta.modified() {
+                            bits.push(format!("edited {}", ago(m)));
+                        }
+                        if let Ok(c) = meta.created() {
+                            bits.push(format!("created {}", ago(c)));
+                        }
+                        bits.push(human_size(meta.len()));
+                        ui.label(egui::RichText::new(bits.join(" · ")).small().color(TEXT));
+                    }
+                    match kind {
+                        NodeKind::File => {
+                            let out = self.g.outlinks(id).count();
+                            let inn = self.g.backlinks(id).count();
+                            let mut line = format!("links: {out} out · {inn} in");
+                            if !externals.is_empty() {
+                                line.push_str(&format!(" · {} external", externals.len()));
+                            }
+                            ui.label(egui::RichText::new(line).small().color(TEXT));
+                            for url in externals.iter().take(6) {
+                                ui.label(
+                                    egui::RichText::new(format!("↗ {url}")).small().color(WIKI),
+                                );
+                            }
+                            if externals.len() > 6 {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "… and {} more",
+                                        externals.len() - 6
+                                    ))
+                                    .small()
+                                    .weak(),
+                                );
+                            }
+                        }
+                        NodeKind::Asset | NodeKind::Image => {
+                            let inn = self.g.backlinks(id).count();
+                            if inn > 0 {
+                                ui.label(
+                                    egui::RichText::new(format!("links: {inn} in"))
+                                        .small()
+                                        .color(TEXT),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
                     ui.separator();
                     match kind {
                         NodeKind::File | NodeKind::Asset => {
@@ -160,6 +212,15 @@ impl Viewer {
                             // body can be borrowed simultaneously
                             let hb = self.hover_body.take();
                             if let Some((_, body)) = &hb {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} lines · {} words",
+                                        body.lines().count(),
+                                        body.split_whitespace().count()
+                                    ))
+                                    .small()
+                                    .weak(),
+                                );
                                 egui::ScrollArea::vertical()
                                     .id_salt("hover-preview-scroll")
                                     .max_height(POPUP_MAX_H)
@@ -209,9 +270,32 @@ impl Viewer {
                         }
                         NodeKind::Dir => {
                             let children = self.g.node(id).children.clone();
-                            ui.label(
-                                egui::RichText::new(format!("{} entries", children.len())).weak(),
-                            );
+                            let direct_dirs = children
+                                .iter()
+                                .filter(|c| self.g.node(**c).kind == NodeKind::Dir)
+                                .count();
+                            let s = self.g.subtree_stats(id);
+                            let small = |t: String| egui::RichText::new(t).small().color(TEXT);
+                            ui.label(small(format!(
+                                "direct: {} entries ({} folders)",
+                                children.len(),
+                                direct_dirs
+                            )));
+                            let mut rec = format!("recursive: {} files", s.files);
+                            if s.images > 0 {
+                                rec.push_str(&format!(" · {} images", s.images));
+                            }
+                            if s.assets > 0 {
+                                rec.push_str(&format!(" · {} assets", s.assets));
+                            }
+                            if s.dirs > 0 {
+                                rec.push_str(&format!(" · {} folders", s.dirs));
+                            }
+                            ui.label(small(rec));
+                            ui.label(small(format!(
+                                "links from its files: {} wiki · {} external",
+                                s.wiki_out, s.external_out
+                            )));
                             ui.add_space(2.0);
                             for c in children.iter().take(LIST_CAP) {
                                 let child = self.g.node(*c);
@@ -271,6 +355,30 @@ impl Viewer {
     }
 }
 
+/// Compact relative timestamp for popup metadata ("3h ago"). Clock skew or
+/// future mtimes degrade to "just now".
+fn ago(t: std::time::SystemTime) -> String {
+    let secs = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    match secs {
+        0..=59 => "just now".into(),
+        60..=3_599 => format!("{}m ago", secs / 60),
+        3_600..=86_399 => format!("{}h ago", secs / 3_600),
+        86_400..=2_591_999 => format!("{}d ago", secs / 86_400),
+        2_592_000..=31_535_999 => format!("{}mo ago", secs / 2_592_000),
+        _ => format!("{}y ago", secs / 31_536_000),
+    }
+}
+
+fn human_size(b: u64) -> String {
+    if b < 1024 {
+        format!("{b} B")
+    } else if b < 1024 * 1024 {
+        format!("{:.1} KB", b as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", b as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// First lines of a body, bounded in both lines and bytes, cut on a char
 /// boundary.
 fn excerpt(body: &str) -> String {
@@ -309,6 +417,23 @@ mod tests {
             popup_pivot(Pos2::new(900.0, 700.0), screen),
             Align2::RIGHT_BOTTOM
         );
+    }
+
+    #[test]
+    fn ago_buckets_and_human_sizes() {
+        use std::time::{Duration, SystemTime};
+        let at = |secs: u64| SystemTime::now() - Duration::from_secs(secs);
+        assert_eq!(ago(at(5)), "just now");
+        assert_eq!(ago(at(90)), "1m ago");
+        assert_eq!(ago(at(7_200)), "2h ago");
+        assert_eq!(ago(at(200_000)), "2d ago");
+        assert_eq!(ago(at(6_000_000)), "2mo ago");
+        assert_eq!(ago(at(40_000_000)), "1y ago");
+        assert_eq!(ago(SystemTime::now() + Duration::from_secs(60)), "just now");
+
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(2_048), "2.0 KB");
+        assert_eq!(human_size(5_242_880), "5.0 MB");
     }
 
     #[test]

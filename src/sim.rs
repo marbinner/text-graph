@@ -219,6 +219,7 @@ mod tests {
             name: name.into(),
             title: None,
             aliases: Vec::new(),
+            externals: Vec::new(),
             parent,
             children,
         };

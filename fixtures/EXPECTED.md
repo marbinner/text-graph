@@ -34,6 +34,7 @@ commit.
 | UTF-8 BOM tolerated | `bom.md` (BOM must not corrupt frontmatter detection or first link) |
 | CRLF tolerated | `notes/daily/2026-08-14.md` (both its links must extract) |
 | Unicode filenames | `topics/grafér.md` |
+| External http(s) URLs extracted as metadata, never edges | `projects/ideas.md` carries 2 (md-link + bare URL, trailing `.` trimmed) |
 
 ## Expected node counts
 
@@ -81,6 +82,8 @@ the image); 2 ghost edges.
 - Depth histogram — dirs: d0×1 (root), d1×6, d2×1 (daily);
   files: d1×4, d2×7, d3×2; images: d2×1 (assets/diagram.png);
   assets: d2×1 (misc/data.csv)
+- External URLs: **2**, both in projects/ideas.md
+  (`https://docs.rs/notify`, `https://example.com/spec`)
 
 ## Stress vault
 

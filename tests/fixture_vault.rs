@@ -149,6 +149,33 @@ fn traps_embeds_and_skip_dirs_leave_no_trace() {
     );
 }
 
+#[test]
+fn external_urls_are_metadata_and_subtree_stats_add_up() {
+    let g = build_fixture();
+    let ideas = find(&g, "projects/ideas.md");
+    assert_eq!(
+        g.node(ideas).externals,
+        ["https://docs.rs/notify", "https://example.com/spec"],
+        "md-link and bare URL extracted, trailing period trimmed"
+    );
+    // externals are never edges: ideas.md still has exactly its ghost link
+    assert_eq!(g.outlinks(ideas).count(), 1);
+
+    // the whole vault under the root
+    let s = g.subtree_stats(g.root);
+    assert_eq!(
+        (s.files, s.dirs, s.images, s.assets),
+        (13, 7, 1, 1),
+        "recursive counts exclude the root itself"
+    );
+    assert_eq!(s.wiki_out, 19, "all wikilink edges originate in files");
+    assert_eq!(s.external_out, 2);
+
+    // a leaf dir
+    let misc = g.subtree_stats(find(&g, "misc"));
+    assert_eq!((misc.files, misc.assets, misc.wiki_out), (0, 1, 0));
+}
+
 /// Every other file type is an Asset node (with its dir chain), addressable
 /// like an image — by full filename.
 #[test]

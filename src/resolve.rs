@@ -113,6 +113,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                             name: target.clone(),
                             title: None,
                             aliases: Vec::new(),
+                            externals: Vec::new(),
                             parent: None,
                             children: Vec::new(),
                         })
@@ -225,6 +226,7 @@ mod tests {
             name: name.into(),
             title: None,
             aliases: Vec::new(),
+            externals: Vec::new(),
             parent,
             children: Vec::new(),
         };
@@ -271,6 +273,7 @@ mod tests {
             name: name.into(),
             title: None,
             aliases,
+            externals: Vec::new(),
             parent,
             children: Vec::new(),
         };
