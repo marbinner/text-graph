@@ -116,6 +116,18 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         .git_exclude(false)
         .parents(false)
         .follow_links(false)
+        // prune SKIPPED_DIRS at the walk itself: descending into a code
+        // vault's target/ or node_modules/ stat'd tens of thousands of
+        // files per reload just to discard them one by one (and surfaced
+        // walk errors for unreadable dirs nobody cares about). depth 0 is
+        // the root — a vault literally named "target" must still open.
+        .filter_entry(|e| {
+            !(e.depth() > 0
+                && e.file_type().is_some_and(|t| t.is_dir())
+                && e.file_name()
+                    .to_str()
+                    .is_some_and(|n| SKIPPED_DIRS.contains(&n)))
+        })
         .build();
     for entry in walker {
         let entry = match entry {
@@ -457,6 +469,38 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walker must PRUNE skipped dirs, not filter their files after
+    /// the fact — proven by an unreadable child inside target/: descent
+    /// would surface a "(walk)" permission error, pruning surfaces
+    /// nothing. (Skips quietly as root, where nothing is unreadable.)
+    #[test]
+    fn skipped_dirs_are_never_descended() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d = std::env::temp_dir().join(format!("tg-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("target/locked")).unwrap();
+        std::fs::write(d.join("target/build.log"), "x").unwrap();
+        std::fs::write(d.join("a.md"), "x").unwrap();
+        std::fs::set_permissions(
+            d.join("target/locked"),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        let scan = scan(&d).unwrap();
+        let _ = std::fs::set_permissions(
+            d.join("target/locked"),
+            std::fs::Permissions::from_mode(0o755),
+        );
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(
+            scan.errors.is_empty(),
+            "a walk error from inside target/ proves descent: {:?}",
+            scan.errors.first().map(|e| &e.message)
+        );
+        assert!(scan.assets.is_empty(), "target/ contents never surface");
+        assert_eq!(scan.files.len(), 1);
+    }
 
     /// Walk errors must come out sorted — readdir order is not stable
     /// across filesystems/runs, and errors print verbatim in stats and the
