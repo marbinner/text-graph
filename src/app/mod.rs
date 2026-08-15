@@ -929,8 +929,12 @@ impl Viewer {
                 } else {
                     match self.g.node(sel).kind {
                         NodeKind::Dir => to = self.g.nav_enter(sel),
-                        // key repeat must not spawn an editor per repeat tick
-                        NodeKind::File | NodeKind::Image | NodeKind::Web
+                        // every leaf kind opens — the navigator's Asset pane
+                        // advertises "open (Enter / l)", so l must match
+                        // Enter's open_in_editor behavior (text Assets edit,
+                        // binary ones xdg-open). key repeat must not spawn
+                        // an editor per repeat tick
+                        NodeKind::File | NodeKind::Image | NodeKind::Web | NodeKind::Asset
                             if !ui.input(|i| {
                                 i.events.iter().any(|e| {
                                     matches!(
