@@ -53,8 +53,12 @@
   — without that, the world slides out from under the cursor and
   double-clicks miss. Don't reintroduce the slide.
 - Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
-  `create`, `state`, `graph`, `filetype`, …) must stay egui-free
-  (headless-testable).
+  `create`, `state`, `graph`, `filetype`, `mdview`, …) must stay egui-free
+  (headless-testable). `mdview::prepare` rewrites note bodies for display
+  ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs);
+  the navigator intercepts `tg://` OpenUrl commands and jumps instead of
+  opening a browser — keep that interception, or wikilink clicks leak to
+  the OS.
   Only the bin's `app/` tree touches egui. Its layout: `mod.rs` = Viewer +
   camera/canvas painting + key dispatch + search; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/

@@ -319,7 +319,7 @@ fn frontmatter_span(text: &str) -> Option<(&str, &str)> {
 /// Scanning the raw body and *excluding* these ranges avoids the alternative
 /// of reassembling fragmented `Text` events (pulldown-cmark splits text at
 /// `[` boundaries).
-fn excluded_ranges(body: &str) -> Vec<Range<usize>> {
+pub(crate) fn excluded_ranges(body: &str) -> Vec<Range<usize>> {
     let mut ranges: Vec<Range<usize>> = Vec::new();
     for (event, range) in Parser::new(body).into_offset_iter() {
         match event {

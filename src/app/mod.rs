@@ -36,7 +36,7 @@ use text_graph::graph::{Graph, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
-use text_graph::{create, filetype, graph, state, vault};
+use text_graph::{create, filetype, graph, mdview, state, vault};
 
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);
@@ -254,6 +254,9 @@ pub fn run(path: &Path) -> ExitCode {
         // here. Closing the window still quits.
         cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
         install_icon_font(&cc.egui_ctx);
+        // file:// + image-decode loaders — markdown previews render
+        // embedded pictures through these
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         let mut viewer = viewer;
         viewer.start_watcher(cc.egui_ctx.clone());
         viewer.start_agent_scan(cc.egui_ctx.clone());

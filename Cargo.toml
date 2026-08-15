@@ -18,6 +18,12 @@ eframe = { version = "0.36", default-features = false, features = [
     "x11",
 ] }
 egui_commonmark = "0.25"
+# just the image loaders (file:// + decode via the image crate below), so
+# markdown previews can render embedded pictures
+egui_extras = { version = "0.36", default-features = false, features = [
+    "file",
+    "image",
+] }
 ignore = "0.4"
 # decoders only for the formats the scanner accepts as Image nodes — the
 # default feature set drags in AVIF/rayon/etc.

@@ -13,6 +13,7 @@ impl Viewer {
         let node = self.g.node(id);
         match node.kind {
             NodeKind::File => vault::read_body(&self.root.join(&node.path))
+                .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
                 .unwrap_or_else(|e| format!("*error reading file:* {e}")),
             NodeKind::Asset if filetype::is_text(&node.path) => {
                 vault::read_head(&self.root.join(&node.path), Self::ASSET_DETAIL_CAP)
@@ -210,7 +211,11 @@ impl Viewer {
                                     .id_salt("nav-preview")
                                     .auto_shrink([false, false])
                                     .show(ui, |ui| {
-                                        CommonMarkViewer::new().show(ui, &mut self.md_cache, body);
+                                        CommonMarkViewer::new().max_image_width(Some(400)).show(
+                                            ui,
+                                            &mut self.md_cache,
+                                            body,
+                                        );
                                     });
                             }
                             self.detail = detail;
@@ -396,6 +401,23 @@ impl Viewer {
                 });
         }
         self.nav_scroll = false;
+        // Clicked [[wikilinks]] in the rendered markdown arrive as OpenUrl
+        // commands on our tg:// scheme — claim them here (so the browser
+        // never sees them) and jump to the node instead. External links
+        // pass through untouched and open normally.
+        ui.ctx().output_mut(|o| {
+            o.commands.retain(|c| {
+                if let egui::OutputCommand::OpenUrl(u) = c
+                    && let Some(idx) = mdview::parse_url(&u.url)
+                {
+                    if (idx as usize) < self.g.nodes.len() {
+                        jump = Some(NodeId(idx));
+                    }
+                    return false; // stale ids (pre-reload) are dropped too
+                }
+                true
+            })
+        });
         if let Some(j) = jump {
             self.selected = Some(j);
             self.frame_node(j);

@@ -149,6 +149,40 @@ fn traps_embeds_and_skip_dirs_leave_no_trace() {
     );
 }
 
+/// The markdown-preview preprocessing: wikilinks become tg:// links using
+/// the graph's own resolution, image embeds become file:// images, note
+/// embeds degrade, relative md links map to nodes, code stays untouched.
+#[test]
+fn mdview_prepare_renders_obsidian_flavor() {
+    let g = build_fixture();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let idx = find(&g, "index.md");
+    let body = vault::read_body(&root.join("index.md")).unwrap();
+    let out = text_graph::mdview::prepare(&g, &root, idx, &body);
+
+    let tg = |p: &str| format!("(tg://{})", find(&g, p).0);
+    assert!(out.contains(&format!(
+        "[projects/rust-app]{}",
+        tg("projects/rust-app.md")
+    )));
+    assert!(out.contains(&format!("[Readme]{}", tg("notes/readme.md"))));
+    // a plain wikilink to an image links to its Image node
+    assert!(out.contains(&format!("[diagram.png]{}", tg("assets/diagram.png"))));
+    // a ghost target links to the ghost node
+    let ghost = g.by_ident("[[missing-note]]").expect("ghost");
+    assert!(out.contains(&format!("[missing-note](tg://{})", ghost.0)));
+    // the image embed becomes an inline file:// image
+    assert!(out.contains("![](<file://"), "embed rewritten: {out}");
+    assert!(out.contains("assets/diagram.png>)"));
+    // an embed of a nonexistent note stays literal
+    assert!(out.contains("![[embedded-note-trap]]"));
+    // a relative markdown link to a vault note becomes a node link
+    assert!(out.contains(&format!("[ideas]{}", tg("projects/ideas.md"))));
+    // code traps stay byte-for-byte
+    assert!(out.contains("[[trap-link]]"));
+    assert!(out.contains("`[[inline-trap]]`"));
+}
+
 #[test]
 fn external_urls_are_metadata_and_subtree_stats_add_up() {
     let g = build_fixture();

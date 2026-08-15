@@ -208,6 +208,7 @@ impl Viewer {
                                         .unwrap_or_else(|e| format!("error reading file: {e}"))
                                 } else {
                                     vault::read_body(&self.root.join(&path))
+                                        .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
                                         .unwrap_or_else(|e| format!("*error reading file:* {e}"))
                                 };
                                 self.hover_body = Some((id, body));
@@ -239,11 +240,9 @@ impl Viewer {
                                                 .wrap(),
                                             );
                                         } else {
-                                            CommonMarkViewer::new().show(
-                                                ui,
-                                                &mut self.md_cache,
-                                                body,
-                                            );
+                                            CommonMarkViewer::new()
+                                                .max_image_width(Some(POPUP_W as usize - 30))
+                                                .show(ui, &mut self.md_cache, body);
                                         }
                                     });
                             }

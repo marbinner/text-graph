@@ -15,6 +15,7 @@ pub mod filetype;
 pub mod graph;
 pub mod keys;
 pub mod layout;
+pub mod mdview;
 pub mod mirror;
 pub mod resolve;
 pub mod sim;

@@ -112,7 +112,12 @@ the agent until `Ctrl+Q`.
 Click any node (or search into one) to open the navigator pane:
 breadcrumb, sibling column with the cursor, preview (rendered markdown
 for notes, raw text for code/config assets, the picture for images, the
-listing for folders), and the color-coded connections strip.
+listing for folders), and the color-coded connections strip — every row
+led by its file-type icon. Note previews render **Obsidian-flavored**:
+`[[wikilinks]]` are real links that jump to their node (ghosts included),
+`![[image embeds]]` and relative image paths render inline, relative
+markdown links to vault files jump too, and external links open your
+browser.
 
 | Input | Action |
 |---|---|
@@ -275,6 +280,7 @@ or too spread for your vault, those are the dials.
 src/
   vault.rs    walk + frontmatter/wikilink/URL extraction (per-file, no global state)
   filetype.rs extension classification: textual? which icon glyph and color?
+  mdview.rs   Obsidian-flavor markdown rewrite ([[links]] → tg://, embeds → file://)
   resolve.rs  Obsidian-style link resolution (stems → aliases → ghosts)
   create.rs   new note/folder: path validation + create-only fs writes
   graph.rs    arena: typed nodes, Contains tree, overlay links

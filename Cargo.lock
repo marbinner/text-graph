@@ -3165,6 +3165,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "egui_commonmark",
+ "egui_extras",
  "egui_kittest",
  "ignore",
  "image",
