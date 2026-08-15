@@ -132,7 +132,14 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         let span_start = if embed { start - 1 } else { start };
         let target = strip_target(inner);
         if embed {
-            match resolve_name(g, target) {
+            // a path-qualified embed resolves by PATH first —
+            // ![[b/cover.png]] must not grab a/cover.png just because
+            // its leaf name matches earlier in sorted order
+            let resolved = g
+                .by_path(target)
+                .or_else(|| g.by_path(&format!("{target}.md")))
+                .or_else(|| resolve_name(g, target));
+            match resolved {
                 Some(id) if matches!(g.node(id).kind, NodeKind::Image) => {
                     reps.push((
                         span_start..inner_end + 2,
@@ -161,6 +168,16 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
     // by exact path, path + ".md", then bare-name lookup; the link shows
     // the note's display name. Real footnotes ([^1], and any [^x]:
     // definition line) stay untouched. ----
+    // A label with a `[^label]:` definition anywhere in the body is a real
+    // footnote, never a citation — even when a vault file shares the name.
+    let footnote_defs: std::collections::HashSet<&str> = body
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim_start().strip_prefix("[^")?;
+            let end = rest.find("]:")?;
+            Some(&rest[..end])
+        })
+        .collect();
     let mut i = 0;
     while let Some(found) = body[i..].find("[^") {
         let start = i + found;
@@ -176,6 +193,9 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         }
         if body[label_end + 1..].starts_with(':') {
             continue; // a footnote definition, not a reference
+        }
+        if footnote_defs.contains(label) {
+            continue; // a reference to a real footnote — leave it alone
         }
         let id = g
             .by_path(label)
@@ -274,6 +294,42 @@ mod tests {
         assert_eq!(strip_target("a/b#h|shown"), "a/b");
         assert_eq!(display_text("a/b#h|shown"), "shown");
         assert_eq!(display_text("a/b#h"), "a/b#h");
+    }
+
+    /// `![[b/cover.png]]` must embed b's cover even when a/cover.png
+    /// sorts first (path beats leaf lookup), and `[^n]` with a real
+    /// `[^n]:` definition must stay a footnote even when n.md exists.
+    #[test]
+    fn embeds_prefer_exact_paths_and_defined_footnotes_stay_footnotes() {
+        let d = std::env::temp_dir().join(format!("tg-mdview-embed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for dir in ["a", "b"] {
+            std::fs::create_dir_all(d.join(dir)).unwrap();
+            std::fs::write(d.join(dir).join("cover.png"), "x").unwrap();
+        }
+        std::fs::write(d.join("n.md"), "x").unwrap();
+        std::fs::write(d.join("note.md"), "x").unwrap();
+        let g = crate::graph::build(vault::scan(&d).unwrap());
+        let src = g.by_path("note.md").unwrap();
+        let n = g.by_path("n.md").unwrap();
+
+        assert_eq!(
+            prepare(&g, &d, src, "![[b/cover.png]]"),
+            format!("![]({})", file_url(&d, "b/cover.png")),
+            "the qualified path wins over sorted-leaf order"
+        );
+        let real = "See [^n].\n\n[^n]: an actual footnote";
+        assert_eq!(
+            prepare(&g, &d, src, real),
+            real,
+            "a defined footnote is never hijacked as a citation"
+        );
+        assert_eq!(
+            prepare(&g, &d, src, "See [^n]."),
+            format!("See [^{}]({}).", g.node(n).display_name(), node_url(n)),
+            "without a definition the label still cites the note"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Standard markdown resolves relative to the FILE: docs/source.md
