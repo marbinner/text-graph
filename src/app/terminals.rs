@@ -677,7 +677,27 @@ impl Viewer {
         let title_h = 16.0;
         let pad = 6.0;
 
-        for (i, a) in self.terms.panes.iter().enumerate() {
+        // Paint order IS stacking order (and hit-testing follows it via
+        // terms.rects, which picks the last rect under the cursor): plain
+        // cards first, then pinned, then the cursor card, with the FOCUSED
+        // card painted last — the one being typed into can never be buried
+        // under a neighbor. Stable sort keeps pane order within each tier.
+        let mut order: Vec<usize> = (0..self.terms.panes.len()).collect();
+        order.sort_by_key(|&i| {
+            let a = &self.terms.panes[i];
+            let key = (a.session.clone(), a.pane.clone());
+            if self.terms.focused.as_ref() == Some(&key) {
+                3
+            } else if self.terms.cursor.as_ref() == Some(&key) {
+                2
+            } else if self.terms.pinned.contains_key(&key) {
+                1
+            } else {
+                0
+            }
+        });
+        for i in order {
+            let a = &self.terms.panes[i];
             let key = (a.session.clone(), a.pane.clone());
             let Some(c) = self.terms.cache.get(&key) else {
                 continue;
