@@ -84,6 +84,38 @@ fn icon_font(size: f32) -> FontId {
     FontId::new(size, egui::FontFamily::Name("icons".into()))
 }
 
+/// A file-type glyph followed by text as one galley — for list rows
+/// (selectable labels, links) where the icon must ride along with the text
+/// through egui's normal widgets.
+fn icon_label(
+    glyph: char,
+    glyph_color: Color32,
+    text: &str,
+    text_color: Color32,
+    size: f32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &glyph.to_string(),
+        0.0,
+        egui::TextFormat {
+            font_id: icon_font(size),
+            color: glyph_color,
+            ..Default::default()
+        },
+    );
+    job.append(
+        text,
+        6.0,
+        egui::TextFormat {
+            font_id: FontId::proportional(size),
+            color: text_color,
+            ..Default::default()
+        },
+    );
+    job
+}
+
 /// A file-type glyph centered on the node, over a canvas-colored backing
 /// disc — edges crossing behind a thin glyph would shred it, and the old
 /// solid discs occluded them the same way.
@@ -859,6 +891,23 @@ impl Viewer {
         let ur = self.radius[id.0 as usize] * self.zoom;
         let size = Vec2::new((ur * 5.2).min(280.0), (ur * 6.0).min(320.0));
         Rect::from_center_size(s, size)
+    }
+
+    /// The glyph + color a node shows in lists (navigator, popups).
+    fn node_icon(&self, id: NodeId) -> (char, Color32) {
+        let node = self.g.node(id);
+        let icon = match node.kind {
+            NodeKind::Dir => filetype::ICON_FOLDER,
+            NodeKind::Image => filetype::ICON_IMAGE,
+            NodeKind::Ghost => {
+                return ('\u{f016}', GHOST); // an unwritten page
+            }
+            _ => filetype::icon_of(&node.path),
+        };
+        (
+            icon.glyph,
+            Color32::from_rgb(icon.color.0, icon.color.1, icon.color.2),
+        )
     }
 
     /// Can this node open into a text-preview card? Markdown always;

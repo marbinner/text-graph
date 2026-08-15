@@ -114,7 +114,14 @@ impl Viewer {
                 }
                 ui.label(egui::RichText::new("/").weak());
             }
-            ui.label(egui::RichText::new(&display).strong());
+            let (glyph, color) = self.node_icon(sel);
+            ui.label(icon_label(
+                glyph,
+                color,
+                &display,
+                ui.visuals().strong_text_color(),
+                14.0,
+            ));
         });
         ui.label(egui::RichText::new(sub.as_str()).small().color(TEXT));
         ui.separator();
@@ -167,11 +174,16 @@ impl Viewer {
                                 } else {
                                     n.display_name().to_string()
                                 };
-                                let mut text = egui::RichText::new(label);
-                                if is_dir {
-                                    text = text.color(DIR);
-                                }
-                                let resp = ui.selectable_label(*c == sel, text);
+                                let (glyph, color) = self.node_icon(*c);
+                                let text_color = if is_dir {
+                                    DIR
+                                } else {
+                                    ui.visuals().text_color()
+                                };
+                                let resp = ui.selectable_label(
+                                    *c == sel,
+                                    icon_label(glyph, color, &label, text_color, 12.5),
+                                );
                                 if *c == sel && self.nav_scroll {
                                     resp.scroll_to_me(Some(egui::Align::Center));
                                 }
@@ -213,15 +225,20 @@ impl Viewer {
                                     ui.add_space(4.0);
                                     for c in children {
                                         let child = self.g.node(c);
-                                        let icon = if child.kind == NodeKind::Dir {
-                                            "▸ "
+                                        let label = if child.kind == NodeKind::Dir {
+                                            format!("{}/", child.display_name())
                                         } else {
-                                            "· "
+                                            child.display_name().to_string()
                                         };
-                                        if ui
-                                            .link(format!("{icon}{}", child.display_name()))
-                                            .clicked()
-                                        {
+                                        let (glyph, color) = self.node_icon(c);
+                                        let job = icon_label(
+                                            glyph,
+                                            color,
+                                            &label,
+                                            ui.visuals().text_color(),
+                                            12.5,
+                                        );
+                                        if ui.link(job).clicked() {
                                             jump = Some(c);
                                         }
                                     }
@@ -317,21 +334,42 @@ impl Viewer {
         // purple ← incoming link). Clickable; ] / [ walk the highlight,
         // Enter / l follows it. Entry order MUST match connections().
         if has_conn {
-            let mut entries: Vec<(NodeId, egui::Color32, String)> = Vec::new();
+            let plain = |text: String, color: egui::Color32| {
+                let mut job = egui::text::LayoutJob::default();
+                job.append(
+                    &text,
+                    0.0,
+                    egui::TextFormat {
+                        font_id: FontId::proportional(11.0),
+                        color,
+                        ..Default::default()
+                    },
+                );
+                job
+            };
+            let mut entries: Vec<(NodeId, egui::text::LayoutJob)> = Vec::new();
             for id in kids {
                 let n = self.g.node(id);
-                match n.kind {
-                    NodeKind::Dir => entries.push((id, DIR, format!("▸ {}/", n.display_name()))),
-                    NodeKind::Image => entries.push((id, IMG, format!("▸ {}", n.display_name()))),
-                    NodeKind::Asset => entries.push((id, ASSET, format!("▸ {}", n.display_name()))),
-                    _ => entries.push((id, FILE, format!("▸ {}", n.display_name()))),
-                }
+                let label = if n.kind == NodeKind::Dir {
+                    format!("{}/", n.display_name())
+                } else {
+                    n.display_name().to_string()
+                };
+                let (glyph, color) = self.node_icon(id);
+                let text_color = if n.kind == NodeKind::Dir { DIR } else { FILE };
+                entries.push((id, icon_label(glyph, color, &label, text_color, 11.0)));
             }
             for id in outs {
-                entries.push((id, WIKI, format!("→ {}", self.g.node(id).display_name())));
+                entries.push((
+                    id,
+                    plain(format!("→ {}", self.g.node(id).display_name()), WIKI),
+                ));
             }
             for id in backs {
-                entries.push((id, LINK_IN, format!("← {}", self.g.node(id).display_name())));
+                entries.push((
+                    id,
+                    plain(format!("← {}", self.g.node(id).display_name()), LINK_IN),
+                ));
             }
             if self.conn_cursor.is_some_and(|i| i >= entries.len()) {
                 self.conn_cursor = None; // list changed under the cursor
@@ -344,12 +382,9 @@ impl Viewer {
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
-                        for (idx, (id, color, label)) in entries.iter().enumerate() {
+                        for (idx, (id, job)) in entries.iter().enumerate() {
                             let is_cur = self.conn_cursor == Some(idx);
-                            let resp = ui.selectable_label(
-                                is_cur,
-                                egui::RichText::new(label).color(*color).small(),
-                            );
+                            let resp = ui.selectable_label(is_cur, job.clone());
                             if is_cur && self.nav_scroll {
                                 resp.scroll_to_me(Some(egui::Align::Center));
                             }
