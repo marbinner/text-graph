@@ -34,7 +34,7 @@ commit.
 | UTF-8 BOM tolerated | `bom.md` (BOM must not corrupt frontmatter detection or first link) |
 | CRLF tolerated | `notes/daily/2026-08-14.md` (both its links must extract) |
 | Unicode filenames | `topics/grafér.md` |
-| External http(s) URLs extracted as metadata, never edges | `projects/ideas.md` carries 2 (md-link + bare URL, trailing `.` trimmed) |
+| External http(s) URLs become Web nodes + External edges (identity = normalized URL) | `projects/ideas.md` cites 2 (md-link + bare URL, trailing `.` trimmed) |
 | Footnote-style citations `[^path]` are display-only (mdview), never edges | index.md cites `[^notes/readme.md]` and `[^readme]`; `[^1]` + its definition stay real footnotes |
 
 ## Expected node counts
@@ -45,8 +45,9 @@ commit.
 | Dir | 8 | vault root, assets, misc, projects, notes, notes/daily, topics, languages |
 | Image | 1 | assets/diagram.png |
 | Asset | 1 | misc/data.csv |
+| Web | 2 | `https://docs.rs/notify`, `https://example.com/spec` (no tree parent, like ghosts) |
 | Ghost | 2 | `missing-note`, `nonexistent/deep/ghost` |
-| **Total** | **25** | |
+| **Total** | **27** | |
 
 ## Expected edge counts
 
@@ -54,6 +55,7 @@ commit.
 |---|---|---|
 | Contains | 22 | 13 files + 7 non-root dirs + 1 image + 1 asset, one parent each |
 | WikiLink | 19 | 16 resolved to Files + 1 to Images + 2 to Ghosts |
+| External | 2 | ideas.md → its two Web nodes |
 
 ### WikiLink edges by source
 
@@ -83,8 +85,9 @@ the image); 2 ghost edges.
 - Depth histogram — dirs: d0×1 (root), d1×6, d2×1 (daily);
   files: d1×4, d2×7, d3×2; images: d2×1 (assets/diagram.png);
   assets: d2×1 (misc/data.csv)
-- External URLs: **2**, both in projects/ideas.md
-  (`https://docs.rs/notify`, `https://example.com/spec`)
+- External edges: **2**, both from projects/ideas.md
+  (`https://docs.rs/notify`, `https://example.com/spec` — already in
+  canonical form, so normalization is a no-op here)
 
 ## Stress vault
 

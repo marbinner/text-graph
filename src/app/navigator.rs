@@ -320,6 +320,20 @@ impl Viewer {
                                 );
                             }
                         }
+                        NodeKind::Web => {
+                            if ui.button("open in browser  (Enter / l)").clicked() {
+                                self.open_in_editor(sel);
+                            }
+                            ui.add_space(4.0);
+                            ui.label("Cited from:");
+                            ui.add_space(2.0);
+                            let refs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
+                            for r in refs {
+                                if ui.link(self.g.node(r).path.clone()).clicked() {
+                                    jump = Some(r);
+                                }
+                            }
+                        }
                         NodeKind::Ghost => {
                             ui.label("Not written yet. Referenced from:");
                             ui.add_space(4.0);

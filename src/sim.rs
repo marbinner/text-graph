@@ -24,6 +24,10 @@ const LEN_WIKI: f32 = 120.0;
 const CHARGE_FILE: f32 = 1500.0;
 const CHARGE_DIR: f32 = 1500.0;
 const CHARGE_GHOST: f32 = 800.0;
+const CHARGE_WEB: f32 = 600.0;
+/// External (note → URL) springs are shorter than wikilinks — citations
+/// hug their citers.
+const LEN_EXTERNAL: f32 = 90.0;
 
 pub struct Sim {
     pub x: Vec<f32>,
@@ -50,10 +54,10 @@ impl Sim {
                 y[i] = p.y;
             }
         }
-        // Ghosts have no tree position: seed near their first referencer, at
-        // a deterministic golden-angle offset per node index.
+        // Ghosts and web nodes have no tree position: seed near their first
+        // referencer, at a deterministic golden-angle offset per node index.
         for (i, node) in g.nodes.iter().enumerate() {
-            if node.kind != NodeKind::Ghost {
+            if !matches!(node.kind, NodeKind::Ghost | NodeKind::Web) {
                 continue;
             }
             let src = g
@@ -79,7 +83,11 @@ impl Sim {
             }
         }
         for l in &g.links {
-            springs.push((l.from.0, l.to.0, LEN_WIKI));
+            let len = match l.kind {
+                crate::graph::LinkKind::WikiLink => LEN_WIKI,
+                crate::graph::LinkKind::External => LEN_EXTERNAL,
+            };
+            springs.push((l.from.0, l.to.0, len));
         }
 
         let charge = g
@@ -89,6 +97,7 @@ impl Sim {
                 NodeKind::Dir => CHARGE_DIR,
                 NodeKind::File | NodeKind::Image | NodeKind::Asset => CHARGE_FILE,
                 NodeKind::Ghost => CHARGE_GHOST,
+                NodeKind::Web => CHARGE_WEB,
             })
             .collect();
 
@@ -219,7 +228,6 @@ mod tests {
             name: name.into(),
             title: None,
             aliases: Vec::new(),
-            externals: Vec::new(),
             parent,
             children,
         };

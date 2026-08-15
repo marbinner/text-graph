@@ -12,12 +12,14 @@ pub struct Stats {
     pub dirs: usize,
     pub images: usize,
     pub assets: usize,
+    pub webs: usize,
     pub ghosts: usize,
     pub contains_edges: usize,
     pub wiki_to_files: usize,
     pub wiki_to_images: usize,
     pub wiki_to_assets: usize,
     pub wiki_to_ghosts: usize,
+    pub external_edges: usize,
     pub warnings: usize,
     pub errors: usize,
     pub ambiguous: usize,
@@ -33,12 +35,14 @@ pub fn compute(g: &Graph) -> Stats {
         dirs: 0,
         images: 0,
         assets: 0,
+        webs: 0,
         ghosts: 0,
         contains_edges: 0,
         wiki_to_files: 0,
         wiki_to_images: 0,
         wiki_to_assets: 0,
         wiki_to_ghosts: 0,
+        external_edges: 0,
         warnings: g.warnings.len(),
         errors: g.errors.len(),
         ambiguous: g.ambiguities.len(),
@@ -51,12 +55,13 @@ pub fn compute(g: &Graph) -> Stats {
             NodeKind::Dir => s.dirs += 1,
             NodeKind::Image => s.images += 1,
             NodeKind::Asset => s.assets += 1,
+            NodeKind::Web => s.webs += 1,
             NodeKind::Ghost => s.ghosts += 1,
         }
         if node.parent.is_some() {
             s.contains_edges += 1;
         }
-        if node.kind != NodeKind::Ghost {
+        if !matches!(node.kind, NodeKind::Ghost | NodeKind::Web) {
             let d = g.depth(NodeId(idx as u32));
             let e = s.depth_hist.entry(d).or_default();
             match node.kind {
@@ -64,7 +69,7 @@ pub fn compute(g: &Graph) -> Stats {
                 NodeKind::File => e.1 += 1,
                 NodeKind::Image => e.2 += 1,
                 NodeKind::Asset => e.3 += 1,
-                NodeKind::Ghost => {}
+                NodeKind::Ghost | NodeKind::Web => {}
             }
         }
     }
@@ -74,6 +79,7 @@ pub fn compute(g: &Graph) -> Stats {
             (LinkKind::WikiLink, NodeKind::Image) => s.wiki_to_images += 1,
             (LinkKind::WikiLink, NodeKind::Asset) => s.wiki_to_assets += 1,
             (LinkKind::WikiLink, _) => s.wiki_to_files += 1,
+            (LinkKind::External, _) => s.external_edges += 1,
         }
     }
     s
@@ -95,10 +101,15 @@ pub fn render(g: &Graph, s: &Stats) -> String {
     } else {
         String::new()
     };
+    let web_nodes = if s.webs > 0 {
+        format!(" + {} web{}", s.webs, plural(s.webs))
+    } else {
+        String::new()
+    };
     let _ = writeln!(
         w,
-        "nodes: {} total = {} files + {} dirs{img_nodes}{asset_nodes} + {} ghosts",
-        s.files + s.dirs + s.images + s.assets + s.ghosts,
+        "nodes: {} total = {} files + {} dirs{img_nodes}{asset_nodes}{web_nodes} + {} ghosts",
+        s.files + s.dirs + s.images + s.assets + s.webs + s.ghosts,
         s.files,
         s.dirs,
         s.ghosts
@@ -115,11 +126,16 @@ pub fn render(g: &Graph, s: &Stats) -> String {
     };
     let _ = writeln!(
         w,
-        "edges: {} contains, {} wikilinks ({} -> files, {img_wiki}{asset_wiki}{} -> ghosts)",
+        "edges: {} contains, {} wikilinks ({} -> files, {img_wiki}{asset_wiki}{} -> ghosts){}",
         s.contains_edges,
         s.wiki_to_files + s.wiki_to_images + s.wiki_to_assets + s.wiki_to_ghosts,
         s.wiki_to_files,
-        s.wiki_to_ghosts
+        s.wiki_to_ghosts,
+        if s.external_edges > 0 {
+            format!(", {} external", s.external_edges)
+        } else {
+            String::new()
+        }
     );
 
     let depth_line: Vec<String> = s

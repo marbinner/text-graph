@@ -134,7 +134,12 @@ impl Viewer {
                     ui.set_max_width(POPUP_W);
                     let node = self.g.node(id);
                     let (name, path) = (node.display_name().to_string(), node.path.clone());
-                    let externals = node.externals.clone();
+                    let externals: Vec<String> = self
+                        .g
+                        .outlinks(id)
+                        .filter(|l| l.kind == LinkKind::External)
+                        .map(|l| self.g.node(l.to).path.clone())
+                        .collect();
                     ui.label(egui::RichText::new(name).strong());
                     ui.label(egui::RichText::new(&path).small().color(TEXT));
                     // ---- metadata: times, size, reference counts ----
@@ -153,7 +158,11 @@ impl Viewer {
                     }
                     match kind {
                         NodeKind::File => {
-                            let out = self.g.outlinks(id).count();
+                            let out = self
+                                .g
+                                .outlinks(id)
+                                .filter(|l| l.kind == LinkKind::WikiLink)
+                                .count();
                             let inn = self.g.backlinks(id).count();
                             let mut line = format!("links: {out} out · {inn} in");
                             if !externals.is_empty() {
@@ -324,6 +333,27 @@ impl Viewer {
                                     egui::RichText::new(format!(
                                         "… and {} more",
                                         children.len() - LIST_CAP
+                                    ))
+                                    .weak(),
+                                );
+                            }
+                        }
+                        NodeKind::Web => {
+                            ui.label(egui::RichText::new("cited from:").weak());
+                            ui.add_space(2.0);
+                            let refs: Vec<String> = self
+                                .g
+                                .backlinks(id)
+                                .map(|l| self.g.node(l.from).path.clone())
+                                .collect();
+                            for r in refs.iter().take(LIST_CAP) {
+                                ui.label(r.as_str());
+                            }
+                            if refs.len() > LIST_CAP {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "… and {} more",
+                                        refs.len() - LIST_CAP
                                     ))
                                     .weak(),
                                 );

@@ -317,6 +317,8 @@ impl Viewer {
             NodeKind::Dir | NodeKind::Image | NodeKind::Asset => {
                 detached(std::process::Command::new("xdg-open").arg(&path))
             }
+            // a web node's path IS its URL — the browser is its editor
+            NodeKind::Web => detached(std::process::Command::new("xdg-open").arg(&node.path)),
             NodeKind::Ghost => return,
         };
         if let Err(e) = result {

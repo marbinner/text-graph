@@ -36,8 +36,10 @@ fn expected_counts() {
     assert_eq!(s.dirs, 8, "dir nodes (misc appears via its csv asset)");
     assert_eq!(s.images, 1, "image nodes");
     assert_eq!(s.assets, 1, "asset nodes (misc/data.csv)");
+    assert_eq!(s.webs, 2, "web nodes (ideas.md's two URLs)");
     assert_eq!(s.ghosts, 2, "ghost nodes");
     assert_eq!(s.contains_edges, 22);
+    assert_eq!(s.external_edges, 2);
     assert_eq!(s.wiki_to_files, 16);
     assert_eq!(s.wiki_to_images, 1, "[[diagram.png]] in index.md");
     assert_eq!(s.wiki_to_ghosts, 2);
@@ -195,16 +197,29 @@ fn mdview_prepare_renders_obsidian_flavor() {
 }
 
 #[test]
-fn external_urls_are_metadata_and_subtree_stats_add_up() {
+fn external_urls_become_web_nodes_and_subtree_stats_add_up() {
     let g = build_fixture();
     let ideas = find(&g, "projects/ideas.md");
+    let cited: Vec<&str> = g
+        .outlinks(ideas)
+        .filter(|l| l.kind == LinkKind::External)
+        .map(|l| g.node(l.to).path.as_str())
+        .collect();
     assert_eq!(
-        g.node(ideas).externals,
+        cited,
         ["https://docs.rs/notify", "https://example.com/spec"],
-        "md-link and bare URL extracted, trailing period trimmed"
+        "md-link and bare URL become Web nodes (already-canonical forms)"
     );
-    // externals are never edges: ideas.md still has exactly its ghost link
-    assert_eq!(g.outlinks(ideas).count(), 1);
+    for l in g.outlinks(ideas).filter(|l| l.kind == LinkKind::External) {
+        assert_eq!(g.node(l.to).kind, NodeKind::Web);
+        assert!(
+            g.node(l.to).parent.is_none(),
+            "web nodes sit outside the tree"
+        );
+    }
+    assert_eq!(g.node(find(&g, "https://docs.rs/notify")).name, "docs.rs");
+    // 1 wikilink (the ghost) + 2 external
+    assert_eq!(g.outlinks(ideas).count(), 3);
 
     // the whole vault under the root
     let s = g.subtree_stats(g.root);
@@ -290,7 +305,9 @@ fn radial_layout_places_every_tree_node_and_no_ghosts() {
     let pos = text_graph::layout::radial(&g);
     for (i, node) in g.nodes.iter().enumerate() {
         match node.kind {
-            NodeKind::Ghost => assert!(pos[i].is_none(), "ghost placed: {}", node.path),
+            NodeKind::Ghost | NodeKind::Web => {
+                assert!(pos[i].is_none(), "non-tree node placed: {}", node.path)
+            }
             _ => {
                 let p = pos[i].unwrap_or_else(|| panic!("unplaced node: {}", node.path));
                 assert!(
@@ -336,8 +353,8 @@ fn stats_render_snapshot() {
     let text = stats::render(&g, &s);
     let expected = "\
 vault: vault
-nodes: 25 total = 13 files + 8 dirs + 1 image + 1 asset + 2 ghosts
-edges: 22 contains, 19 wikilinks (16 -> files, 1 -> images, 2 -> ghosts)
+nodes: 27 total = 13 files + 8 dirs + 1 image + 1 asset + 2 webs + 2 ghosts
+edges: 22 contains, 19 wikilinks (16 -> files, 1 -> images, 2 -> ghosts), 2 external
 depth: d0: 1 dir | d1: 6 dirs + 4 files | d2: 1 dir + 7 files + 1 image + 1 asset | d3: 2 files
 largest dirs (direct md files):
     4  <root>

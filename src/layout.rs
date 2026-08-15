@@ -91,7 +91,6 @@ mod tests {
             name: "r".into(),
             title: None,
             aliases: Vec::new(),
-            externals: Vec::new(),
             parent: None,
             children: vec![NodeId(1), NodeId(2)],
         });
@@ -102,7 +101,6 @@ mod tests {
                 name: (*n).into(),
                 title: None,
                 aliases: Vec::new(),
-                externals: Vec::new(),
                 parent: Some(NodeId(0)),
                 children: Vec::new(),
             });

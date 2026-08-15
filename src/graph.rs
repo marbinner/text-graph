@@ -21,6 +21,10 @@ pub enum NodeKind {
     Asset,
     /// A wikilink target that doesn't exist (yet).
     Ghost,
+    /// An external URL cited by notes — a leaf outside the tree, like
+    /// Ghost. `path` is the normalized URL (its identity — `://` can never
+    /// appear in a file path), `name` the host label.
+    Web,
 }
 
 #[derive(Debug)]
@@ -35,10 +39,7 @@ pub struct Node {
     pub title: Option<String>,
     /// `aliases:` from frontmatter, files only — alternate link names.
     pub aliases: Vec<String>,
-    /// External http(s) URLs in the body, files only — popup metadata,
-    /// never edges.
-    pub externals: Vec<String>,
-    /// Contains-parent. None for the root and for ghosts.
+    /// Contains-parent. None for the root, ghosts, and web nodes.
     pub parent: Option<NodeId>,
     /// Sorted: dirs first, then by name.
     pub children: Vec<NodeId>,
@@ -70,6 +71,9 @@ impl Node {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LinkKind {
     WikiLink,
+    /// Note → Web node (a cited URL). Context, not structure — drawn
+    /// fainter, hidden by the web toggle.
+    External,
     // later: MdLink, Tag, Embed, FrontmatterParent
 }
 
@@ -94,7 +98,7 @@ pub struct SubtreeStats {
     pub assets: usize,
     /// Wikilinks going OUT of the subtree's files (any target).
     pub wiki_out: usize,
-    /// External URLs in the subtree's files.
+    /// External edges (cited URLs) out of the subtree's files.
     pub external_out: usize,
 }
 
@@ -246,12 +250,16 @@ impl Graph {
                 NodeKind::Dir => s.dirs += 1,
                 NodeKind::File => {
                     s.files += 1;
-                    s.wiki_out += self.links_out[n.0 as usize].len();
-                    s.external_out += node.externals.len();
+                    for l in &self.links_out[n.0 as usize] {
+                        match self.links[*l as usize].kind {
+                            LinkKind::WikiLink => s.wiki_out += 1,
+                            LinkKind::External => s.external_out += 1,
+                        }
+                    }
                 }
                 NodeKind::Image => s.images += 1,
                 NodeKind::Asset => s.assets += 1,
-                NodeKind::Ghost => {}
+                NodeKind::Ghost | NodeKind::Web => {}
             }
             stack.extend(node.children.iter().copied());
         }
@@ -296,7 +304,6 @@ pub fn build(scan: VaultScan) -> Graph {
         name: root_name,
         title: None,
         aliases: Vec::new(),
-        externals: Vec::new(),
         parent: None,
         children: Vec::new(),
     });
@@ -305,6 +312,7 @@ pub fn build(scan: VaultScan) -> Graph {
     // directories with no such descendants are pruned for free.
     let mut dir_ids: HashMap<String, NodeId> = HashMap::from([(String::new(), g.root)]);
     let mut file_links: Vec<(NodeId, Vec<RawLink>)> = Vec::new();
+    let mut file_externals: Vec<(NodeId, Vec<vault::RawExternal>)> = Vec::new();
 
     // Merge notes, images, and assets in sorted rel_path order, so NodeId
     // order keeps meaning "sorted path order" across every leaf —
@@ -333,7 +341,6 @@ pub fn build(scan: VaultScan) -> Graph {
                     name: file_stem(&rel),
                     title: file.title,
                     aliases: file.aliases,
-                    externals: file.externals.into_iter().map(|e| e.url).collect(),
                     parent: Some(parent),
                     children: Vec::new(),
                 });
@@ -341,6 +348,7 @@ pub fn build(scan: VaultScan) -> Graph {
                     g.warnings.push((rel, w));
                 }
                 file_links.push((id, file.links));
+                file_externals.push((id, file.externals));
                 id
             }
             Leaf::Image | Leaf::Asset => {
@@ -359,7 +367,6 @@ pub fn build(scan: VaultScan) -> Graph {
                     name,
                     title: None,
                     aliases: Vec::new(),
-                    externals: Vec::new(),
                     parent: Some(parent),
                     children: Vec::new(),
                 })
@@ -370,6 +377,7 @@ pub fn build(scan: VaultScan) -> Graph {
 
     sort_children(&mut g);
     resolve::resolve(&mut g, &file_links);
+    resolve::resolve_externals(&mut g, &file_externals);
     g.finish_indexes();
     g
 }
@@ -396,7 +404,6 @@ fn ensure_dirs(g: &mut Graph, dir_ids: &mut HashMap<String, NodeId>, rel_path: &
                     name: comp.to_string(),
                     title: None,
                     aliases: Vec::new(),
-                    externals: Vec::new(),
                     parent: Some(parent),
                     children: Vec::new(),
                 });
@@ -443,7 +450,6 @@ mod tests {
             name: path.to_string(),
             title: None,
             aliases: Vec::new(),
-            externals: Vec::new(),
             parent: None,
             children: Vec::new(),
         }

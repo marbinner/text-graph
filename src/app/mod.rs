@@ -32,7 +32,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use text_graph::agents::{self, AgentPane};
-use text_graph::graph::{Graph, NodeId, NodeKind};
+use text_graph::graph::{Graph, LinkKind, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
@@ -47,6 +47,8 @@ const FILE: Color32 = Color32::from_rgb(0xb8, 0xbc, 0xc8);
 /// notes, which stay the brightest thing on the canvas.
 const ASSET: Color32 = Color32::from_rgb(0x8b, 0x92, 0x9f);
 const GHOST: Color32 = Color32::from_rgb(0x6b, 0x72, 0x82);
+/// External web nodes and their edges — cyan says "leaves the vault".
+const WEB: Color32 = Color32::from_rgb(0x56, 0xb6, 0xc2);
 const IMG: Color32 = Color32::from_rgb(0x9e, 0xce, 0x6a);
 const HOVER: Color32 = Color32::from_rgb(0xff, 0xb4, 0x54);
 const SELECT: Color32 = Color32::from_rgb(0xff, 0x8a, 0x3d);
@@ -389,6 +391,7 @@ impl Viewer {
                     NodeKind::File => 3.5,
                     NodeKind::Asset => 3.0,
                     NodeKind::Ghost => 3.0,
+                    NodeKind::Web => 2.6,
                 };
                 (base + (*d as f32).sqrt() * 1.3f32).min(18.0)
             })
@@ -668,7 +671,7 @@ impl Viewer {
                     match self.g.node(sel).kind {
                         NodeKind::Dir => to = self.g.nav_enter(sel),
                         // key repeat must not spawn an editor per repeat tick
-                        NodeKind::File | NodeKind::Image
+                        NodeKind::File | NodeKind::Image | NodeKind::Web
                             if !ui.input(|i| {
                                 i.events.iter().any(|e| {
                                     matches!(
@@ -904,6 +907,9 @@ impl Viewer {
             NodeKind::Image => filetype::ICON_IMAGE,
             NodeKind::Ghost => {
                 return ('\u{f016}', GHOST); // an unwritten page
+            }
+            NodeKind::Web => {
+                return ('\u{f016}', WEB); // placeholder until the globe glyph (G3)
             }
             _ => filetype::icon_of(&node.path),
         };
@@ -1337,12 +1343,18 @@ impl Viewer {
             }
             let bright = active == Some(l.from) || active == Some(l.to);
             let on = lit[l.from.0 as usize] && lit[l.to.0 as usize];
+            // external (citation) edges: cyan and fainter — context, not
+            // structure
+            let (hue, rest_a) = match l.kind {
+                LinkKind::WikiLink => (WIKI, 0.35),
+                LinkKind::External => (WEB, 0.22),
+            };
             let (color, width) = if bright {
-                (WIKI, 1.8)
+                (hue, 1.8)
             } else if on {
-                (WIKI.gamma_multiply(0.35), 1.0)
+                (hue.gamma_multiply(rest_a), 1.0)
             } else {
-                (WIKI.gamma_multiply(DIM), 1.0)
+                (hue.gamma_multiply(DIM), 1.0)
             };
             let mid = sa.lerp(sb, 0.5);
             let d = sb - sa;
@@ -1365,6 +1377,10 @@ impl Viewer {
             // shield); below that, a colored disc. Ghosts stay hollow.
             let glyph = r >= GLYPH_MIN_R;
             match node.kind {
+                NodeKind::Web => {
+                    // a cited URL — small cyan dot (globe glyph lands in G3)
+                    painter.circle_filled(s, r, dimmed(WEB));
+                }
                 NodeKind::Ghost => {
                     painter.circle_stroke(s, r, Stroke::new(1.2, dimmed(GHOST)));
                     if r >= ICON_MIN_R {

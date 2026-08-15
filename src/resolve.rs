@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::graph::{Ambiguity, Graph, Link, LinkKind, Node, NodeId, NodeKind};
-use crate::vault::RawLink;
+use crate::vault::{self, RawLink};
 
 /// Extensions treated as assets: UNRESOLVED links to these are skipped
 /// rather than ghosted. Images that exist in the vault are Image nodes and
@@ -113,7 +113,6 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                             name: target.clone(),
                             title: None,
                             aliases: Vec::new(),
-                            externals: Vec::new(),
                             parent: None,
                             children: Vec::new(),
                         })
@@ -142,6 +141,39 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                     to,
                     kind: LinkKind::WikiLink,
                     offset: link.offset,
+                });
+            }
+        }
+    }
+}
+
+/// Turn each file's cited URLs into Web nodes and External edges — one
+/// node per NORMALIZED URL however many notes cite it (shared sources
+/// become bridges), created in encounter order like ghosts. Duplicate
+/// (from, to) pairs collapse; the first occurrence's offset wins.
+pub fn resolve_externals(g: &mut Graph, file_externals: &[(NodeId, Vec<vault::RawExternal>)]) {
+    let mut webs: HashMap<String, NodeId> = HashMap::new();
+    let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
+    for (src, exts) in file_externals {
+        for e in exts {
+            let key = crate::weburl::normalize(&e.url);
+            let to = *webs.entry(key.clone()).or_insert_with(|| {
+                g.push_node(Node {
+                    kind: NodeKind::Web,
+                    name: crate::weburl::host(&key).to_string(),
+                    path: key,
+                    title: None,
+                    aliases: Vec::new(),
+                    parent: None,
+                    children: Vec::new(),
+                })
+            });
+            if seen.insert((*src, to)) {
+                g.links.push(Link {
+                    from: *src,
+                    to,
+                    kind: LinkKind::External,
+                    offset: e.offset,
                 });
             }
         }
@@ -226,7 +258,6 @@ mod tests {
             name: name.into(),
             title: None,
             aliases: Vec::new(),
-            externals: Vec::new(),
             parent,
             children: Vec::new(),
         };
@@ -273,7 +304,6 @@ mod tests {
             name: name.into(),
             title: None,
             aliases,
-            externals: Vec::new(),
             parent,
             children: Vec::new(),
         };
