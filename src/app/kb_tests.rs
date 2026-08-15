@@ -247,6 +247,35 @@ fn f_opens_the_find_prompt_only_in_nav_mode() {
     assert!(h.state().nav_find.is_some(), "f opens find-in-directory");
 }
 
+/// A corrupt/hand-edited view file with a huge-but-finite camera center
+/// used to open onto a blank canvas: world_to_screen overflowed to ±inf,
+/// nothing painted or hit-tested, and fitted=true blocked the auto-fit
+/// that would recover. Restore must clamp center like it clamps zoom.
+#[test]
+fn corrupt_view_state_camera_is_clamped_on_restore() {
+    let d = std::env::temp_dir().join(format!("tg-clamp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join(".text-graph")).unwrap();
+    std::fs::write(d.join("a.md"), "x").unwrap();
+    std::fs::write(
+        d.join(".text-graph/view"),
+        "text-graph view v1\ncamera\t3e38\t-3e38\t50\ncard\t3e38\t0\t%1\ttg_x\n",
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let v = Viewer::new(graph::build(scan), d.clone());
+    let _ = std::fs::remove_dir_all(&d);
+    assert!(
+        v.center.x.abs() <= 1e6 && v.center.y.abs() <= 1e6,
+        "center clamped: was ({}, {})",
+        v.center.x,
+        v.center.y
+    );
+    assert_eq!(v.zoom, 50.0, "the sane part of the restore survives");
+    let off = v.terms.parked["tg_x"][0].1;
+    assert!(off.x.abs() <= 1e5, "card offsets clamped too: {}", off.x);
+}
+
 /// egui widgets read key events without consuming them, so every global
 /// keybind must check `widget_free`. Regression: typing a filename like
 /// "2026-08-10" into the find-in-directory prompt re-fit the camera on

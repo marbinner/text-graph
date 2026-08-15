@@ -626,10 +626,13 @@ impl Viewer {
         let default_agent = vs.default_agent.clone().unwrap_or_else(|| "pi".into());
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
         for c in vs.cards {
-            restore_offsets
-                .entry(c.session)
-                .or_default()
-                .push((c.pane, Vec2::new(c.dx, c.dy)));
+            // clamp like the camera below: a corrupt offset would park the
+            // card outside every possible view forever (it fails the
+            // visibility cull but keeps being re-saved)
+            restore_offsets.entry(c.session).or_default().push((
+                c.pane,
+                Vec2::new(c.dx.clamp(-1e5, 1e5), c.dy.clamp(-1e5, 1e5)),
+            ));
         }
         let mut restore_pins: HashMap<String, Vec<(String, ())>> = HashMap::new();
         for (session, pane) in vs.pins {
@@ -640,7 +643,13 @@ impl Viewer {
             sim,
             radius,
             depths,
-            center: cam.map_or(Pos2::ZERO, |(x, y, _)| Pos2::new(x, y)),
+            // center is clamped like zoom: a huge-but-finite restored value
+            // (corrupt/hand-edited view file) overflows world_to_screen to
+            // ±inf — nothing paints, nothing hit-tests, and fitted=true
+            // suppresses the auto-fit that would recover
+            center: cam.map_or(Pos2::ZERO, |(x, y, _)| {
+                Pos2::new(x.clamp(-1e6, 1e6), y.clamp(-1e6, 1e6))
+            }),
             zoom: cam.map_or(1.0, |(_, _, z)| z.clamp(0.02, 50.0)),
             hover: None,
             hover_since: None,
