@@ -81,7 +81,15 @@ pub fn slug_title(url: &str) -> Option<String> {
         && seg
             .chars()
             .all(|c| c.is_ascii_hexdigit() || c == '-' || c == '_');
-    if seg.len() < 4 || letters * 2 < seg.len() || uuidish {
+    // Junk tests: no letters at all (numeric ids), UUID-shaped, or LONG
+    // segments that are mostly non-letters (hashes). Short mixed segments
+    // like "GPT-5.5" are titles, not ids.
+    if seg.len() < 4
+        || letters == 0
+        || uuidish
+        || (seg.len() >= 12 && letters * 2 < seg.len())
+        || seg.eq_ignore_ascii_case("index")
+    {
         return None;
     }
     let mut title = seg.replace(['-', '_', '+'], " ");
@@ -162,6 +170,16 @@ mod tests {
             slug_title("https://en.wikipedia.org/wiki/GPT-5"),
             Some("GPT 5".into())
         );
+        // short alphanumeric titles survive the junk filter (regression:
+        // GPT-5.5 was rejected for being under half letters)
+        assert_eq!(
+            slug_title("https://en.wikipedia.org/wiki/GPT-5.5"),
+            Some("GPT 5.5".into())
+        );
+        // long mostly-numeric segments are still hashes, and index pages
+        // are not titles
+        assert_eq!(slug_title("https://a.com/a1b2c3d4e5f60718"), None);
+        assert_eq!(slug_title("https://a.com/x/index.php"), None);
         assert_eq!(
             slug_title("https://a.com/page-name.html"),
             Some("page name".into())
