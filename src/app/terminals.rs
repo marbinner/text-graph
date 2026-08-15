@@ -1115,8 +1115,14 @@ impl Viewer {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.root.clone());
         let editor = super::actions::terminal_editor();
+        // COLORFGBG tells the editor the pane is DARK: clientless tmux
+        // answers no background-color query, and vim's fallback guesses
+        // background=light — painting white blocks all over the dark card
+        // (verified against a real server). `env` (a binary) survives the
+        // `exec` in the launch wrapper, where a plain VAR=x prefix would
+        // not.
         let cmd = format!(
-            "{editor} '{}'",
+            "env COLORFGBG='15;0' {editor} '{}'",
             abs.display().to_string().replace('\'', r"'\''")
         );
         match agents::launch_edit(None, &dir, &cmd, &rel) {
