@@ -41,6 +41,51 @@ const ASSET_EXTS: &[&str] = &[
     "canvas",
 ];
 
+/// Resolve a target to an existing vault leaf using the same rules as graph
+/// construction, without creating a ghost or recording ambiguity. Used by
+/// preview-only constructs such as embeds, which the link extractor skips.
+pub(crate) fn resolve_existing(g: &Graph, raw_target: &str) -> Option<NodeId> {
+    let target = normalize(raw_target);
+    if target.is_empty() {
+        return None;
+    }
+
+    if target.contains('/') {
+        let want: Vec<String> = target.split('/').map(casefold).collect();
+        return g.nodes.iter().enumerate().find_map(|(i, node)| {
+            if !matches!(
+                node.kind,
+                NodeKind::File | NodeKind::Image | NodeKind::Asset
+            ) {
+                return None;
+            }
+            let comps = path_components(&node.path);
+            component_suffix(&comps, &want).then_some(NodeId(i as u32))
+        });
+    }
+
+    let key = casefold(&target);
+    // Stems take precedence over aliases across the whole graph, exactly as
+    // in `resolve`; node order is sorted path order and breaks ambiguity.
+    g.nodes
+        .iter()
+        .enumerate()
+        .find_map(|(i, node)| {
+            (matches!(
+                node.kind,
+                NodeKind::File | NodeKind::Image | NodeKind::Asset
+            ) && casefold(&node.name) == key)
+                .then_some(NodeId(i as u32))
+        })
+        .or_else(|| {
+            g.nodes.iter().enumerate().find_map(|(i, node)| {
+                (matches!(node.kind, NodeKind::File)
+                    && node.aliases.iter().any(|alias| casefold(alias) == key))
+                .then_some(NodeId(i as u32))
+            })
+        })
+}
+
 pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
     // Index all File, Image, and Asset nodes. Leaves are indexed in NodeId
     // order, which is sorted relative-path (string) order, so the first
@@ -67,7 +112,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                 bucket.push(id);
             }
         }
-        comp_paths.push((id, strip_md(&node.path).split('/').map(casefold).collect()));
+        comp_paths.push((id, path_components(&node.path)));
     }
 
     let mut ghosts: HashMap<String, NodeId> = HashMap::new();
@@ -84,9 +129,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                 let want: Vec<String> = target.split('/').map(casefold).collect();
                 comp_paths
                     .iter()
-                    .filter(|(_, comps)| {
-                        comps.len() >= want.len() && comps[comps.len() - want.len()..] == want[..]
-                    })
+                    .filter(|(_, comps)| component_suffix(comps, &want))
                     .map(|(id, _)| *id)
                     .collect()
             } else {
@@ -197,6 +240,14 @@ fn casefold(s: &str) -> String {
     // is typically NFC — without normalization such notes are unlinkable.
     use unicode_normalization::UnicodeNormalization as _;
     s.nfc().collect::<String>().to_lowercase()
+}
+
+fn path_components(path: &str) -> Vec<String> {
+    strip_md(path).split('/').map(casefold).collect()
+}
+
+fn component_suffix(path: &[String], target: &[String]) -> bool {
+    path.len() >= target.len() && path[path.len() - target.len()..] == target[..]
 }
 
 fn strip_md(path: &str) -> &str {

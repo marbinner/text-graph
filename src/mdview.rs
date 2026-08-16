@@ -15,7 +15,7 @@ use std::path::Path;
 use pulldown_cmark::{Event, Parser, Tag};
 
 use crate::graph::{Graph, NodeId, NodeKind};
-use crate::vault;
+use crate::{resolve, vault};
 
 /// URL scheme for in-graph links; the app intercepts these clicks.
 pub const SCHEME: &str = "tg://";
@@ -54,18 +54,6 @@ fn strip_target(inner: &str) -> &str {
 /// full inner text (heading suffix included).
 fn display_text(inner: &str) -> &str {
     inner.rsplit_once('|').map_or(inner, |(_, a)| a.trim())
-}
-
-/// Case-insensitive leaf lookup by name (images/assets keep extensions,
-/// file names are stems) — resolution for embeds, which the edge extractor
-/// deliberately skips.
-fn resolve_name(g: &Graph, target: &str) -> Option<NodeId> {
-    let last = target.rsplit_once('/').map_or(target, |(_, f)| f);
-    g.nodes.iter().enumerate().find_map(|(i, n)| {
-        (matches!(n.kind, NodeKind::File | NodeKind::Image | NodeKind::Asset)
-            && n.name.eq_ignore_ascii_case(last))
-        .then_some(NodeId(i as u32))
-    })
 }
 
 /// A `file://` URI for a vault-relative path, angle-bracketed so markdown
@@ -150,8 +138,7 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
             // its leaf name matches earlier in sorted order
             let resolved = g
                 .by_path(target)
-                .or_else(|| g.by_path(&format!("{target}.md")))
-                .or_else(|| resolve_name(g, target));
+                .or_else(|| resolve::resolve_existing(g, target));
             match resolved {
                 Some(id) if matches!(g.node(id).kind, NodeKind::Image) => {
                     if let Some(url) = safe_image_url(root, &root.join(&g.node(id).path)) {
@@ -211,8 +198,7 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         }
         let id = g
             .by_path(label)
-            .or_else(|| g.by_path(&format!("{label}.md")))
-            .or_else(|| resolve_name(g, label));
+            .or_else(|| resolve::resolve_existing(g, label));
         if let Some(id) = id {
             let name = g
                 .node(id)
@@ -612,9 +598,14 @@ mod tests {
         let n = g.by_path("n.md").unwrap();
 
         assert_eq!(
-            prepare(&g, &d, src, "![[b/cover.png]]"),
+            prepare(&g, &d, src, "![[B/COVER.PNG]]"),
             format!("![]({})", file_url(&d.join("b/cover.png"))),
-            "the qualified path wins over sorted-leaf order"
+            "qualified paths use case-insensitive component matching"
+        );
+        assert_eq!(
+            prepare(&g, &d, src, "![[missing/cover.png]]"),
+            "![[missing/cover.png]]",
+            "a failed qualified path must not fall back to a different basename"
         );
         let real = "See [^n].\n\n[^n]: an actual footnote";
         assert_eq!(
