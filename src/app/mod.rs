@@ -32,8 +32,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
+use nucleo_matcher::{Config, Matcher};
 use text_graph::agents::{self, AgentPane};
 use text_graph::graph::{Graph, LinkKind, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
@@ -519,11 +518,6 @@ struct Viewer {
     // ---- tree navigation ----
     /// First `g` of a `gg` chord, with its press time.
     pending_g: Option<Instant>,
-    /// Find-in-directory prompt (`f` in tree-nav mode): the query, live.
-    nav_find: Option<String>,
-    nav_find_focus: bool,
-    /// Last applied find query, to jump only when the text changes.
-    nav_find_last: String,
     /// Scroll the navigator's sibling list to the cursor next frame.
     nav_scroll: bool,
     /// Cursor into the connections strip (] / [ step it, Enter/l jumps).
@@ -697,9 +691,6 @@ impl Viewer {
             last_save: Instant::now(),
             save_warned: false,
             pending_g: None,
-            nav_find: None,
-            nav_find_focus: false,
-            nav_find_last: String::new(),
             nav_scroll: false,
             conn_cursor: None,
             ctx_node: None,
@@ -739,7 +730,8 @@ impl Viewer {
         }
         let (open_key, esc, enter, frame_key, reset) = ui.input(|i| {
             (
-                i.key_pressed(Key::Slash) || (i.modifiers.command && i.key_pressed(Key::F)),
+                (i.modifiers.is_none() && (i.key_pressed(Key::F) || i.key_pressed(Key::Slash)))
+                    || (i.modifiers.command && i.key_pressed(Key::F)),
                 i.key_pressed(Key::Escape),
                 i.key_pressed(Key::Enter),
                 i.modifiers.is_none() && i.key_pressed(Key::Z),
@@ -755,7 +747,7 @@ impl Viewer {
         );
         // EVERY graph action below must hold this: egui widgets read input
         // without consuming it, so keys typed into a focused text field
-        // (the find-in-directory prompt) reach here too. Unguarded branches
+        // (the search prompt, the create dialog) reach here too. Unguarded branches
         // re-fit the camera on '0', opened search on '/', and deselected on
         // Esc — all mid-typing. (The picker's own branch stays unguarded on
         // purpose: its Enter/Esc/arrows act WHILE its field is focused.)
@@ -765,15 +757,11 @@ impl Viewer {
         } else if open_key && widget_free {
             self.picker.open();
         } else if esc && widget_free {
-            // dismiss order: find prompt, link cursor, terminal cursor,
-            // then selection. The prompt is a stage of ITS OWN here because
-            // egui surrenders widget focus at frame START on Escape — by
-            // the time we run, the prompt's field already reads unfocused,
-            // so without this stage the same Esc would fall through and
-            // slam the navigator shut mid-typing.
-            if self.nav_find.take().is_some() {
-                self.nav_find_last.clear();
-            } else if self.conn_cursor.take().is_none() && self.terms.cursor.take().is_none() {
+            // dismiss order: link cursor, terminal cursor, then selection.
+            // (The search prompt is handled a branch above, while it still
+            // has focus — egui surrenders widget focus at frame START on
+            // Escape, so a focus guard can never see a live text field.)
+            if self.conn_cursor.take().is_none() && self.terms.cursor.take().is_none() {
                 self.selected = None;
             }
         } else if enter
@@ -857,7 +845,7 @@ impl Viewer {
         // repeat); with nothing selected they pan. Esc switches back.
         let tree_nav = self.selected.is_some() && widget_free;
         if let Some(sel) = self.selected.filter(|_| tree_nav) {
-            let (h, j, k, l, g, sg, find, out_jump, back_jump) = ui.input(|i| {
+            let (h, j, k, l, g, sg, out_jump, back_jump) = ui.input(|i| {
                 let m = i.modifiers.is_none();
                 (
                     m && i.key_pressed(Key::H),
@@ -866,17 +854,10 @@ impl Viewer {
                     m && i.key_pressed(Key::L),
                     m && i.key_pressed(Key::G),
                     i.modifiers.shift_only() && i.key_pressed(Key::G),
-                    m && i.key_pressed(Key::F),
                     m && i.key_pressed(Key::CloseBracket),
                     m && i.key_pressed(Key::OpenBracket),
                 )
             });
-            if find {
-                // ranger f: find within the current directory's listing
-                self.nav_find = Some(String::new());
-                self.nav_find_last.clear();
-                self.nav_find_focus = true;
-            }
             let mut to: Option<NodeId> = None;
             if h {
                 to = self.g.node(sel).parent;
@@ -1968,8 +1949,6 @@ impl eframe::App for Viewer {
             egui::Panel::right("detail")
                 .resizable(true)
                 .show(ui, |ui| self.detail_pane(ui));
-        } else if self.selected.is_none() {
-            self.nav_find = None; // no navigator, no find prompt
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(self.theme.bg))

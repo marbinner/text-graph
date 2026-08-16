@@ -23,46 +23,6 @@ impl Viewer {
         }
     }
 
-    /// Live find-in-directory (`f`): when the query changed, jump the
-    /// cursor to the best fuzzy match among the current listing (the
-    /// selection's siblings; the root searches its children).
-    pub(super) fn nav_find_apply(&mut self) {
-        let Some(q) = self.nav_find.clone() else {
-            return;
-        };
-        if q == self.nav_find_last {
-            return;
-        }
-        self.nav_find_last = q.clone();
-        let Some(sel) = self.selected else { return };
-        if q.is_empty() {
-            return;
-        }
-        let candidates = match self.g.node(sel).parent {
-            Some(p) => self.g.node(p).children.clone(),
-            None => self.g.node(sel).children.clone(),
-        };
-        let pattern = Pattern::parse(&q, CaseMatching::Ignore, Normalization::Smart);
-        let mut buf = Vec::new();
-        let mut best: Option<(u32, NodeId)> = None;
-        for c in candidates {
-            let n = self.g.node(c);
-            let hay = format!("{} {}", n.display_name(), n.name);
-            if let Some(s) = pattern.score(Utf32Str::new(&hay, &mut buf), &mut self.matcher)
-                && best.is_none_or(|(bs, _)| s > bs)
-            {
-                best = Some((s, c));
-            }
-        }
-        if let Some((_, id)) = best
-            && Some(id) != self.selected
-        {
-            self.selected = Some(id);
-            self.frame_node(id);
-            self.nav_scroll = true;
-        }
-    }
-
     /// The connections strip's entries in render order: children, then
     /// outgoing links, then incoming. `]`/`[` walk this list by index, so
     /// the strip render below must build entries in exactly this order.
@@ -78,7 +38,6 @@ impl Viewer {
     /// (hjkl / gg / G while a node is selected); this renders the state and
     /// accepts clicks.
     pub(super) fn detail_pane(&mut self, ui: &mut egui::Ui) {
-        self.nav_find_apply();
         let Some(sel) = self.selected else { return };
         if self.detail.as_ref().map(|(id, _)| *id) != Some(sel) {
             self.detail = Some((sel, self.load_body(sel)));
@@ -151,25 +110,6 @@ impl Viewer {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
                     ui.set_width(150.0);
-                    // find-in-directory prompt (f): lives while it has focus
-                    let mut close_find = false;
-                    if let Some(q) = &mut self.nav_find {
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(q)
-                                .hint_text("find…")
-                                .desired_width(140.0),
-                        );
-                        if self.nav_find_focus {
-                            resp.request_focus();
-                            self.nav_find_focus = false;
-                        } else if resp.lost_focus() {
-                            close_find = true; // Enter, Esc, or a click elsewhere
-                        }
-                    }
-                    if close_find {
-                        self.nav_find = None;
-                        self.nav_find_last.clear();
-                    }
                     egui::ScrollArea::vertical()
                         .id_salt("nav-sibs")
                         .auto_shrink([false, false])

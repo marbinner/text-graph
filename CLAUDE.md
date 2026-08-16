@@ -160,11 +160,13 @@
   an unguarded branch fires while the user types into a text field
   (regression: '0' in the find prompt re-fit the camera). Esc is special:
   egui surrenders widget focus at frame START on Escape, so
-  guard-by-focus can't see the prompt — transient text inputs (like
-  `nav_find`) must be their OWN first stage of the Esc dismiss chain.
-  The picker's branch is the one deliberate exception (its Enter/Esc/
-  arrows act while its own field is focused).
-- The picker (`/`, `Ctrl+F`) is the ONE search surface: names/aliases/paths
+  guard-by-focus can't see the prompt — a transient text input must be
+  its OWN first stage of the Esc dismiss chain (the search prompt is,
+  via the picker branch, which is also the one deliberate exception to
+  the guard: its Enter/Esc/arrows act while its own field is focused).
+- The picker (`f`, `/`, `Ctrl+F`) is the ONE search surface — there is no
+  second, directory-scoped finder (the old ranger `f` prompt is gone; a
+  scoped search would be a query prefix, not another keybind): names/aliases/paths
   fuzzy (nucleo, scored per FIELD — one concatenated haystack manufactured
   subsequence matches straddling name and path), file CONTENT literal (all
   terms on one line, smart case). Content is NEVER indexed: `search::
@@ -187,7 +189,8 @@
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
   anything else in either mode; `l` guards against key-repeat spawning
-  editors. `]`/`[` walk `conn_cursor` over the connections strip —
+  editors. `f` opens the picker from BOTH modes. `]`/`[` walk
+  `conn_cursor` over the connections strip —
   `navigator::connections()` is the single source of its entry order
   (children, outs, backs); Enter/l follow, Esc dismisses it FIRST, tree
   moves and reloads clear it (stale indexes point into the old graph).

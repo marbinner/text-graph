@@ -237,14 +237,25 @@ fn esc_dismisses_link_cursor_then_terminal_cursor_then_selection() {
     );
 }
 
+/// `f` is the finder — with or without a selection (it replaced the old
+/// find-in-directory prompt, which only existed in tree-nav mode).
 #[test]
-fn f_opens_the_find_prompt_only_in_nav_mode() {
+fn f_opens_the_picker_with_or_without_a_selection() {
     let mut h = harness();
     press(&mut h, Key::F);
-    assert!(h.state().nav_find.is_none(), "no selection, no prompt");
+    assert!(h.state().picker.open, "f opens the picker from pan mode");
+    press(&mut h, Key::Escape);
+    assert!(!h.state().picker.open);
+
     select(&mut h, "notes/readme.md");
     press(&mut h, Key::F);
-    assert!(h.state().nav_find.is_some(), "f opens find-in-directory");
+    assert!(h.state().picker.open, "and from tree-nav mode");
+    press(&mut h, Key::Escape);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("notes/readme.md"),
+        "closing it leaves the selection alone"
+    );
 }
 
 /// The view file is untrusted and the launch command runs through
@@ -301,20 +312,20 @@ fn corrupt_view_state_camera_is_clamped_on_restore() {
 
 /// egui widgets read key events without consuming them, so every global
 /// keybind must check `widget_free`. Regression: typing a filename like
-/// "2026-08-10" into the find-in-directory prompt re-fit the camera on
-/// each '0', '/' opened the search bar, 'z' framed, and Esc deselected —
-/// slamming the navigator shut mid-typing.
+/// "2026-08-10" into a prompt re-fit the camera on each '0', '/' opened
+/// the search bar, 'z' framed, and Esc deselected — slamming the
+/// navigator shut mid-typing.
 #[test]
 fn global_keys_do_not_fire_while_a_text_field_has_focus() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
     let viewer = Viewer::new(graph::build(scan), root);
+    let mut buf = String::new();
     let mut h = Harness::new_ui_state(
-        |ui, v: &mut Viewer| {
+        move |ui, v: &mut Viewer| {
             v.handle_keys(ui);
-            // a stand-in for the find prompt: any focused TextEdit
-            ui.text_edit_singleline(&mut v.nav_find_last)
-                .request_focus();
+            // a stand-in for the search prompt: any focused TextEdit
+            ui.text_edit_singleline(&mut buf).request_focus();
         },
         viewer,
     );
@@ -338,15 +349,18 @@ fn global_keys_do_not_fire_while_a_text_field_has_focus() {
         h.state().cam_anim.is_none(),
         "'z' while typing must not start a camera glide"
     );
-    // Esc is special: egui surrenders widget focus at frame START on
-    // Escape, so the focus guard alone can't see the prompt — the find
-    // prompt must be its own stage of the dismiss chain
-    h.state_mut().nav_find = Some("2026".into());
-    press(&mut h, Key::Escape);
+    press(&mut h, Key::F);
     assert!(
-        h.state().nav_find.is_none(),
-        "Esc closes the find prompt first…"
+        !h.state().picker.open,
+        "'f' while typing must not open the picker"
     );
+    // Esc is special: egui surrenders widget focus at frame START on
+    // Escape, so the focus guard alone can't see a live text field — the
+    // search prompt must be its own stage of the dismiss chain
+    h.state_mut().picker.open = true;
+    h.state_mut().picker.query = "2026".into();
+    press(&mut h, Key::Escape);
+    assert!(!h.state().picker.open, "Esc closes the picker first…");
     assert_eq!(
         selected_path(&h).as_deref(),
         Some("index.md"),

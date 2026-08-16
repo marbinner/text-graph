@@ -113,9 +113,9 @@ the agent until `Ctrl+Q`.
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
 | `⚙` (bottom-right) | settings: **dark / light theme** and the **default agent** for one-click launching — both persisted per vault |
-| `/` or `Ctrl+F` | **the picker** — see below |
+| `f`, `/` or `Ctrl+F` | **the picker** — see below |
 
-### The picker (`/` or `Ctrl+F`)
+### The picker (`f`, `/` or `Ctrl+F`)
 
 One finder over everything in the vault: note names, aliases, paths, the
 **text inside every file**, and the live agent terminals. Names, aliases
@@ -161,13 +161,12 @@ instead of snapping, and never changes your zoom.
 | `h` | up to the parent |
 | `l` | enter a directory / open a file in the editor |
 | `gg` / `G` | first / last sibling |
-| `f` | find in this directory — fuzzy-jumps the cursor live as you type |
 | `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
 | `t` | new **terminal** card at this node's folder, focused and ready to type |
 | `a` | launch the **default agent** (⚙ settings) at this node's folder, focused when it appears |
-| `Esc` | dismiss whatever is transient first — find prompt, link cursor — then deselect, back to camera mode |
+| `Esc` | dismiss whatever is transient first — the search prompt, then the link cursor — then deselect, back to camera mode |
 
 ### Terminal cards
 
