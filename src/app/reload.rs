@@ -22,24 +22,56 @@ fn reload_worthy(root: &Path, res: &Result<notify::Event, notify::Error>) -> boo
     }
 }
 
+/// Record a callback result and schedule a recovery scan when warranted.
+/// Watcher failures live in their own health channel: a subsequent successful
+/// vault scan proves the graph recovered, not that kernel notifications did.
+fn record_watch_result(
+    root: &Path,
+    reload_at: &Mutex<Option<Instant>>,
+    watch_error: &Mutex<Option<String>>,
+    res: &Result<notify::Event, notify::Error>,
+) -> bool {
+    if let Err(error) = res {
+        *watch_error.lock().unwrap() = Some(error.to_string());
+    }
+    let worthy = reload_worthy(root, res);
+    if worthy {
+        *reload_at.lock().unwrap() = Some(Instant::now());
+    }
+    worthy
+}
+
 impl Viewer {
     /// Watch the vault; on a relevant event, stamp the debounce clock and
-    /// wake the UI thread. Failure to watch just means no live reload.
+    /// wake the UI thread. Startup and runtime failures are retained for
+    /// the health window instead of being reduced to a generic OFF state.
     pub(super) fn start_watcher(&mut self, ctx: egui::Context) {
         use notify::Watcher as _;
+        self._watcher = None;
+        *self.watch_error.lock().unwrap() = None;
         let state = self.reload_at.clone();
+        let watch_error = self.watch_error.clone();
+        let handler_error = watch_error.clone();
         let root = self.root.clone();
         let handler = move |res: Result<notify::Event, notify::Error>| {
-            if reload_worthy(&root, &res) {
-                *state.lock().unwrap() = Some(Instant::now());
+            if record_watch_result(&root, &state, &handler_error, &res) {
                 ctx.request_repaint();
             }
         };
-        if let Ok(mut w) = notify::recommended_watcher(handler)
-            && w.watch(&self.root, notify::RecursiveMode::Recursive)
-                .is_ok()
-        {
-            self._watcher = Some(w);
+        match notify::recommended_watcher(handler) {
+            Ok(mut watcher) => {
+                if let Err(error) = watcher.watch(&self.root, notify::RecursiveMode::Recursive) {
+                    *watch_error.lock().unwrap() = Some(format!(
+                        "cannot watch {} recursively: {error}",
+                        self.root.display()
+                    ));
+                } else {
+                    self._watcher = Some(watcher);
+                }
+            }
+            Err(error) => {
+                *watch_error.lock().unwrap() = Some(format!("cannot start file watcher: {error}"));
+            }
         }
     }
 
@@ -369,6 +401,38 @@ mod tests {
         assert!(!reload_worthy(&root, &Ok(save)));
         let edit = notify::Event::new(notify::EventKind::Other).add_path(root.join("note.md"));
         assert!(reload_worthy(&root, &Ok(edit)));
+    }
+
+    #[test]
+    fn watcher_callback_errors_are_retained_and_schedule_recovery() {
+        let root = PathBuf::from("/v");
+        let reload_at = Mutex::new(None);
+        let watch_error = Mutex::new(None);
+        let error = Err(notify::Error::generic("inotify queue failed"));
+
+        assert!(record_watch_result(&root, &reload_at, &watch_error, &error));
+        assert!(reload_at.lock().unwrap().is_some());
+        assert!(
+            watch_error
+                .lock()
+                .unwrap()
+                .as_deref()
+                .is_some_and(|message| message.contains("inotify queue failed"))
+        );
+
+        let irrelevant =
+            Ok(notify::Event::new(notify::EventKind::Other)
+                .add_path(root.join(".text-graph/view")));
+        assert!(!record_watch_result(
+            &root,
+            &reload_at,
+            &watch_error,
+            &irrelevant
+        ));
+        assert!(
+            watch_error.lock().unwrap().is_some(),
+            "an ordinary later event must not erase a watcher failure"
+        );
     }
 
     #[test]

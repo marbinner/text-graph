@@ -14,7 +14,7 @@ impl Viewer {
         self.g.errors.len()
             + self.g.warnings.len()
             + self.g.ambiguities.len()
-            + usize::from(self._watcher.is_none())
+            + usize::from(self._watcher.is_none() || self.watch_error.lock().unwrap().is_some())
             + usize::from(self.reload_error.is_some())
             + usize::from(self.config_error.is_some())
             + self.terms.attach_backoff.len()
@@ -44,6 +44,7 @@ impl Viewer {
         }
 
         let mut jump = None;
+        let watch_error = self.watch_error.lock().unwrap().clone();
         egui::Window::new("vault health")
             .anchor(Align2::LEFT_BOTTOM, Vec2::new(10.0, -44.0))
             .collapsible(false)
@@ -56,9 +57,18 @@ impl Viewer {
                     .max_height(360.0)
                     .show(ui, |ui| {
                         if self._watcher.is_none() {
-                            ui.colored_label(
-                                BAD,
-                                "live reload OFF — the file watcher failed to start",
+                            let detail = watch_error
+                                .as_deref()
+                                .unwrap_or("the file watcher failed to start");
+                            ui.colored_label(BAD, format!("live reload OFF — {detail}"));
+                        } else if let Some(error) = &watch_error {
+                            ui.colored_label(BAD, format!("file watcher reported: {error}"));
+                            ui.label(
+                                RichText::new(
+                                    "a recovery scan was scheduled; restart if live reload stops",
+                                )
+                                .small()
+                                .color(self.theme.text),
                             );
                         }
                         if let Some(e) = &self.reload_error {

@@ -531,6 +531,9 @@ struct Viewer {
     _watcher: Option<notify::RecommendedWatcher>,
     /// Timestamp of the last relevant filesystem event (debounce state).
     reload_at: Arc<Mutex<Option<Instant>>>,
+    /// Startup or callback failure from notify, separate from scan/build
+    /// failures so a successful recovery scan cannot erase the warning.
+    watch_error: Arc<Mutex<Option<String>>>,
     /// Monotonic reload request counter — results from superseded requests
     /// are discarded on arrival.
     reload_gen: u64,
@@ -725,6 +728,7 @@ impl Viewer {
             detail_stamp: None,
             _watcher: None,
             reload_at: Arc::new(Mutex::new(None)),
+            watch_error: Arc::new(Mutex::new(None)),
             reload_gen: 0,
             scan_inflight: false,
             rescan_queued: false,
