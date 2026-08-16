@@ -503,6 +503,10 @@ struct Viewer {
     // ---- detail pane ----
     root: PathBuf,
     md_cache: CommonMarkCache,
+    /// What the side pane is previewing — the finder's highlighted row
+    /// while it is open, else the selection. Built by `sync_pane_preview`,
+    /// drawn by `preview_pane`: one subject, one previewer.
+    pane_preview: Option<picker::Preview>,
     /// Body of the previewed file, read on demand and cached per node…
     detail: Option<(NodeId, String)>,
     /// …with the (mtime, len) it was read at, so a reload re-reads only
@@ -693,6 +697,7 @@ impl Viewer {
             picker: Picker::new(),
             root,
             md_cache: CommonMarkCache::default(),
+            pane_preview: None,
             detail: None,
             detail_stamp: None,
             _watcher: None,

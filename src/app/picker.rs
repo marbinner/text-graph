@@ -72,15 +72,15 @@ pub(super) enum ScanMsg {
 }
 
 /// One rendered line of the preview pane.
-struct PreviewLine {
-    no: usize,
-    text: String,
-    ranges: Vec<search::Range>,
+pub(super) struct PreviewLine {
+    pub(super) no: usize,
+    pub(super) text: String,
+    pub(super) ranges: Vec<search::Range>,
     /// The line the result row points at.
-    hit: bool,
+    pub(super) hit: bool,
 }
 
-enum PreviewBody {
+pub(super) enum PreviewBody {
     /// Raw file lines around a content hit, every match highlighted — the
     /// only view that can justify a content match.
     Text(Vec<PreviewLine>),
@@ -94,19 +94,25 @@ enum PreviewBody {
 }
 
 pub(super) struct Preview {
-    key: String,
-    title: String,
-    subtitle: String,
-    meta: String,
-    body: PreviewBody,
+    /// Identity of the subject this was built for — a finder row's key, or
+    /// `sel\t<ident>` for the selection. A rebuild happens when this
+    /// changes (or the file behind it does), never per frame.
+    pub(super) key: String,
+    pub(super) title: String,
+    pub(super) subtitle: String,
+    pub(super) meta: String,
+    /// The node the pane is about, when it is about one — the header's
+    /// breadcrumb and the connections strip are built from it.
+    pub(super) subject: Option<NodeId>,
+    pub(super) body: PreviewBody,
     /// Index into `Text` lines that the hit sits on.
-    focus: Option<usize>,
+    pub(super) focus: Option<usize>,
     /// Scroll the hit into view on the next frame.
-    scroll: bool,
+    pub(super) scroll: bool,
     /// (vault-relative path, stamp) the raw lines were read from — a
     /// reload re-reads only when THIS file changed, so an agent saving
     /// something else can't blink the preview.
-    source: Option<(String, Option<super::images::Stamp>)>,
+    pub(super) source: Option<(String, Option<super::images::Stamp>)>,
 }
 
 pub(super) struct Picker {
@@ -159,7 +165,6 @@ pub(super) struct Picker {
     pending_at: Instant,
     /// Pane list the current rows were built from (panes come and go).
     pane_keys: Vec<(String, String)>,
-    pub(super) preview: Option<Preview>,
     /// Result the camera is dwelling on, and when it landed there.
     follow: Option<(NodeId, Instant)>,
     followed: Option<NodeId>,
@@ -200,7 +205,6 @@ impl Picker {
             pending_scan: None,
             pending_at: Instant::now(),
             pane_keys: Vec::new(),
-            preview: None,
             follow: None,
             followed: None,
             user_moved: false,
@@ -230,7 +234,6 @@ impl Picker {
         self.content.clear();
         self.done = None;
         self.pending_scan = None;
-        self.preview = None;
         self.follow = None;
         self.followed = None;
         self.user_moved = false;
@@ -451,6 +454,14 @@ impl Viewer {
     /// start/collect the content scan, follow the cursor with the camera,
     /// and load the preview. Called every frame while open.
     pub(super) fn pump_picker(&mut self, ctx: &egui::Context) {
+        self.pump_picker_inner(ctx);
+        // the pane's subject is STATE, not paint: syncing here (rather than
+        // while the panel draws) keeps it correct on frames the pane is
+        // closed and keeps the pane a pure renderer
+        self.sync_pane_preview();
+    }
+
+    fn pump_picker_inner(&mut self, ctx: &egui::Context) {
         if self.picker.node_scores.len() != self.g.nodes.len() {
             self.picker.node_scores = vec![None; self.g.nodes.len()];
         }
@@ -524,7 +535,6 @@ impl Viewer {
             self.rebuild_rows();
         }
         self.picker_follow(ctx);
-        self.load_preview();
     }
 
     /// Kick a content scan for `q` on a worker thread. Candidate files are
@@ -855,36 +865,56 @@ impl Viewer {
     /// frame for a terminal card (its screen is live) — never merely
     /// because a reload happened, or an agent saving some other note would
     /// blink the preview every few seconds.
-    fn load_preview(&mut self) {
-        let Some(row) = self.picker.cursor_row().cloned() else {
-            self.picker.preview = None;
-            return;
+    /// What the pane is about this frame, previewed at most once per
+    /// change. The subject is the finder's highlighted row while the
+    /// finder is open, else the selection — ONE subject, ONE preview, so
+    /// the pane can never grow a second "what is this file" of its own.
+    pub(super) fn sync_pane_preview(&mut self) {
+        let row = self
+            .picker
+            .open
+            .then(|| self.picker.cursor_row().cloned())
+            .flatten();
+        let (key, target, hit) = match &row {
+            Some(r) => (
+                r.key.clone(),
+                r.target.clone(),
+                r.snippet.as_ref().map(|s| s.line),
+            ),
+            None => match self.selected {
+                Some(id) => (
+                    format!("sel\t{}", self.g.node(id).ident()),
+                    Target::Node(id.0),
+                    None,
+                ),
+                None => {
+                    self.pane_preview = None;
+                    return;
+                }
+            },
         };
-        let same_row = self
-            .picker
-            .preview
-            .as_ref()
-            .is_some_and(|p| p.key == row.key);
-        let live_screen = matches!(row.target, Target::Pane { .. });
+        let same = self.pane_preview.as_ref().is_some_and(|p| p.key == key);
+        // a terminal's screen is live, and a file can change under a
+        // preview that is otherwise unchanged (agents write constantly)
+        let live_screen = matches!(target, Target::Pane { .. });
         let file_changed = self
-            .picker
-            .preview
+            .pane_preview
             .as_ref()
             .and_then(|p| p.source.as_ref())
             .is_some_and(|(rel, stamp)| {
                 stamp.is_some() && super::images::file_stamp(&self.root.join(rel)) != *stamp
             });
-        if same_row && !live_screen && !file_changed {
+        if same && !live_screen && !file_changed {
             return;
         }
         let q = Query::parse(&self.picker.query);
-        self.picker.preview = Some(match &row.target {
+        self.pane_preview = Some(match target {
             Target::Pane { session, pane } => {
-                let key = (session.clone(), pane.clone());
+                let r = row.as_ref().expect("pane subjects only come from rows");
                 let rows = self
                     .terms
                     .cache
-                    .get(&key)
+                    .get(&(session.clone(), pane.clone()))
                     .map(|c| {
                         c.rows
                             .iter()
@@ -893,10 +923,11 @@ impl Viewer {
                     })
                     .unwrap_or_default();
                 Preview {
-                    key: row.key.clone(),
-                    title: row.title.clone(),
-                    subtitle: row.subtitle.clone(),
+                    key,
+                    title: r.title.clone(),
+                    subtitle: r.subtitle.clone(),
                     meta: String::new(),
+                    subject: None,
                     body: if rows.is_empty() {
                         PreviewBody::Note("(no screen mirrored yet)".into())
                     } else {
@@ -907,13 +938,33 @@ impl Viewer {
                     source: None,
                 }
             }
-            // a refreshed file keeps its scroll: only a NEW row re-aims the
-            // preview at the hit
-            Target::Node(i) => self.node_preview(NodeId(*i), &row, &q, !same_row),
+            // a refreshed file keeps its scroll: only a NEW subject re-aims
+            // the preview at the hit
+            Target::Node(i) if (i as usize) < self.g.nodes.len() => {
+                self.node_preview(NodeId(i), key, hit, &q, !same)
+            }
+            Target::Node(_) => Preview {
+                key,
+                title: String::new(),
+                subtitle: String::new(),
+                meta: String::new(),
+                subject: None,
+                body: PreviewBody::Note("(gone in a reload)".into()),
+                focus: None,
+                scroll: false,
+                source: None,
+            },
         });
     }
 
-    fn node_preview(&mut self, id: NodeId, row: &Row, q: &Query, scroll: bool) -> Preview {
+    fn node_preview(
+        &mut self,
+        id: NodeId,
+        key: String,
+        hit: Option<usize>,
+        q: &Query,
+        scroll: bool,
+    ) -> Preview {
         let node = self.g.node(id);
         let (kind, path) = (node.kind, node.path.clone());
         let mut meta = String::new();
@@ -926,7 +977,7 @@ impl Viewer {
         // takes over. Markdown always reads better than source otherwise.
         let textual =
             kind == NodeKind::File || (kind == NodeKind::Asset && filetype::is_text(&path));
-        let body = match row.snippet.as_ref().map(|s| s.line).filter(|_| textual) {
+        let body = match hit.filter(|_| textual) {
             None => PreviewBody::Node(id),
             Some(hit) => match vault::read_head(&self.root.join(&path), PREVIEW_BYTES) {
                 Ok(text) => {
@@ -958,10 +1009,11 @@ impl Viewer {
             _ => path.clone(),
         };
         Preview {
-            key: row.key.clone(),
+            key,
             title: self.g.node(id).display_name().to_string(),
             subtitle,
             meta,
+            subject: Some(id),
             body,
             focus,
             scroll,
@@ -1215,105 +1267,6 @@ impl Viewer {
         }
         resp.clicked()
     }
-
-    /// The highlighted result, previewed in the side pane — the same place
-    /// a walked-to node previews, so the eye never has to learn a second
-    /// spot for "what is this file".
-    pub(super) fn picker_preview_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(preview) = self.picker.preview.take() else {
-            return;
-        };
-        let dim = self.theme.text;
-        ui.add_space(2.0);
-        ui.label(egui::RichText::new(&preview.title).strong().size(14.0));
-        ui.label(egui::RichText::new(&preview.subtitle).small().color(dim));
-        if !preview.meta.is_empty() {
-            ui.label(egui::RichText::new(&preview.meta).small().color(dim));
-        }
-        ui.add_space(3.0);
-        let accent = self.theme.select;
-        let text_color = self.theme.file;
-        match &preview.body {
-            PreviewBody::Text(lines) => {
-                // measure one line rather than asking Fonts for a row
-                // height — `ui.fonts()` hands out a read-only view
-                let line_h = ui
-                    .painter()
-                    .layout_no_wrap("0".into(), FontId::monospace(11.5), dim)
-                    .size()
-                    .y;
-                let mut area = egui::ScrollArea::vertical()
-                    .id_salt("tg-picker-preview")
-                    .auto_shrink([false, false]);
-                if preview.scroll
-                    && let Some(focus) = preview.focus
-                {
-                    // land the hit a few lines below the top edge, with the
-                    // context above it visible
-                    area = area.vertical_scroll_offset(focus.saturating_sub(6) as f32 * line_h);
-                }
-                area.show_rows(ui, line_h, lines.len(), |ui, range| {
-                    for l in &lines[range] {
-                        let mut job = egui::text::LayoutJob::default();
-                        job.append(
-                            &format!("{:>5} ", l.no),
-                            0.0,
-                            egui::TextFormat {
-                                font_id: FontId::monospace(11.5),
-                                color: dim.gamma_multiply(if l.hit { 1.0 } else { 0.55 }),
-                                ..Default::default()
-                            },
-                        );
-                        push_marked_mono(&mut job, &l.text, &l.ranges, 11.5, text_color, accent);
-                        job.wrap = one_line(ui.available_width());
-                        let galley = ui.painter().layout_job(job);
-                        let (rect, _) = ui.allocate_exact_size(
-                            Vec2::new(ui.available_width(), line_h),
-                            Sense::hover(),
-                        );
-                        if l.hit {
-                            ui.painter()
-                                .rect_filled(rect, 2.0, accent.gamma_multiply(0.16));
-                        }
-                        ui.painter().galley(rect.min, galley, text_color);
-                    }
-                });
-            }
-            PreviewBody::Screen(rows) => {
-                // a terminal screen is 80+ monospace columns wide and
-                // cannot wrap: it scrolls sideways inside the pane rather
-                // than widening it (see navigator::preview_scroll)
-                super::navigator::preview_scroll(ui, "tg-picker-screen", |ui| {
-                    for r in rows {
-                        ui.label(
-                            egui::RichText::new(r.as_str())
-                                .monospace()
-                                .size(11.0)
-                                .color(text_color),
-                        );
-                    }
-                });
-            }
-            PreviewBody::Node(id) => {
-                // a name match, a folder, a picture: the pane shows exactly
-                // what walking to it would show
-                if let Some(j) = self.preview_column(ui, *id, false) {
-                    // a link clicked inside the preview is a jump, and a
-                    // jump ends the search like taking a result does
-                    self.selected = Some(j);
-                    self.frame_node(j);
-                    self.picker.close();
-                }
-            }
-            PreviewBody::Note(note) => {
-                ui.label(egui::RichText::new(note.as_str()).color(dim));
-            }
-        }
-        self.picker.preview = Some(Preview {
-            scroll: false,
-            ..preview
-        });
-    }
 }
 
 /// One-line, ellipsized text wrapping for a row of the given width.
@@ -1348,7 +1301,7 @@ fn push_marked(
     );
 }
 
-fn push_marked_mono(
+pub(super) fn push_marked_mono(
     job: &mut egui::text::LayoutJob,
     text: &str,
     ranges: &[search::Range],

@@ -482,7 +482,7 @@ fn a_reload_keeps_the_query_cursor_content_hits_and_preview() {
         .iter()
         .filter(|r| r.snippet.is_some())
         .count();
-    assert!(h.state().picker.preview.is_some(), "a preview is loaded");
+    assert!(h.state().pane_preview.is_some(), "a preview is loaded");
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let rebuilt = graph::build(vault::scan(&root).expect("rescan"));
@@ -505,7 +505,7 @@ fn a_reload_keeps_the_query_cursor_content_hits_and_preview() {
         "content hits survive the reload — they are keyed by path"
     );
     assert!(
-        h.state().picker.preview.is_some(),
+        h.state().pane_preview.is_some(),
         "and the preview is not thrown away"
     );
 }
@@ -540,9 +540,14 @@ fn picker_ui_renders_prompt_results_and_preview() {
         h.query_by_label_contains("result").is_some(),
         "the status line reports the match count"
     );
+    // the header names the file and gives its path as clickable ancestors
     assert!(
-        h.query_by_label_contains("topics/grafér.md").is_some(),
+        h.query_by_label_contains("Grafér").is_some(),
         "the preview header names the previewed file"
+    );
+    assert!(
+        h.query_by_label_contains("topics").is_some(),
+        "…and its breadcrumb, which is what the ranger's header used to be"
     );
 }
 

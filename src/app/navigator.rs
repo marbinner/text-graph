@@ -1,12 +1,14 @@
-//! The side pane, in its two modes. Browsing (the ranger): breadcrumb,
-//! sibling column with the cursor, preview column (markdown / dir listing
-//! / ghost backrefs), connections strip. Searching: the highlighted
-//! result's preview, while the prompt and its results float over the
-//! canvas (see `picker.rs`). Both modes share `preview_column` — which is
-//! therefore the one place markdown renders, and so the one place that
-//! claims `tg://` link clicks — and keyboard walking lives in handle_keys.
+//! The side pane: ONE previewer, for whatever is current. The finder's
+//! highlighted row while it is open, else the selection — the chooser
+//! decides the subject, the pane draws it, and there is no second "what is
+//! this file" surface to drift out of sync. Header (glyph, name, clickable
+//! breadcrumb, size · age), body (`preview_column` — the one place
+//! markdown renders and so the one place `tg://` clicks are claimed), and
+//! the selection's connections strip along the bottom. Choosing lives in
+//! `picker.rs`; keyboard walking lives in handle_keys.
 
 use super::*;
+use picker::{Preview, PreviewBody, one_line, push_marked_mono};
 
 /// A preview body scrolls in BOTH directions with its layout width pinned
 /// to the pane. Prose still wraps where the pane ends, while a wide
@@ -34,7 +36,7 @@ pub(super) fn preview_scroll<R>(
 /// through this, for the same reason: an over-long filename is content
 /// that would otherwise widen the pane.
 fn clipped(mut job: egui::text::LayoutJob, w: f32) -> egui::text::LayoutJob {
-    job.wrap = super::picker::one_line(w);
+    job.wrap = one_line(w);
     job
 }
 
@@ -277,143 +279,186 @@ impl Viewer {
         v
     }
 
-    /// The pane, in whichever mode applies: previewing the highlighted
-    /// search result (the prompt and its result list float over the canvas
-    /// — see `picker_overlay_ui`), or the ranger. A search with an empty
-    /// query IS the ranger, and with nothing selected the ranger falls back
-    /// to the vault root, so `f` never opens onto a blank pane.
+    /// The pane draws whatever `sync_pane_preview` (in the picker pump)
+    /// decided the current subject is.
     pub(super) fn side_pane(&mut self, ui: &mut egui::Ui) {
-        if self.picker.searching() {
-            self.picker_preview_ui(ui);
-        } else if let Some(sel) = self
-            .selected
-            .or_else(|| self.picker.open.then_some(self.g.root))
+        self.preview_pane(ui);
+    }
+
+    /// THE previewer. Whatever the pane is about — a finder result, the
+    /// selection, a terminal pane — arrives here as one `Preview` and is
+    /// drawn one way. Two choosers used to mean two previews that drifted
+    /// apart; now the chooser only decides the subject.
+    fn preview_pane(&mut self, ui: &mut egui::Ui) {
+        let Some(preview) = self.pane_preview.take() else {
+            return;
+        };
+        let dim = self.theme.text;
+        ui.add_space(2.0);
+        let mut jump = self.preview_header(ui, &preview);
+        ui.add_space(3.0);
+        let accent = self.theme.select;
+        let text_color = self.theme.file;
+        match &preview.body {
+            PreviewBody::Text(lines) => {
+                // measure one line rather than asking Fonts for a row
+                // height — `ui.fonts()` hands out a read-only view
+                let line_h = ui
+                    .painter()
+                    .layout_no_wrap("0".into(), FontId::monospace(11.5), dim)
+                    .size()
+                    .y;
+                let mut area = egui::ScrollArea::vertical()
+                    .id_salt("tg-picker-preview")
+                    .auto_shrink([false, false]);
+                if preview.scroll
+                    && let Some(focus) = preview.focus
+                {
+                    // land the hit a few lines below the top edge, with the
+                    // context above it visible
+                    area = area.vertical_scroll_offset(focus.saturating_sub(6) as f32 * line_h);
+                }
+                area.show_rows(ui, line_h, lines.len(), |ui, range| {
+                    for l in &lines[range] {
+                        let mut job = egui::text::LayoutJob::default();
+                        job.append(
+                            &format!("{:>5} ", l.no),
+                            0.0,
+                            egui::TextFormat {
+                                font_id: FontId::monospace(11.5),
+                                color: dim.gamma_multiply(if l.hit { 1.0 } else { 0.55 }),
+                                ..Default::default()
+                            },
+                        );
+                        push_marked_mono(&mut job, &l.text, &l.ranges, 11.5, text_color, accent);
+                        job.wrap = one_line(ui.available_width());
+                        let galley = ui.painter().layout_job(job);
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), line_h),
+                            Sense::hover(),
+                        );
+                        if l.hit {
+                            ui.painter()
+                                .rect_filled(rect, 2.0, accent.gamma_multiply(0.16));
+                        }
+                        ui.painter().galley(rect.min, galley, text_color);
+                    }
+                });
+            }
+            PreviewBody::Screen(rows) => {
+                // a terminal screen is 80+ monospace columns wide and
+                // cannot wrap: it scrolls sideways inside the pane rather
+                // than widening it (see navigator::preview_scroll)
+                super::navigator::preview_scroll(ui, "tg-picker-screen", |ui| {
+                    for r in rows {
+                        ui.label(
+                            egui::RichText::new(r.as_str())
+                                .monospace()
+                                .size(11.0)
+                                .color(text_color),
+                        );
+                    }
+                });
+            }
+            PreviewBody::Node(id) => {
+                // a note, a folder, a picture: rendered markdown / listing /
+                // thumbnail, and the one place tg:// clicks are claimed
+                jump = self.preview_column(ui, *id, !self.picker.open).or(jump);
+            }
+            PreviewBody::Note(note) => {
+                ui.label(egui::RichText::new(note.as_str()).color(dim));
+            }
+        }
+        // the connections strip belongs to the SELECTION — ] and [ walk it
+        // by index, and while the finder is open the pane is showing
+        // somebody else's node
+        if !self.picker.open
+            && let Some(sel) = preview.subject.filter(|id| Some(*id) == self.selected)
         {
-            self.navigator_body(ui, sel);
+            jump = self.connections_strip(ui, sel).or(jump);
+        }
+        self.pane_preview = Some(Preview {
+            scroll: false,
+            ..preview
+        });
+        if let Some(j) = jump {
+            // a click inside the pane is a jump: it takes the selection,
+            // frames it, and ends a search the way taking a result does
+            self.selected = Some(j);
+            self.frame_node(j);
+            self.nav_scroll = true;
+            self.conn_cursor = None;
+            if self.picker.open {
+                self.picker.close();
+            }
         }
     }
 
-    /// The ranger: breadcrumb, sibling column with the cursor, preview
-    /// column, connections strip. Keyboard walking happens in `handle_keys`
-    /// (hjkl / gg / G while a node is selected); this renders the state and
-    /// accepts clicks.
-    fn navigator_body(&mut self, ui: &mut egui::Ui, sel: NodeId) {
-        // Owned copies so the panel closures below can borrow self freely.
-        // (The body itself is loaded by `preview_column`, which the search
-        // mode shares.)
-        let (display, sub, parent) = {
-            let node = self.g.node(sel);
-            let sub = if node.path.is_empty() {
-                node.name.clone()
-            } else {
-                node.path.clone()
-            };
-            (node.display_name().to_string(), sub, node.parent)
-        };
-
-        ui.add_space(6.0);
-        let mut jump: Option<NodeId> = None;
-
-        // breadcrumb: clickable ancestors, root first
-        let mut chain: Vec<NodeId> = Vec::new();
-        let mut cur = parent;
-        while let Some(p) = cur {
-            chain.push(p);
-            cur = self.g.node(p).parent;
-        }
-        chain.reverse();
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 3.0;
-            for a in &chain {
-                let name = self.g.node(*a).display_name().to_string();
-                if ui
-                    .link(egui::RichText::new(name).color(self.theme.dir))
-                    .clicked()
-                {
-                    jump = Some(*a);
+    /// The header every preview wears: file-type glyph, name, the path as
+    /// clickable ancestors, and size · age. The breadcrumb is what the
+    /// ranger's own header used to be — the one piece of its chrome that
+    /// belongs with "what is this file" rather than with choosing one.
+    fn preview_header(&mut self, ui: &mut egui::Ui, preview: &Preview) -> Option<NodeId> {
+        let dim = self.theme.text;
+        let mut jump = None;
+        match preview.subject {
+            Some(id) => {
+                let mut chain: Vec<NodeId> = Vec::new();
+                let mut cur = self.g.node(id).parent;
+                while let Some(p) = cur {
+                    chain.push(p);
+                    cur = self.g.node(p).parent;
                 }
-                ui.label(egui::RichText::new("/").weak());
+                chain.reverse();
+                let (glyph, color) = self.node_icon(id);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    ui.label(icon_label(
+                        glyph,
+                        color,
+                        &preview.title,
+                        ui.visuals().strong_text_color(),
+                        14.0,
+                    ));
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    for a in &chain {
+                        let name = self.g.node(*a).display_name().to_string();
+                        if ui
+                            .link(egui::RichText::new(name).small().color(self.theme.dir))
+                            .clicked()
+                        {
+                            jump = Some(*a);
+                        }
+                        ui.label(egui::RichText::new("/").small().weak());
+                    }
+                    if chain.is_empty() {
+                        ui.label(egui::RichText::new(&preview.subtitle).small().color(dim));
+                    }
+                });
             }
-            let (glyph, color) = self.node_icon(sel);
-            ui.label(icon_label(
-                glyph,
-                color,
-                &display,
-                ui.visuals().strong_text_color(),
-                14.0,
-            ));
-        });
-        ui.label(
-            egui::RichText::new(sub.as_str())
-                .small()
-                .color(self.theme.text),
-        );
-        ui.separator();
+            None => {
+                ui.label(egui::RichText::new(&preview.title).strong().size(14.0));
+                ui.label(egui::RichText::new(&preview.subtitle).small().color(dim));
+            }
+        }
+        if !preview.meta.is_empty() {
+            ui.label(egui::RichText::new(&preview.meta).small().color(dim));
+        }
+        jump
+    }
 
-        // ranger columns: siblings (cursor) | preview of the selection
-        let sibs: Vec<NodeId> = match parent {
-            Some(p) => self.g.node(p).children.clone(),
-            None => vec![sel], // root (and ghosts): a list of one
-        };
-        // connections computed up front: the columns must leave the strip
-        // its room, or their greedy scroll areas push it off-panel
+    /// Everything this node touches, color-coded and clickable (blue ▸
+    /// child folder, gray ▸ child file, amber → outgoing, purple ←
+    /// incoming). `]` / `[` walk the highlight, Enter / l follows it.
+    fn connections_strip(&mut self, ui: &mut egui::Ui, sel: NodeId) -> Option<NodeId> {
+        let mut jump = None;
+        // Entry order MUST match connections() — ] and [ index this list.
         let kids: Vec<NodeId> = self.g.node(sel).children.clone();
         let outs: Vec<NodeId> = self.g.outlinks(sel).map(|l| l.to).collect();
         let backs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
-        let has_conn = !(kids.is_empty() && outs.is_empty() && backs.is_empty());
-        let strip_h = if has_conn { 122.0 } else { 0.0 };
-        let col_h = (ui.available_height() - strip_h).max(120.0);
-        ui.allocate_ui(egui::vec2(ui.available_width(), col_h), |ui| {
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                ui.vertical(|ui| {
-                    // the sibling column takes a SHARE of the pane, so
-                    // dragging the pane narrower shrinks it instead of
-                    // squeezing the preview out
-                    ui.set_width((ui.available_width() * 0.36).clamp(110.0, 200.0));
-                    egui::ScrollArea::vertical()
-                        .id_salt("nav-sibs")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for c in &sibs {
-                                let n = self.g.node(*c);
-                                let is_dir = n.kind == NodeKind::Dir;
-                                let label = if is_dir {
-                                    format!("{}/", n.display_name())
-                                } else {
-                                    n.display_name().to_string()
-                                };
-                                let (glyph, color) = self.node_icon(*c);
-                                let text_color = if is_dir {
-                                    self.theme.dir
-                                } else {
-                                    ui.visuals().text_color()
-                                };
-                                let job = icon_label(glyph, color, &label, text_color, 12.5);
-                                let resp = ui.selectable_label(
-                                    *c == sel,
-                                    clipped(job, ui.available_width()),
-                                );
-                                if *c == sel && self.nav_scroll {
-                                    resp.scroll_to_me(Some(egui::Align::Center));
-                                }
-                                if resp.clicked() {
-                                    jump = Some(*c);
-                                }
-                            }
-                        });
-                });
-                ui.separator();
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    jump = self.preview_column(ui, sel, true).or(jump);
-                });
-            });
-        });
-        // ---- connections strip: everything this node touches, color-coded
-        // (blue ▸ child folder, gray ▸ child file, amber → outgoing link,
-        // purple ← incoming link). Clickable; ] / [ walk the highlight,
-        // Enter / l follows it. Entry order MUST match connections().
-        if has_conn {
+        if !(kids.is_empty() && outs.is_empty() && backs.is_empty()) {
             let plain = |text: String, color: egui::Color32| {
                 let mut job = egui::text::LayoutJob::default();
                 job.append(
@@ -487,11 +532,6 @@ impl Viewer {
                 });
         }
         self.nav_scroll = false;
-        if let Some(j) = jump {
-            self.selected = Some(j);
-            self.frame_node(j);
-            self.nav_scroll = true;
-            self.conn_cursor = None;
-        }
+        jump
     }
 }
