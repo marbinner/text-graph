@@ -689,8 +689,8 @@ impl Viewer {
         self.picker.names_for = Some(self.picker.query.clone());
         let mut scores: Vec<Option<u32>> = vec![None; self.g.nodes.len()];
         let mut rows: Vec<Row> = Vec::new();
-        // an empty prompt leaves the ranger in place, so there is nothing
-        // to rank and nothing to light on the canvas
+        // an empty prompt lists what changed last, which is not a match
+        // of anything: nothing to rank, nothing to light on the canvas
         if Query::parse(&self.picker.query).is_empty() {
             self.picker.name_scores = scores;
             self.picker.name_rows = rows;
@@ -876,7 +876,7 @@ impl Viewer {
     }
 
     /// Walk into a folder (Enter on a directory row) — the list becomes
-    /// its entries and the filter starts over, like `l` in the ranger.
+    /// its entries and the filter starts over.
     fn browse_into(&mut self, id: NodeId) {
         let path = self.g.node(id).path.clone();
         self.picker.browse(path);

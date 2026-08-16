@@ -2219,10 +2219,11 @@ impl eframe::App for Viewer {
             self.handle_keys(ui);
         }
         self.pump_picker(ui.ctx());
-        // ONE side pane: the ranger, or the search that filters it. The
-        // canvas keeps the rest of the window either way, and `canvas()`
-        // compensates the camera as the pane widens, so the highlighted
-        // result glides into what stays visible.
+        // ONE side pane, previewing whatever is current: the finder's
+        // highlighted row, else the selection. The canvas keeps the rest
+        // of the window either way, and `canvas()` compensates the camera
+        // as the pane widens, so the highlighted result glides into what
+        // stays visible.
         if self.selected.is_some() || self.picker.open {
             self.side_panel(ui);
         }

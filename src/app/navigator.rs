@@ -148,8 +148,8 @@ impl Viewer {
     /// a note, the picture for an image, raw head for a text asset, listing
     /// for a folder, referrers for ghosts and web nodes. Returns a node to
     /// jump to when the user clicks a link inside it. `acting` shows the
-    /// open-in-editor button — the ranger has an Enter/l for it, the picker
-    /// does not (its Enter takes the result instead).
+    /// open-in-editor button — a selected node's Enter does that, while
+    /// the finder's Enter takes the result instead.
     pub(super) fn preview_column(
         &mut self,
         ui: &mut egui::Ui,
@@ -478,7 +478,7 @@ impl Viewer {
 
     /// The header every preview wears: file-type glyph, name, the path as
     /// clickable ancestors, and size · age. The breadcrumb is what the
-    /// ranger's own header used to be — the one piece of its chrome that
+    /// ranger's own header used to be, the one piece of its chrome that
     /// belongs with "what is this file" rather than with choosing one.
     fn preview_header(&mut self, ui: &mut egui::Ui, preview: &Preview) -> Option<NodeId> {
         let dim = self.theme.text;
