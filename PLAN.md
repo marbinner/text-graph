@@ -1,6 +1,6 @@
 # text-graph — Plan
 
-*Last updated 2026-08-15 (v0.3.0, 146 tests). Where to pick up: milestone F
+*Last updated 2026-08-16 (v0.3.0, 268 tests). Where to pick up: milestone F
 (agents talk) is fully spec'd below — design converged, NO code yet; start at
 slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
 step 0, the audit backlog under D. The 2026-08-15 feature wave: asset
@@ -14,7 +14,11 @@ fixes. Same evening: a 7-lens adversarial audit — 18 confirmed defects,
 14 fixed same-day (tmux `-c` format expansion, server-side paste
 bracketing, inotify overflow, keybind focus guard, mdview dest rewrite,
 unpin revert, and 8 hardening lows), 4 accepted — see "Audit
-2026-08-15" below.*
+2026-08-15" below. The 2026-08-16 three-pass audit then closed every
+confirmed finding, including preview confinement, bounded parsing/state/
+terminal work, async lifecycle cleanup, lossless native paths, terminal
+Unicode fidelity, locked/MSRV CI, a no-GUI core build, and process-level CLI
+coverage.*
 
 **Phase 1 (current):** a fast native GUI over a markdown vault. Point it at a folder of
 `.md` files and it renders an interactive graph. One native Rust binary — egui, no
@@ -454,9 +458,6 @@ walker, single-flight scans, byte-safe `%output` (split UTF-8 survives),
 scan failures keep the last pane snapshot, CI `--all-targets` + RustSec.
 Triaged and deliberately deferred:
 
-- **Output flood backpressure**: the event queue only grows while the UI
-  never repaints (minimized window) under a gap-free flood; a bounded fix
-  must resync via recapture or it corrupts screens. Revisit on symptoms.
 - **Thumbnail LRU/byte budget**: decodes are visibility-driven, so growth
   tracks what was actually viewed. Add budgets (and decoder dimension
   caps) when an image-heavy vault makes it real.
@@ -472,12 +473,32 @@ Triaged and deliberately deferred:
 - **URL-extractor edge cases** (uppercase scheme, `prefixhttps://`,
   trailing-paren balancing for Wikipedia URLs, uppercase `WWW.` dedup):
   queued cleanup pass for the weburl/extractor pair.
-- Non-UTF-8 filename identity, Unicode casefolding, combining marks in
-  cells, `$EDITOR` quoted args, AltGr/Alt-punct chords, full
-  `%begin`-identity validation, per-pane dead-state reconciliation, state
-  read-error clobber (mostly defused by unknown-line round-trip): accepted
-  or awaiting real-world symptoms — the E3 punch-list absorbs the input
-  ones.
+- Unicode casefolding, `$EDITOR` quoted args, AltGr/Alt-punct chords, full
+  `%begin`-identity validation, and per-pane dead-state reconciliation:
+  accepted or awaiting real-world symptoms — the E3 punch-list absorbs the
+  input ones.
+
+### Third audit (2026-08-16)
+
+Three independent read-only passes covered core graph/Markdown logic, the GUI
+and tmux lifecycle, and builds/tests. Every confirmed high, medium and low
+finding was fixed in its own focused commit. The remediation includes:
+
+- canonical vault confinement and byte limits for preview images; bounded
+  Markdown scanning/previews and linear, size-bounded view-state loading;
+- race-safe view-state saves, preservation of unreadable config, cancellation
+  and shutdown for search/discovery workers, bounded terminal queues and
+  per-frame pumping, retry backoff, and off-UI tmux lifecycle subprocesses;
+- per-occurrence wikilink rendering, qualified embed resolution, disjoint
+  virtual identities, collision-free native path identity, full terminal cell
+  text, centered long-line snippets, and authored URL label retention;
+- shared scanner/creation skip policy, fixture byte preconditions, Unix-only
+  test gates, locked dependency CI, Rust 1.95 MSRV CI, a no-GUI core/statistics
+  build, and process-level CLI coverage including non-UTF-8 vault paths.
+
+The final matrix passes formatting, strict all-target Clippy, the Rust 1.95
+all-target build, the no-default-features headless build, and 268 tests
+(library, GUI state machine, CLI, fixture, and real-tmux integration).
 
 ## Phase 2: the intelligence layer
 

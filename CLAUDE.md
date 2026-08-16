@@ -2,11 +2,14 @@
 
 ## Commands
 
-- `cargo test --all-targets` — unit + integration + examples (plain
+- `cargo test --locked --all-targets` — unit + integration + examples (plain
   `cargo test` skips example builds and has shipped a broken one; CI
   gates on --all-targets). Integration (`tests/fixture_vault.rs`)
   asserts the exact hand-counted numbers in `fixtures/EXPECTED.md`.
-- `cargo clippy --all-targets` — keep it at zero warnings.
+- `cargo clippy --locked --all-targets -- -D warnings` — keep it at zero warnings.
+- `cargo check --locked --no-default-features --lib --bin text-graph` — the
+  core library and statistics CLI must stay independent of the GUI stack.
+- `cargo +1.95.0 check --locked --all-targets` — verify the declared MSRV.
 - Gate chains on EXIT CODES, never on `grep`-ing output — grep returns 0
   when it MATCHES error lines, which once let a broken commit through.
 - `cargo fmt` before committing — CI gates on `cargo fmt -- --check`.
@@ -34,6 +37,10 @@
   iteration, or walk-order dependence anywhere that feeds NodeIds, layout,
   or output. There's a build-twice test that will catch you.
 - Dependencies are added at the milestone that needs them, not before.
+- The default `gui` feature owns eframe, notify, image decoding and source
+  highlighting. Core modules and the `stats` command must continue to compile
+  with `--no-default-features`; new GUI-only dependencies are optional and
+  included by `gui` explicitly.
 - Never mutate `fixtures/vault/` from a running-app smoke test — copy it to
   the scratchpad first.
 
@@ -84,6 +91,8 @@
   `light` is `Option<bool>` because absent ≠ dark, and `load_or_migrate`
   writes the config only when it actually carried something over, or the
   first vault opened would lock every other vault's migration out.
+  A config read error is NOT a missing config: propagate/report it and never
+  migrate or save defaults over unreadable user data.
   `save_config` no-ops under `cfg!(test)`: headless tests must never write
   the real user config.
 - `app/settings.rs` renders the registry, not the individual settings — the
@@ -116,13 +125,20 @@
   trailing `^block-ids` → gone, `#tags` → code chips) — Obsidian-flavored
   input, CommonMark output, because the renderer only speaks CommonMark;
   relative markdown dests resolve against the SOURCE note's directory
-  (standard markdown semantics) and must never escape the vault —
-  absolute and `..`-escaping dests stay untouched, or a preview could
-  mint `file://` URLs outside it. The pane's `preview_column`
+  (standard markdown semantics). Image destinations are untrusted: only
+  `safe_image_url` may mint `file://`, after canonicalizing both target and
+  vault, proving the target is a regular in-vault file, and enforcing the
+  image byte limit. Authored schemes (especially `file://`), absolute or
+  `..`-escaping paths, symlink escapes, non-files and oversized images must
+  be neutralized, never remain active image syntax. Standard Markdown images
+  use the blocked placeholder; an unsafe Obsidian embed may remain inert
+  literal text. The pane's `preview_column`
   intercepts `tg://` OpenUrl commands and jumps instead of opening a
   browser — keep that interception where the markdown is rendered, or
   wikilink clicks leak to the OS.
-  Only the bin's `app/` tree touches egui. Its layout: `mod.rs` = Viewer +
+  Only the bin's `app/` tree touches egui. `highlight` and `thumb` remain
+  egui-free but are compiled only by the `gui` feature. The app layout:
+  `mod.rs` = Viewer +
   camera/canvas painting + key dispatch; `picker.rs` = the finder (state,
   keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
@@ -141,7 +157,13 @@
 - Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
   never send size hints (`set_size`) or `resize-window` to sessions we
   didn't create (it would reflow the user's real terminal view). The corner
-  resize grip exists only on `ours` (`@tg_owner=text-graph`) cards for exactly this reason. Special keys go as tmux key NAMES
+  resize grip exists only on `ours` (`@tg_owner=text-graph`) cards for exactly
+  this reason. The reader-to-UI event channel is bounded and
+  `SessionMirror::pump` has a fixed event budget; reaching the budget schedules
+  another frame rather than draining forever. A full queue backpressures the
+  reader instead of growing memory without bound. `TermCell.text` retains the
+  cell's complete contents, including combining characters; wide continuations
+  are empty cells and are skipped only while painting. Special keys go as tmux key NAMES
   (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
   (quoting-proof); PASTES go through tmux's buffer machinery
   (`keys::paste_cmds`: octal-escaped `set-buffer` + `paste-buffer -p`) so
@@ -160,8 +182,9 @@
   for a pane's lifetime (tool calls flip pane_current_command to bash for
   arbitrarily long) and pinned to the pane's root pid (pane ids restart at
   %0 on a new tmux server); GRACE only governs remembering vanished panes.
-  The control-mode reader must consume BYTES (read_until + lossy), never
-  read_line — panes emit raw >=0x80 bytes and an Err would kill the mirror.
+  The control-mode reader must consume BYTES (`read_until` + `parse_bytes`),
+  never `read_line` — panes emit raw >=0x80 bytes and an Err would kill the
+  mirror; `%output` payloads stay bytes until the vt100 parser receives them.
   tmux octal-escapes non-printables in FORMAT output (`-F` with a 0x1f
   separator comes back as literal "\037" text; tab passes raw) — any scan
   format change must be verified against a real server, e.g. with
@@ -169,7 +192,10 @@
   `card_anchor`: the session's `@tg_anchor` tmux user option (a
   vault-relative path — edit sessions pin to their FILE node; the binding
   lives in tmux so it survives viewer restarts) when it resolves, else the
-  nearest dir at the pane's cwd.
+  nearest dir at the pane's cwd. Discovery owns a stop channel and join handle;
+  destroying a viewer must stop and join its polling thread. Failed mirrors
+  back off before reattach, including failures reported asynchronously by an
+  `Exit` event.
 - Card interaction contract: Tab / Shift+Tab step the terminal CURSOR
   through `terms.cards_in_order()` (session, then pane NUMBER — `%10`
   sorts before `%2` as a string, and discovery order isn't sorted),
@@ -270,7 +296,9 @@
   Esc can leave you where you were. Taking a TERMINAL result recenters
   without touching zoom (`fly_to_card_at(.., false)`): a focused card is
   readable at any zoom, and only the double-click gesture means "take me
-  INTO this terminal".
+  INTO this terminal". Editing a query immediately retires the previous scan,
+  before debounce; live terminal generation changes invalidate terminal rows
+  so an open finder never displays stale screen matches.
 - A live search must survive vault RELOADS, which land every few seconds
   under working agents. Content hits are therefore keyed by PATH, never
   by node index (reloads renumber the arena); a reload re-scores the name
@@ -360,11 +388,13 @@
   moves and reloads clear it (stale indexes point into the old graph).
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
-- Node bodies are never held whole in memory; the detail pane reads the
-  selected file on demand (`vault::read_body`), and the canvas zoom
-  previews cache only small stamped excerpts (`previews.rs`).
-- Cross-reload identity is `graph::Node::ident` (ghosts namespaced as
-  `[[target]]` because their "path" is raw target text).
+- Node bodies are never held whole in memory. Markdown scanning reads an
+  8 MiB prefix, `vault::read_body` reads a 1 MiB preview prefix and appends a
+  truncation notice, and canvas previews cache smaller stamped excerpts.
+- Cross-reload identity is `graph::Node::ident`: real nodes use the lossless
+  `vault::path_key`, while ghosts and web nodes use distinct NUL-prefixed
+  namespaces. The identity string is opaque; never reconstruct an OS path from
+  a display path or an identity key.
 - View state persists to `<vault>/.text-graph/view` (state.rs). The dot-dir
   is hidden, so the walker and the reload watcher are blind to it — saves
   can never cause reload loops; keep it that way. Card arrangements are
@@ -373,13 +403,17 @@
   arrangement. Saves are debounced (3s heartbeat repaint keeps them running
   once the sim settles) and the file is sorted for determinism. The file is
   UNTRUSTED input: restores clamp (center/offsets like zoom), dedup
-  (card/pin lines), allowlist-validate the migrated default agent (it runs
+  (card/pin lines), reject files over 1 MiB, parse duplicate records with hash
+  sets rather than quadratic scans, allowlist-validate the migrated default agent (it runs
   through `sh -c` on one keypress — that check now lives in
   `config::migrate`), and carry unknown line KINDS through
   load→save verbatim (`ViewState::unknown`) — the first save lands ~3s
   after open, so anything from_text drops, a newer version loses; for the
-  same reason saves REFUSE a symlinked `.text-graph`/`view.tmp` (a
-  hostile vault could redirect the write). Unpinning purges the session's
+  same reason saves use a private create-only temporary file and rename. Unix
+  mutations are relative to an `O_NOFOLLOW` directory descriptor, so a hostile
+  vault cannot win a check/use symlink race and redirect the write. Concurrent
+  viewers may race only at the final rename: the last complete snapshot wins.
+  Unpinning purges the session's
   `parked_pins` surplus, or claim() re-pins it next frame.
 
 ## egui 0.36 gotchas (cost us compile time already)

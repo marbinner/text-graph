@@ -265,6 +265,32 @@ dead file watcher, a failed reload, a tmux session that won't mirror — a
 **⚠ badge** appears in the corner; click it for the health list (entries
 jump to the affected note).
 
+### Safety and bounded work
+
+Vault contents and saved state are treated as untrusted input:
+
+- Markdown extraction reads at most 8 MiB from a note, and rendered note
+  previews read at most 1 MiB. Larger notes remain graph nodes, with a visible
+  truncation notice in the preview.
+- Images embedded in Markdown previews accept only canonical regular files
+  inside the canonical vault, capped at 64 MiB. Authored `file://` images,
+  absolute or escaping paths, symlinks out of the vault, devices, and oversized
+  images are neutralized instead of reaching the generic file loader.
+- Filesystem operations retain native paths rather than reconstructing them
+  from display text. On Unix, distinct non-UTF-8 filenames remain distinct and
+  can still be searched, previewed, edited, and passed to tmux.
+- View-state input is size-bounded and parsed in linear time. Saves use a
+  private create-only temporary file followed by rename; Unix saves also use
+  no-follow, directory-relative operations. An unreadable user config is
+  reported rather than treated as missing and overwritten by migration.
+- Terminal events use a bounded queue and a fixed per-frame processing budget.
+  Discovery, attach retries, and launch/kill work are also bounded or moved off
+  the UI thread, so a noisy or unhealthy tmux server cannot monopolize a frame.
+
+Creation helpers also refuse overwrites, symlinked destination directories,
+and subtrees such as `target/` or `node_modules/` that the scanner deliberately
+prunes.
+
 ## Creating from the graph
 
 Right-click is the creation surface; everything lands relative to the node
@@ -399,7 +425,7 @@ or too spread for your vault, those are the dials.
 src/
   vault.rs    walk + frontmatter/wikilink/URL extraction (per-file, no global state)
   filetype.rs extension classification: textual? which icon glyph and color?
-  mdview.rs   Obsidian-flavor markdown rewrite ([[links]] → tg://, embeds → file://)
+  mdview.rs   Obsidian-flavor rewrite; vault-confined local image loading
   resolve.rs  Obsidian-style link resolution (stems → aliases → ghosts)
   create.rs   new note/folder: path validation + create-only fs writes
   graph.rs    arena: typed nodes, Contains tree, overlay links
@@ -409,12 +435,12 @@ src/
   config.rs   per-user preferences: one registry the file, the settings
               window and the clamps are all derived from
   stats.rs    headless statistics (`stats` subcommand)
-  thumb.rs    image file → downscaled RGBA pixels (headless decode)
+  thumb.rs    [gui feature] image file → downscaled RGBA pixels
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, owner marker, grace) + launch
   keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
-  highlight.rs syntect colouring for the source view, as plain RGB spans
+  highlight.rs [gui feature] syntect source colouring as plain RGB spans
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
               scanning (streamed from disk, never indexed), ranked rows
   app/        egui shell: transform, input, painting, reload worker,
@@ -446,8 +472,11 @@ The statistics CLI can be built without the native GUI stack:
 
 ```
 cargo run --no-default-features -- stats <vault-path>
-cargo test --all-targets   # unit + integration (asserts fixtures/EXPECTED.md exactly)
-cargo clippy --all-targets
+cargo fmt -- --check
+cargo check --locked --no-default-features --lib --bin text-graph
+cargo +1.95.0 check --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
 ```
 
 A suite of integration tests runs against a real tmux on a private socket
@@ -456,7 +485,8 @@ path end-to-end, native resize propagation, and agent launching. The
 mirror's protocol layer (reply correlation, capture replay, cursor
 restore) is additionally unit-tested without tmux, and the keyboard state
 machine (modal hjkl, Esc ordering, link walking, the picker) is driven
-through a headless egui harness (`egui_kittest`).
+through a headless egui harness (`egui_kittest`). Process-level CLI tests cover
+help, version, usage errors, fixture statistics, and non-UTF-8 vault paths.
 
 House rules: if you touch `fixtures/vault/`, re-count `fixtures/EXPECTED.md`
 and update the tests in the same commit — the numbers are asserted exactly.
