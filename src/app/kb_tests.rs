@@ -1040,6 +1040,35 @@ fn restore_defaults_reapplies_cached_settings() {
     );
 }
 
+/// Editing the extra-agent list updates the already-running discovery
+/// thread's shared allowlist; it must not require an application restart.
+#[test]
+fn extra_agents_setting_updates_live_discovery() {
+    let mut h = harness();
+    assert!(
+        !h.state()
+            .terms
+            .allowlist
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|agent| agent == "my-live-agent")
+    );
+
+    h.state_mut().cfg.extra_agents = "my-live-agent".into();
+    h.state_mut().after_change("extra_agents");
+
+    assert!(
+        h.state()
+            .terms
+            .allowlist
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|agent| agent == "my-live-agent")
+    );
+}
+
 /// Content search off makes the picker a name/alias/path finder — no
 /// worker, no snippets — while name matching keeps working.
 #[test]

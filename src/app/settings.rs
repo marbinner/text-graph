@@ -119,6 +119,9 @@ impl Viewer {
             "content_search" | "search_max_kb" => {
                 self.picker.search_config_changed(self.cfg.content_search)
             }
+            "extra_agents" => {
+                *self.terms.allowlist.lock().unwrap() = self.cfg.agent_choices();
+            }
             _ => {}
         }
     }

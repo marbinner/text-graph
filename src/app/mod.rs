@@ -672,6 +672,7 @@ impl Viewer {
         let cam = vs.camera;
         let show_web = !vs.hide_web;
         let theme = Theme::get(cfg.light);
+        let agent_allowlist = cfg.agent_choices();
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
         for c in vs.cards {
             // clamp like the camera below: a corrupt offset would park the
@@ -739,7 +740,7 @@ impl Viewer {
             config_error: None,
             diag_open: false,
             dir_by_path,
-            terms: terminals::Terminals::new(restore_offsets, restore_pins),
+            terms: terminals::Terminals::new(restore_offsets, restore_pins, agent_allowlist),
             thumbs: images::Thumbs::new(),
             previews: previews::Previews::default(),
             saved_state: None,

@@ -14,6 +14,9 @@ pub(super) struct Terminals {
     /// Latest unexpected tmux discovery failure. The scanner keeps retrying
     /// and clears this only after a successful poll.
     pub(super) discovery_error: Arc<Mutex<Option<String>>>,
+    /// Commands eligible for foreign-pane discovery. Settings replace this
+    /// shared snapshot while the long-lived scanner thread is running.
+    pub(super) allowlist: Arc<Mutex<Vec<String>>>,
     pub(super) panes: Vec<AgentPane>,
     pub(super) mirrors: HashMap<String, SessionMirror>,
     /// Sessions whose last mirror attach failed, with the failure time —
@@ -75,10 +78,12 @@ impl Terminals {
     pub(super) fn new(
         parked: HashMap<String, Vec<(String, Vec2)>>,
         parked_pins: HashMap<String, Vec<(String, ())>>,
+        allowlist: Vec<String>,
     ) -> Self {
         Terminals {
             seen: Arc::new(Mutex::new(Vec::new())),
             discovery_error: Arc::new(Mutex::new(None)),
+            allowlist: Arc::new(Mutex::new(allowlist)),
             panes: Vec::new(),
             mirrors: HashMap::new(),
             attach_backoff: HashMap::new(),
@@ -607,9 +612,9 @@ impl Viewer {
     pub(super) fn start_agent_scan(&self, ctx: egui::Context) {
         let shared = self.terms.seen.clone();
         let discovery_error = self.terms.discovery_error.clone();
+        let allowlist = self.terms.allowlist.clone();
         let root = self.root.clone();
         std::thread::spawn(move || {
-            let allow = agents::default_allowlist();
             let mut tracker = agents::Tracker::new();
             let mut failing_since: Option<Instant> = None;
             loop {
@@ -626,6 +631,7 @@ impl Viewer {
                         if update_discovery_error(&discovery_error, None) {
                             ctx.request_repaint();
                         }
+                        let allow = allowlist.lock().unwrap().clone();
                         publish(tracker.update(&panes, &allow, Instant::now()));
                     }
                     // a transient scan failure (server dying/wedged) keeps
@@ -1400,7 +1406,7 @@ mod tests {
             "tg_claude".to_string(),
             vec![("%1".to_string(), ()), ("%2".to_string(), ())],
         )]);
-        let mut t = Terminals::new(HashMap::new(), parked_pins);
+        let mut t = Terminals::new(HashMap::new(), parked_pins, Vec::new());
         let live = vec![key.clone()];
         state::claim(&mut t.pinned, &mut t.parked_pins, &live);
         assert!(t.pinned.contains_key(&key), "restore pins the survivor");
@@ -1452,7 +1458,7 @@ mod tests {
 
     #[test]
     fn pinned_cards_count_as_expanded() {
-        let mut t = Terminals::new(HashMap::new(), HashMap::new());
+        let mut t = Terminals::new(HashMap::new(), HashMap::new(), Vec::new());
         let key = ("tg_a".to_string(), "%1".to_string());
         assert!(!t.is_expanded(&key));
         t.pinned.insert(key.clone(), ());
