@@ -101,7 +101,7 @@ impl Viewer {
     /// The settings that aren't read straight off `self.cfg` each frame.
     /// Everything else is live by construction — the canvas asks the config
     /// while it paints.
-    fn after_change(&mut self, key: &str) {
+    pub(super) fn after_change(&mut self, key: &str) {
         match key {
             // the pane caches its preview by subject, and the subject
             // hasn't changed — only the way it should be read
@@ -115,6 +115,9 @@ impl Viewer {
             "node_scale" => {
                 let radius = Viewer::derived(&self.g, self.cfg.node_scale).radius;
                 self.radius = radius;
+            }
+            "content_search" | "search_max_kb" => {
+                self.picker.search_config_changed(self.cfg.content_search)
             }
             _ => {}
         }
@@ -401,6 +404,20 @@ impl Viewer {
         }
     }
 
+    /// Replace every known preference while preserving forward-compatible
+    /// unknown fields, then apply every registered live side effect.
+    pub(super) fn restore_default_settings(&mut self) {
+        let keep = std::mem::take(&mut self.cfg.unknown);
+        self.cfg = config::Config {
+            unknown: keep,
+            ..Default::default()
+        };
+        for spec in config::specs() {
+            self.after_change(spec.key);
+        }
+        self.save_config();
+    }
+
     fn settings_footer(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let armed = self.settings.armed.is_some_and(|t| t.elapsed() < CONFIRM);
@@ -412,13 +429,7 @@ impl Viewer {
             if ui.button(label).clicked() {
                 if armed {
                     self.settings.armed = None;
-                    let keep = std::mem::take(&mut self.cfg.unknown);
-                    self.cfg = config::Config {
-                        unknown: keep,
-                        ..Default::default()
-                    };
-                    self.after_change("theme_light");
-                    self.save_config();
+                    self.restore_default_settings();
                 } else {
                     self.settings.armed = Some(Instant::now());
                 }

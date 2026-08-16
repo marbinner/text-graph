@@ -410,6 +410,24 @@ impl Picker {
         self.dirty = true;
     }
 
+    /// Search policy changed while the finder may be open. Retire the old
+    /// worker and its hits immediately: both the enable flag and byte limit
+    /// determine which content rows are valid.
+    pub(super) fn search_config_changed(&mut self, content_search: bool) {
+        self.cancel();
+        self.content.clear();
+        self.done = None;
+        self.pending_scan = None;
+        self.dirty = true;
+        if content_search && self.open && !self.query.trim().is_empty() && self.browsing().is_none()
+        {
+            let query = Query::parse(&self.query);
+            self.pending_scan = Some(query);
+            self.pending_at = Instant::now();
+            self.set_scanning(true);
+        }
+    }
+
     /// A mirrored screen changed after this frame's picker pump. Rebuild on
     /// the next frame so literal pane matches follow live terminal output.
     pub(super) fn terminal_content_changed(&mut self) {
@@ -1763,6 +1781,30 @@ mod scan_generation_tests {
         assert_eq!(picker.live.load(Ordering::Relaxed), 42);
         assert_eq!(picker.pending_scan.as_ref(), Some(&q));
         assert!(picker.scanning);
+    }
+
+    #[test]
+    fn search_policy_change_retires_hits_and_requeues_when_enabled() {
+        let mut picker = Picker::new();
+        picker.open = true;
+        picker.query = "needle".into();
+        picker.generation = 41;
+        picker.live.store(41, Ordering::Relaxed);
+        picker.done = Some((Query::parse("old"), HashSet::new()));
+
+        picker.search_config_changed(true);
+
+        assert_eq!(picker.generation, 42);
+        assert_eq!(picker.live.load(Ordering::Relaxed), 42);
+        assert_eq!(picker.pending_scan, Some(Query::parse("needle")));
+        assert!(picker.done.is_none());
+        assert!(picker.scanning);
+        assert!(picker.dirty);
+
+        picker.search_config_changed(false);
+        assert_eq!(picker.generation, 43);
+        assert!(picker.pending_scan.is_none());
+        assert!(!picker.scanning);
     }
 
     #[test]

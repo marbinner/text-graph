@@ -970,6 +970,76 @@ fn label_density_and_node_scale_move_what_they_feed() {
     );
 }
 
+/// Changing search policy while results are live retires the old content
+/// generation immediately, and enabling it again queues a replacement.
+#[test]
+fn content_search_setting_rebuilds_an_open_finder() {
+    let mut h = harness();
+    press(&mut h, Key::Slash);
+    h.state_mut().picker.query = "Heading One".into();
+    wait_for(&mut h, "the initial content scan", |v| {
+        v.picker.rows.iter().any(|r| r.snippet.is_some())
+    });
+
+    h.state_mut().cfg.content_search = false;
+    h.state_mut().after_change("content_search");
+    h.step();
+    assert!(
+        h.state().picker.rows.iter().all(|r| r.snippet.is_none()),
+        "turning content search off removes already-rendered content hits"
+    );
+
+    h.state_mut().cfg.content_search = true;
+    h.state_mut().after_change("content_search");
+    wait_for(&mut h, "the replacement content scan", |v| {
+        v.picker.rows.iter().any(|r| r.snippet.is_some())
+    });
+}
+
+/// A full reset must reapply every cached setting side effect, not only the
+/// palette. Unknown fields remain intact for forward compatibility.
+#[test]
+fn restore_defaults_reapplies_cached_settings() {
+    let mut h = harness();
+    select(&mut h, "index.md");
+    h.step();
+    assert!(h.state().pane_preview.is_some());
+
+    h.state_mut().cfg.preview_raw = true;
+    h.state_mut().cfg.light = true;
+    h.state_mut().after_change("theme_light");
+    h.state_mut().cfg.node_scale = 1.8;
+    h.state_mut().after_change("node_scale");
+    h.state_mut().cfg.unknown = vec!["future_setting\t7".into()];
+    assert!(h.state().theme.light);
+
+    h.state_mut().restore_default_settings();
+
+    assert!(!h.state().cfg.preview_raw);
+    assert!(
+        !h.state().theme.light,
+        "the default dark palette is restored"
+    );
+    assert!(
+        h.state().apply_visuals,
+        "egui visuals are scheduled for the restored palette"
+    );
+    assert_eq!(
+        h.state().radius,
+        Viewer::derived(&h.state().g, 1.0).radius,
+        "hit-testing radii follow the restored node scale"
+    );
+    assert!(
+        h.state().pane_preview.is_none(),
+        "the cached preview is invalidated when preview mode resets"
+    );
+    assert_eq!(
+        h.state().cfg.unknown,
+        vec!["future_setting\t7"],
+        "unknown settings survive the reset"
+    );
+}
+
 /// Content search off makes the picker a name/alias/path finder — no
 /// worker, no snippets — while name matching keeps working.
 #[test]
