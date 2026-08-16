@@ -95,10 +95,22 @@
   a pending edit. Esc dismisses the pending edit first, then the window —
   and like the picker that branch is deliberately NOT `widget_free`-guarded
   (egui drops focus at frame START on Escape).
+- `highlight.rs` colours the source view: syntect spans as plain RGB (the
+  lib stays egui-free), scanned from line ONE because a highlighter's
+  state is what knows whether line 400 is inside a string, and capped by
+  bytes and lines because a preview is a glance. Unknown type / too big /
+  broken line = `None` and the pane draws plain text. Search matches are
+  marked with a BACKGROUND there, never a colour — recolouring the hit
+  erases the colouring the view exists for.
 - Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
-  `create`, `state`, `config`, `graph`, `filetype`, `mdview`, `search`, …) must stay egui-free
+  `create`, `state`, `config`, `graph`, `filetype`, `highlight`, `mdview`,
+  `search`, …) must stay egui-free
   (headless-testable). `mdview::prepare` rewrites note bodies for display
-  ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs);
+  ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs,
+  callout headers → the one `[!UPPERCASE]` spelling the alert parser
+  accepts with the title as a bold line, `==x==` → bold, `%%x%%` and
+  trailing `^block-ids` → gone, `#tags` → code chips) — Obsidian-flavored
+  input, CommonMark output, because the renderer only speaks CommonMark;
   relative markdown dests resolve against the SOURCE note's directory
   (standard markdown semantics) and must never escape the vault —
   absolute and `..`-escaping dests stay untouched, or a preview could
@@ -303,11 +315,13 @@
   asks for it. The cache is keyed by subject identity, so `r` and a
   STRUCTURAL reload must both drop it: the first changes the reading, the
   second renumbers the NodeId inside it.
-- hjkl are MODAL on selection: node selected = tree-walk (discrete,
-  graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
-  selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
-  anything else in either mode; `l` guards against key-repeat spawning
-  editors. `f` and `b` open the overlay from BOTH modes. `]`/`[` walk
+- The camera owns hjkl unconditionally — selection is no longer a mode —
+  with `s`/`d` zooming out/in beside them (one hand drives the view) and
+  `gg` refitting the whole graph while `0` resets ONLY the zoom. Choosing
+  a node is the overlay's job (`f`/`b`); the only tree move left on the
+  canvas is `p` (parent), which clears `conn_cursor` because that indexes
+  the node you were on. Don't reintroduce a keyboard tree-walk: two ways
+  to choose a node is exactly what the ranger was. `]`/`[` walk
   `conn_cursor` over the connections strip —
   `navigator::connections()` is the single source of its entry order
   (children, outs, backs); Enter/l follow, Esc dismisses it FIRST, tree

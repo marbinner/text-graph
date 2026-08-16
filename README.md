@@ -3,7 +3,7 @@
 A fast, native graph viewer for a folder of markdown notes — with your AI
 agents living inside it. Point it at a vault (an Obsidian vault works
 as-is) and get an Obsidian-style force-directed graph you can drive
-entirely from the keyboard, ranger-style. Terminal agents (claude, codex,
+entirely from the keyboard. Terminal agents (claude, codex,
 pi, …) running in the vault appear as **live, typeable terminal cards**
 tethered to the folder they work in: watch them stream, jump in to type,
 and watch the graph ripple as they write notes. One native Rust binary —
@@ -64,9 +64,9 @@ Selecting a node opens the **preview pane**: file-type glyph, name, the
 path as clickable ancestors, size and age, then the file itself —
 rendered markdown for notes, source with line numbers for code (`r`
 switches either way), the child listing for folders, the picture for
-images. Walk the tree with vim keys (`hjkl`, `gg`, `G`); the graph camera
-follows the walk, so the neighborhood you're reading is always the
-neighborhood you're seeing. A **connections strip** along the bottom lists
+images — with **syntax colouring** in both, from the same themes. `p`
+climbs to the parent; everything else about getting somewhere is the
+finder. A **connections strip** along the bottom lists
 everything the node touches, color-coded and clickable: blue `▸ folder/`
 and gray `▸ file` children, amber `→` outgoing links, purple `←` incoming
 links.
@@ -96,18 +96,18 @@ Labels prefer frontmatter `title:`, then the first alias, then the file stem.
 
 ## Controls
 
-The one rule: **selection is the mode**. With nothing selected, the
-keyboard drives the camera; select a node and the same keys walk the vault
-ranger-style (the camera follows); focus a terminal and every key goes to
-the agent until `Ctrl+Q`.
+The one rule: **the finder chooses, the keyboard drives**. `hjkl` pan and
+`s`/`d` zoom whatever is selected; `f` and `b` are how you get to a file;
+focus a terminal and every key goes to the agent until `Ctrl+Q`.
 
-### Camera (nothing selected)
+### Camera
 
 | Input | Action |
 |---|---|
 | drag empty space / `h` `j` `k` `l` | pan (hold to glide) |
-| mouse wheel / `u` `d` | zoom (wheel zooms toward the cursor) |
-| `0` / `Home` | reset — fit the whole graph |
+| mouse wheel / `s` `d` | zoom out / in (the wheel zooms toward the cursor) |
+| `gg` | back out to the whole graph |
+| `0` / `Home` | reset the zoom, stay where you are |
 | `z` | center on the selection |
 | drag a node | move it — pins to the cursor, the simulation responds live |
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
@@ -171,9 +171,12 @@ you drag it to (per vault, across restarts).
 | `Ctrl+Enter` | open the file in `$VISUAL`/`$EDITOR` **at the matched line** |
 | `Esc` | close the list, keeping the selection |
 
-### Navigating a selection
+### A selected node
 
-Note previews render **Obsidian-flavored**:
+Note previews render **Obsidian-flavored**: callouts (`> [!warning]`, any
+case, title and fold marker included) get their own colour and icon,
+`==highlights==` read as emphasis, `%%comments%%` stay hidden, `#tags`
+render as chips, and trailing `^block-ids` don't clutter the text.
 `[[wikilinks]]` are real links that jump to their node (ghosts included),
 `![[image embeds]]` and relative image paths render inline, relative
 markdown links to vault files jump too, footnote-style citations
@@ -184,10 +187,7 @@ instead of snapping, and never changes your zoom.
 
 | Input | Action |
 |---|---|
-| `j` / `k` | step through siblings (sorted, dirs first) |
-| `h` | up to the parent |
-| `l` | enter a directory / open a file in the editor |
-| `gg` / `G` | first / last sibling |
+| `p` | up to the parent folder |
 | `b` | **browse this folder** in the finder — the list, scoped |
 | `r` | read the preview as source (line numbers) or as markdown |
 | `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
@@ -403,6 +403,7 @@ src/
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
   keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
+  highlight.rs syntect colouring for the source view, as plain RGB spans
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
               scanning (streamed from disk, never indexed), ranked rows
   app/        egui shell: transform, input, painting, reload worker,
