@@ -55,18 +55,6 @@ pub enum Class {
     Content,
 }
 
-impl Class {
-    pub fn label(self) -> &'static str {
-        match self {
-            Class::Name => "name",
-            Class::Alias => "alias",
-            Class::Path => "path",
-            Class::Pane => "terminal",
-            Class::Content => "content",
-        }
-    }
-}
-
 /// A parsed query: whitespace-separated terms plus the smart-case verdict
 /// (any uppercase anywhere makes the whole query case-sensitive).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -422,8 +410,11 @@ pub struct Row {
     pub subtitle_ranges: Vec<Range>,
     /// The matched line, for content and terminal rows.
     pub snippet: Option<LineHit>,
-    /// Further matching lines in the same file, beyond the one shown.
+    /// Further matching lines in the same file, beyond the one shown…
     pub more: usize,
+    /// …and whether that count stopped at the per-file cap, so the row can
+    /// say "+199+" instead of claiming an exact number it never counted.
+    pub more_capped: bool,
     /// Stable identity across rebuilds — node indices are renumbered by
     /// every reload, so the cursor rides this instead of an index.
     pub key: String,
@@ -672,6 +663,7 @@ mod tests {
             subtitle_ranges: vec![],
             snippet: None,
             more: 0,
+            more_capped: false,
             key: key.to_string(),
         };
         let mut rows = vec![

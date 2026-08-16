@@ -636,6 +636,7 @@ impl Viewer {
                 subtitle_ranges,
                 snippet: None,
                 more: 0,
+                more_capped: false,
                 key: n.ident(),
             });
         }
@@ -673,6 +674,7 @@ impl Viewer {
                 if let Some(&r) = row_of.get(&node) {
                     rows[r].snippet = Some(hits.best.clone());
                     rows[r].more = more;
+                    rows[r].more_capped = hits.capped;
                     continue;
                 }
                 scores[node as usize] =
@@ -687,6 +689,7 @@ impl Viewer {
                     subtitle_ranges: Vec::new(),
                     snippet: Some(hits.best.clone()),
                     more,
+                    more_capped: hits.capped,
                     key: n.ident(),
                 });
             }
@@ -778,6 +781,7 @@ impl Viewer {
                 subtitle_ranges: Vec::new(),
                 snippet: screen,
                 more: 0,
+                more_capped: false,
                 key: format!("pane\t{}\t{}", a.session, a.pane),
             });
         }
@@ -1193,7 +1197,7 @@ impl Viewer {
             push_marked_mono(&mut job, &hit.text, &hit.ranges, 10.5, dim, accent);
             if row.more > 0 {
                 job.append(
-                    &format!("  +{}", row.more),
+                    &format!("  +{}{}", row.more, if row.more_capped { "+" } else { "" }),
                     6.0,
                     egui::TextFormat {
                         font_id: FontId::monospace(10.0),
