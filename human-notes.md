@@ -24,28 +24,33 @@
     - tags
 - make it so I can drag and drop files and paste shit into the gui.
 - when I pin a terminal/agent pane with ctrl+click it should stay at the exact same part of the screen with the same zoom, regardless how I move. Or zoom It's basically a stiky terminal I can take with me wherever. 
-- there should be a quick model ready to use for quickly editing files or doing something at a certain node.
-- whenever a node is highlighted, for example due to it being the most relevant node currently in the search, then it should be expanded in the graph view for the user. For example if it's a terminal pane. 
-- change the zoom-in/zoom-out to be keys that work better with the navigation.
-- gg should reset the camera. 0 should reset only the zoom but not the position.
-
-
-
-# todo next
+- there should be a quick model ready to use for quickly editing files or doing something at a certain node. I should be able to highlight text in a file and ask about it quickly.
 - for opening an agent with 'a' or editor with 'e' or most other bindings like these, we should only have to hover over a node with the cursor, we shouldn't have to click on it first. So I shoudl be able to just hover over a node, press 'e' and then it opens up in the editor. Or I shoudl be able to do the same with 'a' and it opens up the default agent in the corresponding folder.
 - perfect the focus mechanics and focus history.
     - we want to be able to fluidly choose which node to focus on with minimal cognitive effort.
     - we want to track a history of which panels were focused so we can jump back and forth quickly.
     - when fuzzy searching we want to put higher priority on recently visited nodes.
     - the telescope like fuzzy search
-- in the normal graph view pressing tab and shift+tab should scroll me through the terminal/agent panes. It should change the zoom but it should take me around in a deterministic order and expandthe terminals. I can press enter to focus if I wanna type
-- syntax highlighting in the text previewer. It should show me highlighting for code. It should render markdown files ina pretty way that's nice to read. And it should support most obsidian markdown style features in a nice way. 
 
+# todo next
 
 # in progress
-- the side pane should have a more predictable witdth. The default hsould be 25% or so of the total window by default, and it should not resize automatically. It should stay the width it is set to by the user.
+- ctrl+q should always deselect/unfocus everything. So when I'm in an active terminal for example it should deselect it completely so that i can for example press f to start searching.
+- shift+g shoudl zoom into the currently selected node. The zoom shoudl be appropriate to show the local neighbourhood of that node.
+
+
+
 
 # done
+- in the normal graph view pressing tab and shift+tab should scroll me through the terminal/agent panes. It should change the zoom but it should take me around in a deterministic order and expand the terminals. I can press enter to focus if I wanna type
+- whenever a node is highlighted, for example due to it being the most relevant node currently in the search, then it should be expanded in the graph view for the user. For example if it's a terminal pane. 
+- syntax highlighting in the text previewer. It should show me highlighting for code. It should render markdown files ina pretty way that's nice to read. And it should support most obsidian markdown style features in a nice way. 
+- gg should reset the camera. 0 should reset only the zoom but not the position.
+- change the zoom-in/zoom-out to be keys that work better with the hjkl navigation. I think both zoom-in and zoom-out should be done with left hand buttons. s for zoom out and d for zoom in makes sense
+- remove the hjkl for ranger style file navigation, instead now we only use b and f with fuzzy finding. Also make it so p goes to the parent node.
+- the fuzzy finder that shows me top files matching the current search is too short in hieght, currently I can only see like 2 or 3 results, I wanna be able to see way more. You should also make it so the fuzzy finder popup is centered in the entire window, not just centered in the graph view.
+- make the fuzzy finder the  default way to navigate files, the ranger navigator should only open when we press b on a selected node. And try to only have 1 file previewer, so the ranger previewer should be the same as the fuzzy finder previwer. Currently I like the fuzzy finder one better. I want the navigation in the graph to be centered around this fuzzy finder, so let's think deeply about how to make this setup as natural and well thought out as possible.
+- the side pane should have a more predictable witdth. The default hsould be 25% or so of the total window by default, and it should not resize automatically. It should stay the width it is set to by the user.
 - settings more comprehensive
 - when doing fuzzy search and focusing on a terminal, it should change the zoom of the camera, it shoudl just open the pane where it is while centering the camera on it. otherwise we lose overview of other nearby things.
 - fuzzy search across the entire graph including contents of the text files. We should replace our existing search feature with a more highly powered nvim telescope like search. We want to be able to match file,names,content etc. and be able to easily preview and pick the node we want. quickly finding the exact node we want using keyboard and search should be one of the central features. If the fuzzy search gives many results I should be able to quickly use the arrow keys to select the one I ant from the menu, where I can quickly preview each search result as I scroll through them like in telescope. This is a very important freature to get just right.
