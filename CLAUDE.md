@@ -184,7 +184,20 @@
   matched against the RAW file, frontmatter included — that is what makes
   the line number the one `$EDITOR +N` wants (Ctrl+Enter). Browsing
   results must NOT set the selection — that is what Enter COMMITS to, so
-  Esc can leave you where you were.
+  Esc can leave you where you were. Taking a TERMINAL result recenters
+  without touching zoom (`fly_to_card_at(.., false)`): a focused card is
+  readable at any zoom, and only the double-click gesture means "take me
+  INTO this terminal".
+- A live search must survive vault RELOADS, which land every few seconds
+  under working agents. Content hits are therefore keyed by PATH, never
+  by node index (reloads renumber the arena); a reload re-scores the name
+  tier, keeps the hits, and lets the rescan replace them in place. The
+  preview re-reads only when its OWN file's (mtime, len) moved, and
+  `detail` survives too — except across a STRUCTURAL reload, where its
+  cached body must go: the body carries `tg://` links built from node
+  INDEXES, and stale ones jump somewhere else. The "scanning…" hint waits
+  `SCAN_HINT_DELAY` before showing, or it strobes once per keystroke and
+  once per agent save. Anything that resets per reload will be SEEN.
 - Finder layout: the prompt + result list FLOAT (an egui Area, order
   Foreground) centered on the CANVAS rect — not the window, or the side
   pane would sit half on top of them — with the prompt at

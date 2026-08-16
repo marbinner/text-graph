@@ -140,7 +140,9 @@ rewrite notes while you search.
 
 The preview is the same one browsing gives you, except for a **content**
 hit, which shows the file's raw lines with every match highlighted and
-the hit scrolled into view. On the canvas, matching nodes stay lit and
+the hit scrolled into view. A search rides out vault reloads: agents
+saving notes underneath you re-scan in the background without emptying
+the list, moving your cursor, or blinking the preview. On the canvas, matching nodes stay lit and
 the highlighted result **glides into view** as you arrow down — into the
 band above the prompt, so it never hides behind it. An empty prompt is
 just the ranger, so `f` costs nothing when you only meant to look
@@ -151,7 +153,7 @@ around.
 | type | filter — names first, then paths, then terminals, then content hits (with the matching line and its number) |
 | `↑` `↓` / `Ctrl+P` `Ctrl+N` | move through results (with an empty prompt: walk the siblings, like `j`/`k`) |
 | `PageUp` `PageDown` / `Ctrl+U` `Ctrl+D` | half-page jumps |
-| `Enter` / click | take the result — select it, frame it, and drop back into browsing on it (a terminal card lands focused, ready to type) |
+| `Enter` / click | take the result — select it, frame it, and drop back into browsing on it (a terminal card lands focused and centered, at your current zoom) |
 | `Ctrl+Enter` | open the file in `$VISUAL`/`$EDITOR` **at the matched line** |
 | `Esc` | close the search, keeping the selection |
 

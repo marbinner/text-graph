@@ -1,9 +1,10 @@
 //! The side pane, in its two modes. Browsing (the ranger): breadcrumb,
 //! sibling column with the cursor, preview column (markdown / dir listing
-//! / ghost backrefs), connections strip. Searching: the picker's prompt
-//! and results take over the pane — see `picker.rs`. Both modes share the
-//! preview column and the `tg://` link interception below, and keyboard
-//! walking lives in handle_keys.
+//! / ghost backrefs), connections strip. Searching: the highlighted
+//! result's preview, while the prompt and its results float over the
+//! canvas (see `picker.rs`). Both modes share `preview_column` — which is
+//! therefore the one place markdown renders, and so the one place that
+//! claims `tg://` link clicks — and keyboard walking lives in handle_keys.
 
 use super::*;
 
