@@ -171,7 +171,8 @@ fn mdview_prepare_renders_obsidian_flavor() {
     // a plain wikilink to an image links to its Image node
     assert!(out.contains(&format!("[diagram.png]{}", tg("assets/diagram.png"))));
     // a ghost target links to the ghost node
-    let ghost = g.by_ident("[[missing-note]]").expect("ghost");
+    let ghost = find(&g, "missing-note");
+    assert_eq!(g.node(ghost).kind, NodeKind::Ghost);
     assert!(out.contains(&format!("[missing-note](tg://{})", ghost.0)));
     // the image embed becomes an inline file:// image
     assert!(out.contains("![](<file://"), "embed rewritten: {out}");
@@ -439,8 +440,10 @@ fn query_layer_backlinks_outlinks_paths_offsets() {
             l.offset
         );
     }
-    // ghosts are reachable by ident, not by bare path
-    assert!(g.by_ident("[[missing-note]]").is_some());
+    // ghosts are reachable by their opaque ident, not by bare path
+    let ghost = find(&g, "missing-note");
+    assert_eq!(g.node(ghost).kind, NodeKind::Ghost);
+    assert_eq!(g.by_ident(&g.node(ghost).ident()), Some(ghost));
     assert_eq!(g.by_path(""), Some(g.root));
 }
 

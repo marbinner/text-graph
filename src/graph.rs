@@ -56,13 +56,15 @@ impl Node {
             .unwrap_or(&self.name)
     }
 
-    /// Cross-reload identity key. A ghost's `path` is raw target text, which
-    /// can collide with a real dir path (ghost `[[notes]]` vs dir `notes`) —
-    /// ghosts get their own namespace so position/selection carry-over never
-    /// confuses the two.
+    /// Cross-reload identity key. Virtual nodes use NUL-prefixed namespaces:
+    /// NUL cannot occur in a filesystem path, and the distinct type tags keep
+    /// ghosts and web nodes apart even when their payload text is identical.
+    /// The representation is deliberately opaque; callers should only compare
+    /// it or pass it to `Graph::by_ident`.
     pub fn ident(&self) -> String {
         match self.kind {
-            NodeKind::Ghost => format!("[[{}]]", self.path),
+            NodeKind::Ghost => format!("\0ghost\0{}", self.path),
+            NodeKind::Web => format!("\0web\0{}", self.path),
             _ => self.path.clone(),
         }
     }
@@ -127,7 +129,7 @@ pub struct Graph {
     /// (deterministic). Built by `finish_indexes` after resolution.
     links_out: Vec<Vec<u32>>,
     links_in: Vec<Vec<u32>>,
-    /// `Node::ident()` → id. Idents are unique (ghosts are namespaced).
+    /// `Node::ident()` → id. Virtual-node namespaces are disjoint from paths.
     ident_index: HashMap<String, NodeId>,
     /// Every resolved wikilink occurrence, including duplicate edges. Graph
     /// topology deduplicates `(from, to)`; Markdown rendering cannot.
@@ -463,18 +465,19 @@ mod tests {
         assert_eq!(g.node(a).children.first().copied(), Some(b));
     }
 
-    /// The cross-reload identity invariant: a ghost whose raw target text
-    /// equals a real node's path must NOT share its identity — otherwise
-    /// live reload hands the ghost the dir's position/selection (or vice
-    /// versa).
+    /// Virtual identity namespaces must be structurally disjoint from every
+    /// legal real path, including a filename that looks exactly like the old
+    /// bracket-based ghost encoding.
     #[test]
-    fn ghost_ident_never_collides_with_real_paths() {
-        let dir = node(NodeKind::Dir, "notes");
-        let file = node(NodeKind::File, "notes");
+    fn virtual_idents_never_collide_with_real_paths_or_each_other() {
+        let real = node(NodeKind::File, "[[notes]]");
         let ghost = node(NodeKind::Ghost, "notes");
-        assert_eq!(dir.ident(), "notes");
-        assert_eq!(file.ident(), "notes");
-        assert_ne!(ghost.ident(), dir.ident());
-        assert_eq!(ghost.ident(), "[[notes]]");
+        let web = node(NodeKind::Web, "notes");
+        assert_eq!(real.ident(), "[[notes]]");
+        assert_eq!(ghost.ident(), "\0ghost\0notes");
+        assert_eq!(web.ident(), "\0web\0notes");
+        assert_ne!(ghost.ident(), real.ident());
+        assert_ne!(web.ident(), real.ident());
+        assert_ne!(ghost.ident(), web.ident());
     }
 }
