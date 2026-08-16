@@ -225,7 +225,7 @@ impl Viewer {
             hide_web: !self.show_web,
             // theme and default agent live in the per-user config now;
             // these two are migration-only fields (see state.rs)
-            light: false,
+            light: None,
             default_agent: None,
             unknown: self.view_unknown.clone(),
         }

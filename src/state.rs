@@ -24,8 +24,10 @@ pub struct ViewState {
     pub hide_web: bool,
     /// Light theme, as written by builds before preferences moved to the
     /// per-user config. READ ONLY: parsed so `config::load_or_migrate` can
-    /// seed from it, never written back — `config.rs` owns it now.
-    pub light: bool,
+    /// seed from it, never written back — `config.rs` owns it now. `None`
+    /// means the file didn't mention it, which is NOT the same as dark:
+    /// migration must not write a preference the vault never expressed.
+    pub light: Option<bool>,
     /// Default agent from those same older builds — see [`ViewState::light`].
     pub default_agent: Option<String>,
     /// Line kinds this version doesn't understand, verbatim in file order.
@@ -101,7 +103,7 @@ pub fn from_text(text: &str) -> ViewState {
                 }
             }
             Some("hide_web") => s.hide_web = true,
-            Some("light") => s.light = true,
+            Some("light") => s.light = Some(true),
             Some("agent") => {
                 if let Some((_, a)) = line.split_once('\t')
                     && !a.is_empty()
@@ -252,7 +254,7 @@ mod tests {
                 ("work".to_string(), "%0".to_string()),
             ],
             hide_web: true,
-            light: false,
+            light: None,
             default_agent: None,
             unknown: vec!["future-thing\tdata".to_string()],
         };
@@ -267,7 +269,11 @@ mod tests {
     fn preferences_are_read_for_migration_but_never_written_back() {
         let old = "text-graph view v1\nlight\nagent\tclaude\ncamera\t1\t2\t3\n";
         let s = from_text(old);
-        assert!(s.light, "an older build's theme is still readable");
+        assert_eq!(
+            s.light,
+            Some(true),
+            "an older build's theme is still readable"
+        );
         assert_eq!(s.default_agent.as_deref(), Some("claude"));
         let out = to_text(&s);
         assert!(
@@ -288,7 +294,7 @@ mod tests {
             cards: vec![card("weird\tname", "%1", 1.0, 2.0)],
             pins: vec![("weird\tname".to_string(), "%1".to_string())],
             hide_web: false,
-            light: false,
+            light: None,
             default_agent: None,
             unknown: Vec::new(),
         };

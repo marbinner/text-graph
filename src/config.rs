@@ -512,11 +512,12 @@ pub fn load() -> (Config, bool) {
 /// older build survives the upgrade.
 pub fn load_or_migrate(vault: &Path) -> Config {
     let (mut c, existed) = load();
-    if existed {
-        return c;
+    // Writing the file only when there was something to take matters: the
+    // first vault opened would otherwise stamp defaults over the file and
+    // a DIFFERENT vault's stored theme could never migrate afterwards.
+    if !existed && migrate(&mut c, vault) {
+        let _ = save(&c);
     }
-    migrate(&mut c, vault);
-    let _ = save(&c);
     c
 }
 
@@ -524,14 +525,21 @@ pub fn load_or_migrate(vault: &Path) -> Config {
 /// That file is UNTRUSTED (a vault can be someone else's), so the agent
 /// goes through `Spec::apply` like every other value — the allowlist check
 /// that used to live in the viewer's restore path lives here now.
-pub fn migrate(c: &mut Config, vault: &Path) {
+/// Returns whether anything was actually carried over.
+pub fn migrate(c: &mut Config, vault: &Path) -> bool {
     let vs = crate::state::load(vault);
-    c.light = vs.light;
+    let mut took = false;
+    if let Some(light) = vs.light {
+        c.light = light;
+        took = true;
+    }
     if let Some(a) = vs.default_agent
         && let Some(s) = spec("default_agent")
     {
         s.apply(c, Value::Text(a));
+        took = true;
     }
+    took
 }
 
 /// Write the config, creating its directory. Atomic (tmp + rename) through
@@ -746,10 +754,21 @@ mod tests {
         )
         .unwrap();
         let mut c = Config::default();
-        migrate(&mut c, &d);
-        let _ = std::fs::remove_dir_all(&d);
+        assert!(migrate(&mut c, &d), "there was something to take");
         assert!(c.light, "the theme carries over");
         assert_eq!(c.default_agent, "pi", "the planted command does not");
+
+        // a vault that says nothing must not COUNT as a migration, or it
+        // would stamp defaults over the config file and lock out the vault
+        // that does have preferences stored
+        std::fs::write(
+            d.join(".text-graph/view"),
+            "text-graph view v1\ncamera\t1\t2\t3\n",
+        )
+        .unwrap();
+        let mut fresh = Config::default();
+        assert!(!migrate(&mut fresh, &d), "nothing to carry over");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
