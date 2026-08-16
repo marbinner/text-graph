@@ -1753,3 +1753,74 @@ fn a_click_outside_the_settings_window_closes_it() {
     assert!(!h.state().settings.open, "a click outside closes it");
     assert_eq!(h.state().cfg.editor, "hx", "and keeps what was typed");
 }
+
+/// Ctrl+Q is the way back: it drops everything holding the keyboard or
+/// the eye, in one press, so `f` works immediately afterwards — from a
+/// terminal you were typing into, from an open finder, from anywhere.
+#[test]
+fn ctrl_q_releases_everything() {
+    let mut h = harness();
+    select(&mut h, "index.md");
+    h.state_mut().terms.focused = Some(("tg_pi".into(), "%1".into()));
+    h.state_mut().terms.cursor = Some(("tg_pi".into(), "%1".into()));
+    h.state_mut().conn_cursor = Some(0);
+    h.state_mut().picker.open = true;
+    h.state_mut().settings.open = true;
+    let ctx = h.ctx.clone();
+    h.state_mut().release_everything(&ctx);
+    h.step();
+
+    let v = h.state();
+    assert!(
+        v.terms.focused.is_none(),
+        "the terminal gives the keyboard back"
+    );
+    assert!(v.terms.cursor.is_none(), "the card cursor goes too");
+    assert!(v.selected.is_none(), "and the selection");
+    assert!(v.conn_cursor.is_none());
+    assert!(!v.picker.open, "an open finder closes");
+    assert!(!v.settings.open, "so does the settings window");
+    assert!(
+        h.ctx.memory(|m| m.focused()).is_none(),
+        "and no text field keeps the keys — f has to work next"
+    );
+
+    // …and it does: f opens the finder on the very next press
+    press(&mut h, Key::F);
+    assert!(h.state().picker.open);
+}
+
+/// `G` shows the neighbourhood: the zoom follows what the node is
+/// connected to, so it means the same thing for a leaf note and for a
+/// folder with forty children.
+#[test]
+fn shift_g_zooms_to_the_selections_neighbourhood() {
+    let mut h = harness();
+    for _ in 0..2000 {
+        if !h.state().sim.active() {
+            break;
+        }
+        h.state_mut().sim.tick(16);
+    }
+    h.state_mut().zoom = 0.05;
+
+    // the vault root has every top-level entry around it
+    select(&mut h, "");
+    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::G);
+    h.step();
+    let wide = h.state().zoom;
+    assert!(wide > 0.05, "G zooms in from a far-out view: {wide}");
+    assert!(h.state().cam_anim.is_some(), "and glides onto the node");
+
+    // a leaf with a couple of links sits tighter than the whole root
+    h.state_mut().zoom = 0.05;
+    select(&mut h, "topics/grafér.md");
+    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::G);
+    h.step();
+    let tight = h.state().zoom;
+    assert!(
+        tight > wide,
+        "a small neighbourhood frames closer than a big one: {tight} vs {wide}"
+    );
+    assert!(tight <= 6.0, "but never rockets in: {tight}");
+}

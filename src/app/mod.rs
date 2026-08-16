@@ -136,6 +136,11 @@ impl Theme {
     }
 }
 
+/// Screen radius `G` frames a node at when it has no neighbours to show.
+const LONE_NODE_R: f32 = 60.0;
+/// Ceiling for `G` — a tight neighbourhood must not rocket the camera in.
+const NEIGHBORHOOD_MAX_ZOOM: f32 = 6.0;
+
 /// Screen radius above which a ghost shows its hollow-page silhouette.
 const ICON_MIN_R: f32 = 6.5;
 
@@ -823,9 +828,10 @@ impl Viewer {
             )
         });
         let no_mods = ui.input(|i| i.modifiers.is_none());
-        let (g_key, parent_key) = ui.input(|i| {
+        let (g_key, big_g, parent_key) = ui.input(|i| {
             (
                 i.modifiers.is_none() && i.key_pressed(Key::G),
+                i.modifiers.shift_only() && i.key_pressed(Key::G),
                 i.modifiers.is_none() && i.key_pressed(Key::P),
             )
         });
@@ -954,6 +960,17 @@ impl Viewer {
             } else {
                 self.pending_g = Some(Instant::now());
             }
+        } else if big_g
+            && widget_free
+            && let Some(sel) = self.selected
+        {
+            // G = show me around this node: centered, at a zoom that fits
+            // what it is connected to
+            let rect = self
+                .last_canvas_rect
+                .unwrap_or_else(|| ui.ctx().content_rect());
+            self.zoom = self.neighborhood_zoom(sel, rect);
+            self.frame_node(sel);
         } else if parent_key
             && widget_free
             && let Some(sel) = self.selected
@@ -1063,6 +1080,59 @@ impl Viewer {
                 ui.ctx().request_repaint();
             }
         }
+    }
+
+    /// Ctrl+Q is the way BACK: whatever has the keyboard gives it up, and
+    /// whatever is selected is deselected, in one press. From a terminal
+    /// you are typing into, that has to land you somewhere `f` works —
+    /// which means dropping egui's widget focus too, or the next keystroke
+    /// goes into a text field instead of the graph.
+    pub(super) fn release_everything(&mut self, ctx: &egui::Context) {
+        self.terms.focused = None;
+        self.terms.cursor = None;
+        self.selected = None;
+        self.conn_cursor = None;
+        if self.picker.open {
+            self.picker.close();
+        }
+        if self.settings.open {
+            self.close_settings();
+        }
+        if let Some(id) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+
+    /// A zoom that shows `id` together with its neighbourhood — parent,
+    /// children and links — rather than a fixed step: "show me around
+    /// this" means something different for a leaf note and for a folder
+    /// with forty children.
+    fn neighborhood_zoom(&self, id: NodeId, rect: Rect) -> f32 {
+        let here = self.world_pos(id.0 as usize);
+        let node = self.g.node(id);
+        let around = node
+            .parent
+            .into_iter()
+            .chain(node.children.iter().copied())
+            .chain(self.g.outlinks(id).map(|l| l.to))
+            .chain(self.g.backlinks(id).map(|l| l.from));
+        // the node stays centered, so what matters is how far the
+        // furthest neighbour reaches from it in each direction
+        let (mut dx, mut dy) = (0.0f32, 0.0f32);
+        for n in around {
+            let p = self.world_pos(n.0 as usize);
+            dx = dx.max((p.x - here.x).abs());
+            dy = dy.max((p.y - here.y).abs());
+        }
+        let r = self.radius[id.0 as usize].max(0.5);
+        // nothing around it: frame the node itself at a readable size
+        let zoom = if dx <= 1.0 && dy <= 1.0 {
+            LONE_NODE_R / r
+        } else {
+            let fit = (rect.width() * 0.5 / dx.max(1.0)).min(rect.height() * 0.5 / dy.max(1.0));
+            fit * 0.85
+        };
+        zoom.clamp(0.02, NEIGHBORHOOD_MAX_ZOOM)
     }
 
     /// Called once the frame's widgets have drawn, so egui's Tab focus
@@ -2138,7 +2208,7 @@ impl eframe::App for Viewer {
         self.pump_reload(ui.ctx());
         let release = ui.input(|i| i.modifiers.ctrl && i.key_pressed(Key::Q));
         if release {
-            self.terms.focused = None;
+            self.release_everything(ui.ctx());
         }
         if self.terms.focused.is_some() && self.create.is_none() {
             // keyboard belongs to the terminal; graph keybinds are suspended.

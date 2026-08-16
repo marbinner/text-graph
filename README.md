@@ -107,6 +107,7 @@ focus a terminal and every key goes to the agent until `Ctrl+Q`.
 | drag empty space / `h` `j` `k` `l` | pan (hold to glide) |
 | mouse wheel / `s` `d` | zoom out / in (the wheel zooms toward the cursor) |
 | `gg` | back out to the whole graph |
+| `G` | zoom to the selection's **neighbourhood** — what it's connected to, framed |
 | `0` / `Home` | reset the zoom, stay where you are |
 | `z` | center on the selection |
 | drag a node | move it — pins to the cursor, the simulation responds live |
@@ -207,7 +208,8 @@ instead of snapping, and never changes your zoom.
 | hover + linger on a compact card | **peek**: the full live screen pops up at readable size — inspect an agent without zooming, focusing, or pinning |
 | click a card | select + focus: it expands to full readable size at any zoom, turns **cyan ⌨**, and the keyboard types into the agent |
 | **Ctrl+click a card** | 📌 pin it open — expanded at any zoom, several at once, without taking the keyboard; Ctrl+click again unpins. Pins survive restarts |
-| `Ctrl+Q` / click away | release focus back to the graph in one gesture — a click on a node also selects it, a click on empty space just releases (your selection stays) |
+| `Ctrl+Q` | let go of everything — card focus, cursor, selection, open overlays — so the next key reaches the graph |
+| click away | release focus back to the graph in one gesture — a click on a node also selects it, a click on empty space just releases (your selection stays) |
 | double-click a card | fly the camera into it (zoom + center) |
 | drag a card | arrange it (it stays put, following its anchor node) |
 | drag the corner grip (`tg_` cards, full view) | **natively resize the terminal** — the tmux session itself changes size and the card follows |
