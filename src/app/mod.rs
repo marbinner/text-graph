@@ -769,6 +769,7 @@ impl Viewer {
         let no_mods = ui.input(|i| i.modifiers.is_none());
         let settings_key = no_mods && pressed_fresh(ui, Key::Comma);
         let browse_key = no_mods && pressed_fresh(ui, Key::B);
+        let raw_key = no_mods && pressed_fresh(ui, Key::R);
         // '?' carries Shift on every layout that has it — no no_mods here
         let help_key = pressed_fresh(ui, Key::Questionmark);
         let (term_key, web_key, edit_key, agent_key) = (
@@ -798,6 +799,10 @@ impl Viewer {
             self.toggle_settings();
         } else if help_key && widget_free {
             self.open_key_help();
+        } else if raw_key && widget_free {
+            // r = read this as source, or back to rendered markdown. One
+            // previewer, two ways of reading — not two previewers.
+            self.toggle_setting("preview_raw");
         } else if esc && self.settings_escape() {
             // the ⚙ window dismisses before the graph does: a pending text
             // edit first, then the window. Unguarded by `widget_free` for

@@ -1160,3 +1160,38 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
         "and the width the user owns is still the one it opened at"
     );
 }
+
+/// `r` reads the same file the other way: source with line numbers
+/// instead of rendered markdown. One previewer with two readings — the
+/// toggle is a setting, so it is the same act as the checkbox and it
+/// survives a restart.
+#[test]
+fn r_switches_the_preview_between_markdown_and_source() {
+    let mut h = harness();
+    select(&mut h, "index.md");
+    h.step();
+    assert!(
+        matches!(
+            h.state().pane_preview.as_ref().map(|p| &p.body),
+            Some(super::picker::PreviewBody::Node(_))
+        ),
+        "a note reads as rendered markdown by default"
+    );
+    press(&mut h, Key::R);
+    assert!(h.state().cfg.preview_raw, "r flips the setting");
+    assert!(
+        matches!(
+            h.state().pane_preview.as_ref().map(|p| &p.body),
+            Some(super::picker::PreviewBody::Text(_))
+        ),
+        "…and the pane re-reads it as source, without the subject changing"
+    );
+    press(&mut h, Key::R);
+    assert!(
+        matches!(
+            h.state().pane_preview.as_ref().map(|p| &p.body),
+            Some(super::picker::PreviewBody::Node(_))
+        ),
+        "and back"
+    );
+}

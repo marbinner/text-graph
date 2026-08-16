@@ -39,6 +39,7 @@ pub struct Config {
     pub glide: f32,
     pub zoom_speed: f32,
     // ---- previews ----
+    pub preview_raw: bool,
     pub hover_previews: bool,
     pub hover_delay: f32,
     pub follow_delay: f32,
@@ -70,6 +71,7 @@ impl Default for Config {
             freeze: false,
             glide: 0.18,
             zoom_speed: 1.0,
+            preview_raw: false,
             hover_previews: true,
             hover_delay: 0.35,
             follow_delay: 0.12,
@@ -406,6 +408,11 @@ static SPECS: &[Spec] = specs![
         num(0.3, 3.0, 0.05, "×", 2), zoom_speed, Num;
 
         // ---- previews ----
+        "preview_raw", Section::Previews, "source previews",
+        "show notes as source with line numbers instead of rendered \
+         markdown; the `r` key toggles it",
+        Kind::Flag, preview_raw, Flag;
+
         "hover_previews", Section::Previews, "hover previews",
         "dwelling on a node (or a compact card) opens a popup",
         Kind::Flag, hover_previews, Flag;

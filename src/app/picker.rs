@@ -1223,32 +1223,37 @@ impl Viewer {
         // takes over. Markdown always reads better than source otherwise.
         let textual =
             kind == NodeKind::File || (kind == NodeKind::Asset && filetype::is_text(&path));
-        let body = match hit.filter(|_| textual) {
-            None => PreviewBody::Node(id),
-            Some(hit) => match vault::read_head(&self.root.join(&path), PREVIEW_BYTES) {
+        // Source view when a LINE is what matters — a content hit has to
+        // be shown where it lives — or when the reader asked for it (`r`).
+        // Otherwise a note reads better rendered.
+        let raw = textual && (hit.is_some() || self.cfg.preview_raw);
+        let body = if !raw {
+            PreviewBody::Node(id)
+        } else {
+            match vault::read_head(&self.root.join(&path), PREVIEW_BYTES) {
                 Ok(text) => {
                     // the scan works on the RAW file, so line numbers here
                     // are the ones an editor's +N expects
-                    let start = hit.saturating_sub(PREVIEW_BEFORE).max(1);
+                    let start = hit.map_or(1, |h| h.saturating_sub(PREVIEW_BEFORE).max(1));
                     let mut buf = String::new();
                     let mut lines = Vec::new();
                     for (i, line) in text.lines().enumerate().skip(start - 1).take(PREVIEW_LINES) {
                         let no = i + 1;
                         let m = q.match_line(line, &mut buf);
-                        if hit == no {
+                        if hit == Some(no) {
                             focus = Some(lines.len());
                         }
                         lines.push(PreviewLine {
                             no,
                             text: cap_chars(line, PREVIEW_LINE_CAP),
                             ranges: m.map(|m| m.ranges).unwrap_or_default(),
-                            hit: hit == no,
+                            hit: hit == Some(no),
                         });
                     }
                     PreviewBody::Text(lines)
                 }
                 Err(e) => PreviewBody::Note(format!("cannot read: {e}")),
-            },
+            }
         };
         let subtitle = match kind {
             NodeKind::Ghost => format!("[[{path}]] — not written yet"),
