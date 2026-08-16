@@ -259,9 +259,12 @@
   through `clipped`/`clipped_text` (one line, ellipsized). Guarded by
   `wide_content_scrolls_inside_the_pane_instead_of_widening_it`, which
   fails on the width, not on a screenshot.
-- The side pane's WIDTH belongs to the user: a quarter of the window the
-  first time, then whatever they drag it to (`pane_width`, persisted per
-  vault). Never size it from the inside — `ui.set_min_width` in the mode
+- The side pane's WIDTH belongs to the user: `PANE_FRAC` of the window
+  until they DRAG it, then whatever they dragged to (`pane_w` in the view
+  file). Never write a computed default back — the first frame sees
+  eframe's startup window, not the user's, and persisting that froze the
+  pane at a fraction of a window that no longer existed (the v1 `pane`
+  key is dropped on load for exactly that reason). Never size it from the inside — `ui.set_min_width` in the mode
   bodies is what used to resize it on every mode switch and snap it back
   when dragged narrower; content columns take a SHARE of the pane
   instead. The only automatic change is a window too narrow to hold it,
