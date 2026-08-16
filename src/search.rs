@@ -196,19 +196,14 @@ pub struct LineHit {
 /// picker shows one row per node, not one per line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileHits {
-    /// Index into the graph's node arena at scan time.
-    pub node: u32,
+    /// Vault-relative path of the file. Hits are identified by PATH, not
+    /// by node index: every vault reload renumbers the node arena, and a
+    /// search must survive the agent that saves a file while you type.
+    pub rel: String,
     pub best: LineHit,
     pub total: usize,
     /// `total` stopped at [`MAX_LINES_PER_FILE`].
     pub capped: bool,
-}
-
-/// A file to scan: its node index and vault-relative path.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ScanFile {
-    pub node: u32,
-    pub rel: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -222,7 +217,7 @@ pub struct ScanOutcome {
 }
 
 /// Collapse one file's matching lines into its best line and a count.
-pub fn file_hits(node: u32, text: &str, query: &Query, buf: &mut String) -> Option<FileHits> {
+pub fn file_hits(rel: &str, text: &str, query: &Query, buf: &mut String) -> Option<FileHits> {
     let mut best: Option<LineHit> = None;
     let mut total = 0usize;
     for (i, line) in text.lines().enumerate() {
@@ -236,7 +231,7 @@ pub fn file_hits(node: u32, text: &str, query: &Query, buf: &mut String) -> Opti
         }
         if total >= MAX_LINES_PER_FILE {
             return best.map(|best| FileHits {
-                node,
+                rel: rel.to_string(),
                 best,
                 total,
                 capped: true,
@@ -244,7 +239,7 @@ pub fn file_hits(node: u32, text: &str, query: &Query, buf: &mut String) -> Opti
         }
     }
     best.map(|best| FileHits {
-        node,
+        rel: rel.to_string(),
         best,
         total,
         capped: false,
@@ -280,7 +275,7 @@ fn snippet(line_no: usize, line: &str, m: LineMatch) -> LineHit {
 pub fn scan_files(
     root: &Path,
     query: &Query,
-    files: &[ScanFile],
+    files: &[String],
     cancelled: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(Vec<FileHits>),
 ) -> ScanOutcome {
@@ -296,7 +291,7 @@ pub fn scan_files(
             out.cancelled = true;
             return out;
         }
-        let path = root.join(&f.rel);
+        let path = root.join(f);
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
@@ -307,7 +302,7 @@ pub fn scan_files(
             continue;
         };
         out.files_read += 1;
-        if let Some(hits) = file_hits(f.node, &text, query, &mut buf) {
+        if let Some(hits) = file_hits(f, &text, query, &mut buf) {
             batch.push(hits);
             with_hits += 1;
             if with_hits >= MAX_FILES_WITH_HITS {
@@ -528,20 +523,20 @@ mod tests {
     fn file_hits_keeps_the_best_line_and_counts_the_rest() {
         let mut buf = String::new();
         let text = "intro\ntmux here\nunrelated\nand tmux again\n";
-        let h = file_hits(7, text, &q("tmux"), &mut buf).expect("hits");
-        assert_eq!(h.node, 7);
+        let h = file_hits("notes/a.md", text, &q("tmux"), &mut buf).expect("hits");
+        assert_eq!(h.rel, "notes/a.md");
         assert_eq!(h.total, 2);
         assert!(!h.capped);
         assert_eq!(h.best.line, 2, "1-based, frontmatter included");
         assert_eq!(h.best.text, "tmux here");
-        assert!(file_hits(0, text, &q("absent"), &mut buf).is_none());
+        assert!(file_hits("a.md", text, &q("absent"), &mut buf).is_none());
     }
 
     #[test]
     fn per_file_line_count_is_capped() {
         let mut buf = String::new();
         let text = "hit\n".repeat(MAX_LINES_PER_FILE + 50);
-        let h = file_hits(0, &text, &q("hit"), &mut buf).expect("hits");
+        let h = file_hits("a.md", &text, &q("hit"), &mut buf).expect("hits");
         assert_eq!(h.total, MAX_LINES_PER_FILE);
         assert!(h.capped);
     }
@@ -550,7 +545,7 @@ mod tests {
     fn snippets_trim_indentation_and_keep_ranges_aligned() {
         let mut buf = String::new();
         let text = "        deeply indented tmux line\n";
-        let h = file_hits(0, text, &q("tmux"), &mut buf).expect("hits");
+        let h = file_hits("a.md", text, &q("tmux"), &mut buf).expect("hits");
         assert_eq!(h.best.text, "deeply indented tmux line");
         let (s, e) = h.best.ranges[0];
         assert_eq!(&h.best.text[s..e], "tmux");
@@ -560,18 +555,10 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault")
     }
 
-    fn fixture_files() -> Vec<ScanFile> {
+    fn fixture_files() -> Vec<String> {
         let scan = vault::scan(&fixture_root()).expect("fixture scans");
-        let mut files: Vec<ScanFile> = scan
-            .files
-            .iter()
-            .enumerate()
-            .map(|(i, f)| ScanFile {
-                node: i as u32,
-                rel: f.rel_path.clone(),
-            })
-            .collect();
-        files.sort_by(|a, b| a.rel.cmp(&b.rel));
+        let mut files: Vec<String> = scan.files.iter().map(|f| f.rel_path.clone()).collect();
+        files.sort();
         files
     }
 
@@ -594,10 +581,7 @@ mod tests {
         let b = run();
         assert!(!a.is_empty(), "the fixture vault has headings");
         assert_eq!(a, b, "same vault + same query = same hits, same order");
-        let paths: Vec<&str> = a
-            .iter()
-            .map(|h| files[h.node as usize].rel.as_str())
-            .collect();
+        let paths: Vec<&str> = a.iter().map(|h| h.rel.as_str()).collect();
         let mut sorted = paths.clone();
         sorted.sort_unstable();
         assert_eq!(paths, sorted, "emitted in the order the files were given");

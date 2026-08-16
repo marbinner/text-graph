@@ -476,8 +476,11 @@ struct Viewer {
     // ---- detail pane ----
     root: PathBuf,
     md_cache: CommonMarkCache,
-    /// Body of the selected file, read on demand and cached per selection.
+    /// Body of the previewed file, read on demand and cached per node…
     detail: Option<(NodeId, String)>,
+    /// …with the (mtime, len) it was read at, so a reload re-reads only
+    /// when that file actually changed.
+    detail_stamp: Option<images::Stamp>,
     // ---- live reload ----
     /// Kept alive for the watcher thread; None if watching failed.
     _watcher: Option<notify::RecommendedWatcher>,
@@ -672,6 +675,7 @@ impl Viewer {
             root,
             md_cache: CommonMarkCache::default(),
             detail: None,
+            detail_stamp: None,
             _watcher: None,
             reload_at: Arc::new(Mutex::new(None)),
             reload_gen: 0,

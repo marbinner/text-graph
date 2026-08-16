@@ -484,26 +484,52 @@ fn esc_closes_the_picker_and_leaves_the_graph_alone() {
     );
 }
 
-/// Agents save files constantly: a reload lands mid-search. The rows point
-/// into the old node arena and must be re-derived, but the query and the
-/// row the cursor sits on have to survive it.
+/// Agents save files constantly, so a reload lands mid-search every few
+/// seconds. The name tier re-scores (node indices moved), but nothing the
+/// user is looking at may blink: query, cursor row, CONTENT hits (keyed by
+/// path, not by node index) and the loaded preview all have to survive —
+/// the rescan replaces the hits in place when it lands.
 #[test]
-fn a_reload_rebuilds_the_rows_but_keeps_query_and_cursor() {
+fn a_reload_keeps_the_query_cursor_content_hits_and_preview() {
     let mut h = harness();
     press(&mut h, Key::Slash);
-    h.state_mut().picker.query = "grafer".into();
-    h.step();
+    h.state_mut().picker.query = "Heading One".into();
+    wait_for(&mut h, "the content scan", |v| {
+        v.picker.rows.iter().any(|r| r.snippet.is_some())
+    });
     let before = h.state().picker.cursor_row().expect("a row").key.clone();
+    let hits = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .filter(|r| r.snippet.is_some())
+        .count();
+    assert!(h.state().picker.preview.is_some(), "a preview is loaded");
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let rebuilt = graph::build(vault::scan(&root).expect("rescan"));
     h.state_mut().apply_graph(rebuilt);
     h.step();
-    assert_eq!(h.state().picker.query, "grafer", "the query survives");
+    assert_eq!(h.state().picker.query, "Heading One", "the query survives");
     assert_eq!(
         h.state().picker.cursor_row().map(|r| r.key.clone()),
         Some(before),
         "and the cursor stays on the same result"
+    );
+    assert_eq!(
+        h.state()
+            .picker
+            .rows
+            .iter()
+            .filter(|r| r.snippet.is_some())
+            .count(),
+        hits,
+        "content hits survive the reload — they are keyed by path"
+    );
+    assert!(
+        h.state().picker.preview.is_some(),
+        "and the preview is not thrown away"
     );
 }
 

@@ -152,7 +152,15 @@ impl Viewer {
         // rows and content hits index the OLD arena — the picker re-derives
         // them (keeping its query and its cursor's identity)
         self.picker.on_reload(g.nodes.len());
-        self.detail = None; // re-read the body — the pane shows fresh edits
+        if !same_structure {
+            // The cached body carries tg:// links built from NODE INDEXES;
+            // a structural reload renumbers them, so clicking one would
+            // jump somewhere else entirely. A text-only reload (the common
+            // case under agents) keeps the body — `preview_column` re-reads
+            // it by (mtime, len) if the file itself changed.
+            self.detail = None;
+            self.detail_stamp = None;
+        }
         // evict only thumbnails/excerpts whose file actually changed —
         // reloads are frequent (agents writing notes) and a full clear made
         // every image flicker through its placeholder

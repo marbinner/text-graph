@@ -1,24 +1,28 @@
 //! The picker: one keyboard-driven finder over everything in the graph —
 //! note names, aliases, paths, file CONTENT, and live terminal panes.
 //!
-//! Layout is deliberately not a centered overlay: the picker docks LEFT
-//! (prompt, result list, preview), which leaves the canvas visible on the
-//! right. Panels shrink the central panel, and `canvas()` compensates the
-//! camera whenever its rect changes, so the highlighted result glides into
-//! the middle of what's still visible — you read the match and see where it
-//! sits in the graph at the same time.
+//! The prompt and its results FLOAT over the canvas, centered on it with
+//! the prompt just below the middle (telescope-style) so the eye stays near
+//! the center of the screen; previews stay in the side pane, where a
+//! walked-to file previews too. `frame_target` lifts the followed node into
+//! the band above the overlay, so the graph stays readable behind it.
 //!
 //! Per keystroke: names/aliases/paths re-score in memory (instant), while
 //! file content is scanned by a worker thread after a short debounce and
 //! streams back in batches. Matching itself lives in `search.rs`; this
 //! module is state, keys, and paint.
+//!
+//! Nothing here resets itself just because the vault reloaded: hits are
+//! keyed by PATH, the preview re-reads only when its own file changed, and
+//! the cursor rides its row's identity. Agents save files every few
+//! seconds — a search that blinked on each would be unusable.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 
-use text_graph::search::{self, Class, FileHits, Names, Query, Row, ScanFile, Target};
+use text_graph::search::{self, Class, FileHits, Names, Query, Row, Target};
 
 use super::*;
 
@@ -82,7 +86,7 @@ enum PreviewBody {
     Note(String),
 }
 
-struct Preview {
+pub(super) struct Preview {
     key: String,
     title: String,
     subtitle: String,
@@ -92,6 +96,10 @@ struct Preview {
     focus: Option<usize>,
     /// Scroll the hit into view on the next frame.
     scroll: bool,
+    /// (vault-relative path, stamp) the raw lines were read from — a
+    /// reload re-reads only when THIS file changed, so an agent saving
+    /// something else can't blink the preview.
+    source: Option<(String, Option<super::images::Stamp>)>,
 }
 
 pub(super) struct Picker {
@@ -127,9 +135,10 @@ pub(super) struct Picker {
     live: Arc<AtomicU64>,
     tx: Sender<ScanMsg>,
     rx: Receiver<ScanMsg>,
-    /// Content hits by node index, tagged with the generation that found
-    /// them so a finished scan can evict the previous one's leftovers.
-    content: HashMap<u32, (u64, FileHits)>,
+    /// Content hits by vault-relative PATH (never by node index — reloads
+    /// renumber the arena), tagged with the generation that found them so a
+    /// finished scan can evict the previous one's leftovers.
+    content: HashMap<String, (u64, FileHits)>,
     pub(super) scanning: bool,
     /// A query whose scan finished COMPLETE (not cancelled, not truncated)
     /// and the vault-relative paths that had hits — the candidate set a
@@ -139,7 +148,7 @@ pub(super) struct Picker {
     pending_at: Instant,
     /// Pane list the current rows were built from (panes come and go).
     pane_keys: Vec<(String, String)>,
-    preview: Option<Preview>,
+    pub(super) preview: Option<Preview>,
     /// Result the camera is dwelling on, and when it landed there.
     follow: Option<(NodeId, Instant)>,
     followed: Option<NodeId>,
@@ -224,21 +233,19 @@ impl Picker {
         self.scanning = false;
     }
 
-    /// A vault reload renumbered the nodes: hits and rows point into the
-    /// old arena, so drop them and re-derive from scratch. The QUERY and
-    /// the cursor's identity survive — the picker must not reset itself
-    /// under an agent that saves a file while you type.
+    /// A vault reload renumbered the nodes, so the name tier re-scores —
+    /// but the CONTENT hits are keyed by path and stay, and so does the
+    /// preview. Agents save files every few seconds; a search that emptied
+    /// its own list and reset its preview that often would be unusable.
+    /// The refreshed results replace these in place when the rescan lands.
     pub(super) fn on_reload(&mut self, n_nodes: usize) {
         self.node_scores = vec![None; n_nodes];
         self.name_rows.clear();
         self.names_for = None; // node indices moved: re-score from scratch
-        self.content.clear();
-        // the reload was triggered by a file changing: a narrowed rescan
-        // would skip exactly that file
+        // the reload was triggered by SOME file changing and we don't know
+        // which, so the rescan can't narrow — but it must not throw away
+        // what is on screen while it runs
         self.done = None;
-        self.preview = None;
-        self.follow = None;
-        self.followed = None;
         self.dirty = true;
         if self.open && !self.query.trim().is_empty() {
             self.pending_scan = Some(Query::parse(&self.query));
@@ -448,7 +455,7 @@ impl Viewer {
             match msg {
                 ScanMsg::Hits(generation, hits) if generation == self.picker.generation => {
                     for h in hits {
-                        self.picker.content.insert(h.node, (generation, h));
+                        self.picker.content.insert(h.rel.clone(), (generation, h));
                     }
                     self.picker.dirty = true;
                 }
@@ -463,16 +470,8 @@ impl Viewer {
                     // generation are gone for good now: this scan looked
                     // at every candidate file
                     self.picker.content.retain(|_, (g, _)| *g == generation);
-                    self.picker.done = (!outcome.truncated).then(|| {
-                        let files = self
-                            .picker
-                            .content
-                            .values()
-                            .filter_map(|(_, h)| self.g.nodes.get(h.node as usize))
-                            .map(|n| n.path.clone())
-                            .collect();
-                        (query, files)
-                    });
+                    self.picker.done = (!outcome.truncated)
+                        .then(|| (query, self.picker.content.keys().cloned().collect()));
                     self.picker.dirty = true;
                 }
                 _ => {} // superseded generation
@@ -505,23 +504,19 @@ impl Viewer {
             .as_ref()
             .filter(|(prev, _)| q.narrows(prev))
             .map(|(_, files)| files);
-        let mut files: Vec<ScanFile> = self
+        let mut files: Vec<String> = self
             .g
             .nodes
             .iter()
-            .enumerate()
-            .filter(|(_, n)| match n.kind {
+            .filter(|n| match n.kind {
                 NodeKind::File => true,
                 NodeKind::Asset => filetype::is_text(&n.path),
                 _ => false,
             })
-            .filter(|(_, n)| narrow.is_none_or(|set| set.contains(&n.path)))
-            .map(|(i, n)| ScanFile {
-                node: i as u32,
-                rel: n.path.clone(),
-            })
+            .filter(|n| narrow.is_none_or(|set| set.contains(&n.path)))
+            .map(|n| n.path.clone())
             .collect();
-        files.sort_by(|a, b| a.rel.cmp(&b.rel));
+        files.sort();
         self.picker.scanning = true;
         let root = self.root.clone();
         let tx = self.picker.tx.clone();
@@ -618,22 +613,24 @@ impl Viewer {
             .collect();
         if !q.is_empty() {
             let pat = search::pattern(&self.picker.query);
-            for (node, (_, hits)) in &self.picker.content {
-                let Some(n) = self.g.nodes.get(*node as usize) else {
+            for (rel, (_, hits)) in &self.picker.content {
+                // hits outlive reloads, so a file may be gone by now
+                let Some(id) = self.g.by_path(rel) else {
                     continue;
                 };
+                let (node, n) = (id.0, self.g.node(id));
                 let more = hits.total.saturating_sub(1);
                 // a node that already matched by name keeps that (higher)
                 // class and just gains the matching line
-                if let Some(&r) = row_of.get(node) {
+                if let Some(&r) = row_of.get(&node) {
                     rows[r].snippet = Some(hits.best.clone());
                     rows[r].more = more;
                     continue;
                 }
-                scores[*node as usize] =
-                    Some(scores[*node as usize].unwrap_or(0).max(hits.best.score));
+                scores[node as usize] =
+                    Some(scores[node as usize].unwrap_or(0).max(hits.best.score));
                 rows.push(Row {
-                    target: Target::Node(*node),
+                    target: Target::Node(node),
                     class: Class::Content,
                     score: hits.best.score,
                     title: n.display_name().to_string(),
@@ -651,12 +648,20 @@ impl Viewer {
         self.picker.node_scores = scores;
         self.picker.rows = rows;
         // the cursor rides its row's identity, not its index
+        let was = self.picker.cursor;
         self.picker.cursor = self
             .picker
             .cursor_key
             .as_ref()
             .and_then(|k| self.picker.rows.iter().position(|r| &r.key == k))
             .unwrap_or(0);
+        if self.picker.cursor != was {
+            // a streaming batch landed rows ABOVE the cursor: scroll by the
+            // same amount so the row under your eye stays under your eye
+            // instead of sliding away mid-read
+            self.picker.list_offset += (self.picker.cursor as f32 - was as f32) * ROW_H;
+            self.picker.scroll = true;
+        }
         self.picker.cursor_key = self.picker.cursor_row().map(|r| r.key.clone());
         self.sync_terminal_scores();
     }
@@ -791,18 +796,31 @@ impl Viewer {
         }
     }
 
-    /// Load the preview for whatever the cursor is on (once per row).
+    /// Load the preview for whatever the cursor is on. Rebuilt when the
+    /// cursor moves, when the previewed FILE changed on disk, and every
+    /// frame for a terminal card (its screen is live) — never merely
+    /// because a reload happened, or an agent saving some other note would
+    /// blink the preview every few seconds.
     fn load_preview(&mut self) {
         let Some(row) = self.picker.cursor_row().cloned() else {
             self.picker.preview = None;
             return;
         };
-        if self
+        let same_row = self
             .picker
             .preview
             .as_ref()
-            .is_some_and(|p| p.key == row.key)
-        {
+            .is_some_and(|p| p.key == row.key);
+        let live_screen = matches!(row.target, Target::Pane { .. });
+        let file_changed = self
+            .picker
+            .preview
+            .as_ref()
+            .and_then(|p| p.source.as_ref())
+            .is_some_and(|(rel, stamp)| {
+                stamp.is_some() && super::images::file_stamp(&self.root.join(rel)) != *stamp
+            });
+        if same_row && !live_screen && !file_changed {
             return;
         }
         let q = Query::parse(&self.picker.query);
@@ -832,13 +850,16 @@ impl Viewer {
                     },
                     focus: None,
                     scroll: false,
+                    source: None,
                 }
             }
-            Target::Node(i) => self.node_preview(NodeId(*i), &row, &q),
+            // a refreshed file keeps its scroll: only a NEW row re-aims the
+            // preview at the hit
+            Target::Node(i) => self.node_preview(NodeId(*i), &row, &q, !same_row),
         });
     }
 
-    fn node_preview(&mut self, id: NodeId, row: &Row, q: &Query) -> Preview {
+    fn node_preview(&mut self, id: NodeId, row: &Row, q: &Query, scroll: bool) -> Preview {
         let node = self.g.node(id);
         let (kind, path) = (node.kind, node.path.clone());
         let mut meta = String::new();
@@ -889,7 +910,11 @@ impl Viewer {
             meta,
             body,
             focus,
-            scroll: true,
+            scroll,
+            source: Some((
+                path.clone(),
+                super::images::file_stamp(&self.root.join(&path)),
+            )),
         }
     }
 

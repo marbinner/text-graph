@@ -48,8 +48,15 @@ impl Viewer {
             };
             (n.kind, p)
         };
-        if self.detail.as_ref().map(|(i, _)| *i) != Some(id) {
+        // Re-read only when the node changed or ITS file did. Reloads
+        // land every few seconds under working agents, and re-reading (and
+        // re-parsing markdown) on each made the preview flicker and lose
+        // its scroll. Kinds with no body stamp as None on both sides, so
+        // they never look stale.
+        let stamp = super::images::file_stamp(&self.root.join(&path));
+        if self.detail.as_ref().map(|(i, _)| *i) != Some(id) || self.detail_stamp != stamp {
             self.detail = Some((id, self.load_body(id)));
+            self.detail_stamp = stamp;
         }
         match kind {
             NodeKind::File => {
