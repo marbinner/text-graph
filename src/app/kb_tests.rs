@@ -794,3 +794,36 @@ fn a_setting_changed_in_the_window_round_trips_through_the_config_file() {
     assert_eq!(back.hover_delay, 0.8, "the value comes back as written");
     assert_eq!(back, h.state().cfg, "and nothing else moved");
 }
+
+/// Appearance settings are read at paint time, so what can be checked
+/// headlessly is the derivations they feed: the label LOD ramp and the
+/// radii (which also drive hit-testing, not just the picture).
+#[test]
+fn label_density_and_node_scale_move_what_they_feed() {
+    use text_graph::graph::NodeKind;
+    let r = 2.1; // just under the default leaf ramp
+    assert_eq!(
+        super::label_lod(NodeKind::File, r, 1.0),
+        0.0,
+        "at default density this label is still hidden"
+    );
+    assert!(
+        super::label_lod(NodeKind::File, r, 2.0) > 0.0,
+        "denser labels reach readable size at less zoom"
+    );
+    assert!(
+        super::label_lod(NodeKind::Dir, r, 1.0) > super::label_lod(NodeKind::File, r, 1.0),
+        "the dirs-surface-earlier offset survives the shift"
+    );
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let g = graph::build(vault::scan(&root).expect("fixture scans"));
+    let base = Viewer::derived(&g, 1.0).radius;
+    let bigger = Viewer::derived(&g, 1.5).radius;
+    assert!(
+        base.iter()
+            .zip(&bigger)
+            .all(|(a, b)| (b - a * 1.5).abs() < 1e-3),
+        "node scale multiplies every radius, cap included"
+    );
+}

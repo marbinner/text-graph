@@ -62,9 +62,6 @@ const TEXT: Color32 = Color32::from_rgb(0x9a, 0xa0, 0xac);
 /// Incoming links in the navigator's connections strip.
 const LINK_IN: Color32 = Color32::from_rgb(0xbb, 0x9a, 0xf7);
 
-/// Dim factor applied to everything outside the active node's neighborhood.
-const DIM: f32 = 0.18;
-
 /// Canvas + panel palette, switchable at runtime (⚙ settings). The module
 /// consts above are the DARK values and stay the fixed palette for
 /// terminal-card internals — terminals are dark in either theme.
@@ -239,12 +236,17 @@ fn pressed_fresh(ui: &egui::Ui, key: Key) -> bool {
 
 /// 0 below the ramp, 1 above it — how strongly a node's label shows at
 /// this screen radius.
-fn label_lod(kind: NodeKind, r: f32) -> f32 {
+/// `density` (a setting) SHIFTS the ramp rather than reshaping it: at 2×
+/// labels reach readable size at half the zoom, and the dir/leaf offset
+/// survives.
+fn label_lod(kind: NodeKind, r: f32, density: f32) -> f32 {
     let (lo, hi) = if kind == NodeKind::Dir {
         LABEL_RAMP_DIR
     } else {
         LABEL_RAMP
     };
+    let d = density.max(0.05);
+    let (lo, hi) = (lo / d, hi / d);
     ((r - lo) / (hi - lo)).clamp(0.0, 1.0)
 }
 
@@ -544,7 +546,7 @@ struct Viewer {
 impl Viewer {
     /// Everything derivable from the graph alone — shared by `new` and the
     /// live-reload `rebuild`.
-    fn derived(g: &Graph) -> Derived {
+    fn derived(g: &Graph, node_scale: f32) -> Derived {
         let mut degree = vec![0usize; g.nodes.len()];
         for (i, node) in g.nodes.iter().enumerate() {
             degree[i] += node.children.len();
@@ -576,7 +578,7 @@ impl Viewer {
                     NodeKind::Ghost => 3.0,
                     NodeKind::Web => 2.6,
                 };
-                (base + (*d as f32).sqrt() * 1.3f32).min(18.0)
+                (base + (*d as f32).sqrt() * 1.3f32).min(18.0) * node_scale
             })
             .collect();
         let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
@@ -613,7 +615,7 @@ impl Viewer {
             n_assets,
             n_webs,
             dir_by_path,
-        } = Self::derived(&g);
+        } = Self::derived(&g, cfg.node_scale);
         let (reload_tx, reload_rx) = std::sync::mpsc::channel();
         let vs = state::load(&root);
         let cam = vs.camera;
@@ -1502,7 +1504,7 @@ impl Viewer {
             let color = if on {
                 self.theme.edge_tree
             } else {
-                self.theme.edge_tree.gamma_multiply(DIM)
+                self.theme.edge_tree.gamma_multiply(self.cfg.focus_fade)
             };
             // sa = child, sb = parent — the wedge thins toward the child
             paint_tree_edge(&painter, sb, sa, color);
@@ -1532,7 +1534,7 @@ impl Viewer {
             } else if on {
                 (hue.gamma_multiply(rest_a), 1.0)
             } else {
-                (hue.gamma_multiply(DIM), 1.0)
+                (hue.gamma_multiply(self.cfg.focus_fade), 1.0)
             };
             let mid = sa.lerp(sb, 0.5);
             let d = sb - sa;
@@ -1562,7 +1564,8 @@ impl Viewer {
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
             let on = lit[id.0 as usize];
-            let dimmed = |c: Color32| if on { c } else { c.gamma_multiply(DIM) };
+            let fade = self.cfg.focus_fade;
+            let dimmed = |c: Color32| if on { c } else { c.gamma_multiply(fade) };
             // Big enough to read, a node paints as its file-type glyph
             // (Nerd Font icons — python is the python logo, css the css
             // shield); below that, a colored disc. Ghosts stay hollow.
@@ -1616,7 +1619,9 @@ impl Viewer {
                     // presence fades so the disc↔card flip never pops.
                     // Binary assets stay discs at every zoom.
                     let ur = self.radius[id.0 as usize] * self.zoom;
-                    let want = ur >= Self::PREVIEW_MIN_R && self.previewable(id);
+                    let want = self.cfg.canvas_previews
+                        && ur >= Self::PREVIEW_MIN_R
+                        && self.previewable(id);
                     let presence = ui.ctx().animate_value_with_time(
                         egui::Id::new(("preview", &node.path)),
                         if want { 1.0 } else { 0.0 },
@@ -1643,7 +1648,7 @@ impl Viewer {
                         // between bright and near-black reads as flicker
                         let dim_a = ui.ctx().animate_value_with_time(
                             egui::Id::new(("preview-dim", &node.path)),
-                            if on { 1.0 } else { DIM },
+                            if on { 1.0 } else { fade },
                             0.15,
                         );
                         let a = presence * dim_a;
@@ -1680,7 +1685,7 @@ impl Viewer {
                     }
                 }
                 NodeKind::Image => {
-                    if r < Self::IMG_BOX_MIN_R {
+                    if r < Self::IMG_BOX_MIN_R || !self.cfg.thumbnails {
                         painter.circle_filled(s, r, dimmed(self.theme.img));
                     } else {
                         // decode on demand, draw the thumbnail once it lands;
@@ -1691,7 +1696,7 @@ impl Viewer {
                         // dim/undim FADES for pictures: the neighborhood
                         // dim snapping a photo between bright and near-black
                         // on every hover change read as flicker
-                        let target = if on { 1.0 } else { DIM };
+                        let target = if on { 1.0 } else { fade };
                         let t = ui.ctx().animate_value_with_time(
                             egui::Id::new(("img-tint", &node.path)),
                             target,
@@ -1779,7 +1784,7 @@ impl Viewer {
                 active == Some(id) || partners.contains(&id)
             };
             let lod = if !searching && lit[id.0 as usize] {
-                label_lod(node.kind, r)
+                label_lod(node.kind, r, self.cfg.label_density)
             } else {
                 0.0
             };

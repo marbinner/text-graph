@@ -72,10 +72,21 @@ impl Viewer {
     }
 
     /// The settings that aren't read straight off `self.cfg` each frame.
+    /// Everything else is live by construction — the canvas asks the config
+    /// while it paints.
     fn after_change(&mut self, key: &str) {
-        if key == "theme_light" {
-            self.theme = Theme::get(self.cfg.light);
-            self.apply_visuals = true;
+        match key {
+            "theme_light" => {
+                self.theme = Theme::get(self.cfg.light);
+                self.apply_visuals = true;
+            }
+            // radii are derived once per graph, not per frame (they feed
+            // hit-testing and the LOD ramps as well as the paint)
+            "node_scale" => {
+                let radius = Viewer::derived(&self.g, self.cfg.node_scale).radius;
+                self.radius = radius;
+            }
+            _ => {}
         }
     }
 

@@ -140,7 +140,7 @@ impl Viewer {
             n_assets,
             n_webs,
             dir_by_path,
-        } = Self::derived(&g);
+        } = Self::derived(&g, self.cfg.node_scale);
         self.radius = radius;
         self.depths = depths;
         self.n_files = n_files;
