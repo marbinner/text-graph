@@ -1515,3 +1515,47 @@ fn the_source_view_is_syntax_coloured_and_keeps_its_match_marks() {
         "spans index into the line as drawn, capping included"
     );
 }
+
+/// Obsidian callouts render as callouts, and its inline marks render as
+/// what they mean: `> [!warning]` gets a heading and an accent, `==x==`
+/// reads as emphasis, `%%x%%` is not shown at all, `#tag` is a chip.
+#[test]
+fn obsidian_flavored_markdown_renders() {
+    let d = std::env::temp_dir().join(format!("tg-obsidian-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("note.md"),
+        "# Title\n\n> [!warning] Mind the gap\n> The platform curves.\n\n\
+         A ==marked== phrase, a #topic tag, %%a private aside%% and\n\
+         a `fn code()` span. ^para-1\n",
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.pump_picker(ui.ctx());
+            v.side_panel(ui);
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    let id = h.state().g.by_path("note.md").expect("note");
+    h.state_mut().selected = Some(id);
+    h.run();
+    let has = |s: &str| h.query_by_label_contains(s).is_some();
+    let (warning, aside, marked, tag, blockid) = (
+        has("Warning"),
+        has("private aside"),
+        has("marked"),
+        has("#topic"),
+        has("para-1"),
+    );
+    let _ = std::fs::remove_dir_all(&d);
+    assert!(warning, "a callout renders under its own heading");
+    assert!(!aside, "%%comments%% are for the writer, not the reader");
+    assert!(marked, "==highlight== keeps its text");
+    assert!(tag, "#tags render");
+    assert!(!blockid, "^block-ids are addresses, not text");
+}

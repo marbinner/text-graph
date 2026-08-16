@@ -10,6 +10,55 @@
 use super::*;
 use picker::{Preview, PreviewBody, one_line};
 
+/// Obsidian's callout types, as the renderer's "alerts". Obsidian has a
+/// long list with heavy aliasing (`tip` = `hint` = `important`); these are
+/// the ones people actually type, and an unknown one still renders as the
+/// blockquote it is written as.
+fn callouts(theme: &Theme) -> egui_commonmark::AlertBundle {
+    let blue = theme.dir;
+    let green = egui::Color32::from_rgb(0x3f, 0xa5, 0x5b);
+    let amber = theme.wiki;
+    let red = egui::Color32::from_rgb(0xd0, 0x50, 0x50);
+    let purple = theme.link_in;
+    let rows: &[(&str, &str, char, egui::Color32)] = &[
+        ("NOTE", "Note", '📝', blue),
+        ("INFO", "Info", 'ℹ', blue),
+        ("ABSTRACT", "Abstract", '📄', blue),
+        ("SUMMARY", "Summary", '📄', blue),
+        ("TODO", "Todo", '☑', blue),
+        ("TIP", "Tip", '💡', green),
+        ("HINT", "Hint", '💡', green),
+        ("SUCCESS", "Success", '✔', green),
+        ("DONE", "Done", '✔', green),
+        ("CHECK", "Check", '✔', green),
+        ("QUESTION", "Question", '❓', amber),
+        ("FAQ", "FAQ", '❓', amber),
+        ("WARNING", "Warning", '⚠', amber),
+        ("CAUTION", "Caution", '⚠', amber),
+        ("ATTENTION", "Attention", '⚠', amber),
+        ("IMPORTANT", "Important", '❗', amber),
+        ("FAILURE", "Failure", '✖', red),
+        ("FAIL", "Fail", '✖', red),
+        ("MISSING", "Missing", '✖', red),
+        ("DANGER", "Danger", '⚡', red),
+        ("ERROR", "Error", '⚡', red),
+        ("BUG", "Bug", '🐛', red),
+        ("EXAMPLE", "Example", '📋', purple),
+        ("QUOTE", "Quote", '❝', purple),
+        ("CITE", "Cite", '❝', purple),
+    ];
+    egui_commonmark::AlertBundle::from_alerts(
+        rows.iter()
+            .map(|(id, shown, icon, color)| egui_commonmark::Alert {
+                accent_color: *color,
+                icon: *icon,
+                identifier: (*id).to_string(),
+                identifier_rendered: (*shown).to_string(),
+            })
+            .collect(),
+    )
+}
+
 /// A preview body scrolls in BOTH directions with its layout width pinned
 /// to the pane. Prose still wraps where the pane ends, while a wide
 /// markdown table or an unwrappable code line scrolls inside the pane
@@ -138,6 +187,7 @@ impl Viewer {
                 // take/put-back so the markdown cache and the body can
                 // be borrowed simultaneously without a per-frame clone
                 let detail = self.detail.take();
+                let theme = self.theme;
                 if let Some((_, body)) = &detail {
                     preview_scroll(ui, "nav-preview", &self.pane_content_w, |ui| {
                         // images take the pane's width, never a fixed 400:
@@ -147,6 +197,7 @@ impl Viewer {
                         let w = ui.available_width().max(80.0) as usize;
                         CommonMarkViewer::new()
                             .max_image_width(Some(w))
+                            .alerts(callouts(&theme))
                             // fenced code is highlighted by the same
                             // syntect themes the source view uses, so a
                             // snippet reads the same in either

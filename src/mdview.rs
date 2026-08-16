@@ -267,6 +267,40 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         reps.push((span, new));
     }
 
+    // ---- callouts: `> [!warning] Title` ----
+    // The renderer's alert parser wants `[!WARNING]` and nothing else on
+    // the line; Obsidian writes any case, an optional fold marker, and an
+    // optional title. Normalize the marker and give the title its own
+    // quoted line in bold, which is how Obsidian shows it anyway.
+    for (span, new) in callout_headers(body, &in_code) {
+        reps.push((span, new));
+    }
+
+    // ---- Obsidian's own inline marks ----
+    // Everything here is a rewrite into plain CommonMark, because the
+    // renderer only speaks CommonMark. Code spans and fences are excluded
+    // like every other scan above.
+    //
+    // %%comments%% are not for the reader — Obsidian hides them.
+    for (at, len) in spans_between(body, "%%", &in_code) {
+        reps.push((at..at + len, String::new()));
+    }
+    // ==highlight== has no CommonMark spelling; bold is the closest thing
+    // that still reads as emphasis rather than as two stray equals signs.
+    for (at, len) in spans_between(body, "==", &in_code) {
+        let inner = &body[at + 2..at + len - 2];
+        reps.push((at..at + len, format!("**{inner}**")));
+    }
+    // #tags become code chips: visible as one token, and never mistaken
+    // for a heading (a heading is `# ` — with the space).
+    for (at, len) in tag_spans(body, &in_code) {
+        reps.push((at..at + len, format!("`{}`", &body[at..at + len])));
+    }
+    // ^block-ids are addresses, not text: Obsidian doesn't show them.
+    for (at, len) in block_id_spans(body, &in_code) {
+        reps.push((at..at + len, String::new()));
+    }
+
     // apply back-to-front so earlier offsets stay valid; drop overlaps
     // (defensive — the scans target disjoint constructs)
     reps.sort_by_key(|(r, _)| r.start);
@@ -278,9 +312,217 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
     out
 }
 
+/// Obsidian callout headers, rewritten to what the alert parser accepts.
+/// Returns (span of the header line, replacement).
+fn callout_headers(body: &str, in_code: &dyn Fn(usize) -> bool) -> Vec<(Range<usize>, String)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for line in body.split_inclusive('\n') {
+        let start = at;
+        at += line.len();
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        // the quote prefix: any mix of '>' and spaces (callouts nest)
+        let prefix_len = trimmed
+            .find(|c: char| c != '>' && c != ' ' && c != '\t')
+            .unwrap_or(trimmed.len());
+        let (prefix, rest) = trimmed.split_at(prefix_len);
+        if !prefix.contains('>') || in_code(start) {
+            continue;
+        }
+        let Some(rest) = rest.strip_prefix("[!") else {
+            continue;
+        };
+        let Some(close) = rest.find(']') else {
+            continue;
+        };
+        let kind = &rest[..close];
+        if kind.is_empty() || !kind.chars().all(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        // `[!note]-` / `[!note]+` fold the callout in Obsidian; we always
+        // show the contents, so the marker is just dropped
+        let title = rest[close + 1..].trim_start_matches(['-', '+']).trim();
+        let mut new = format!("{prefix}[!{}]", kind.to_ascii_uppercase());
+        if !title.is_empty() {
+            new.push('\n');
+            new.push_str(prefix.trim_end());
+            new.push_str(&format!(" **{title}**"));
+        }
+        out.push((start..start + trimmed.len(), new));
+    }
+    out
+}
+
+/// Paired inline marks (`%%…%%`, `==…==`): (start, total length) for each
+/// pair on ONE line, outside code. Unclosed marks are left alone — a lone
+/// `==` in prose is prose.
+fn spans_between(body: &str, mark: &str, in_code: &dyn Fn(usize) -> bool) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(found) = body[i..].find(mark) {
+        let start = i + found;
+        let inner_start = start + mark.len();
+        let Some(close) = body[inner_start..].find(mark) else {
+            break;
+        };
+        let end = inner_start + close + mark.len();
+        i = end;
+        let inner = &body[inner_start..end - mark.len()];
+        if in_code(start) || inner.is_empty() || inner.contains('\n') {
+            continue;
+        }
+        out.push((start, end - start));
+    }
+    out
+}
+
+/// Obsidian tags: `#` followed by a non-space, not glued to a word (so
+/// `a#b` and `#` in a URL fragment stay put) and not a heading marker.
+fn tag_spans(body: &str, in_code: &dyn Fn(usize) -> bool) -> Vec<(usize, usize)> {
+    let b = body.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(found) = body[i..].find('#') {
+        let start = i + found;
+        i = start + 1;
+        let before = start.checked_sub(1).map(|p| b[p]);
+        if before.is_some_and(|c| !c.is_ascii_whitespace()) || in_code(start) {
+            continue; // a#b, an anchor, code
+        }
+        let rest = &body[start + 1..];
+        let len = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_' || c == '/'))
+            .unwrap_or(rest.len());
+        // `# heading` has a space right after the hash; a tag never does,
+        // and a tag has to have something in it
+        if len == 0 || !rest[..len].chars().any(char::is_alphabetic) {
+            continue;
+        }
+        out.push((start, len + 1));
+        i = start + 1 + len;
+    }
+    out
+}
+
+/// Trailing `^block-id` anchors — an address for a link to point at, not
+/// something a reader wants to see.
+fn block_id_spans(body: &str, in_code: &dyn Fn(usize) -> bool) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_end();
+        if let Some(hat) = trimmed.rfind(" ^") {
+            let id = &trimmed[hat + 2..];
+            if !id.is_empty()
+                && id.chars().all(|c| c.is_alphanumeric() || c == '-')
+                && !in_code(at + hat)
+            {
+                out.push((at + hat, trimmed.len() - hat));
+            }
+        }
+        at += line.len();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-note vault on disk — `prepare` reads the graph for its
+    /// source node, so an empty Graph has nothing to be the source of.
+    fn one_note_vault(tag: &str) -> (std::path::PathBuf, Graph, NodeId) {
+        let d = std::env::temp_dir().join(format!("tg-mdview-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("note.md"), "x").unwrap();
+        let g = crate::graph::build(vault::scan(&d).unwrap());
+        let src = g.by_path("note.md").unwrap();
+        (d, g, src)
+    }
+
+    /// Obsidian's inline marks, rewritten into CommonMark the renderer
+    /// can actually draw — and never inside code, where they are text.
+    #[test]
+    fn obsidian_inline_marks_render_as_markdown() {
+        let (d, g, src) = one_note_vault("obsidian");
+        let out = prepare(
+            &g,
+            &d,
+            src,
+            "Some ==important== bit %%not for the reader%% here.\n\
+             Tagged #rust and #deep/work today. ^block-42\n\
+             `==code==` and `#nope` stay literal.\n\
+             # A heading keeps its hash\n\
+             See a#b and https://x/y#frag.\n",
+        );
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(
+            out.contains("**important**"),
+            "==x== reads as emphasis: {out}"
+        );
+        assert!(
+            !out.contains("not for the reader"),
+            "%%comments%% are hidden"
+        );
+        assert!(
+            out.contains("`#rust`") && out.contains("`#deep/work`"),
+            "{out}"
+        );
+        assert!(!out.contains("^block-42"), "block ids are addresses: {out}");
+        assert!(
+            out.contains("`==code==`") && out.contains("`#nope`"),
+            "code is literal"
+        );
+        assert!(out.contains("# A heading"), "a heading is not a tag");
+        assert!(out.contains("a#b"), "a hash inside a word is not a tag");
+        assert!(out.contains("https://x/y#frag"), "nor is a URL fragment");
+    }
+
+    /// Callouts: any case, an optional fold marker, an optional title —
+    /// all normalized to the one spelling the renderer's alert parser
+    /// accepts, with the title kept as its own bold line.
+    #[test]
+    fn callout_headers_are_normalized() {
+        let (d, g, src) = one_note_vault("callout");
+        let out = prepare(
+            &g,
+            &d,
+            src,
+            "> [!warning] Mind the gap\n> body\n\n\
+             > [!tip]-\n> folded in obsidian, open here\n\n\
+             >> [!note] nested\n\n\
+             > [!not a callout] stays\n",
+        );
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(
+            out.contains("> [!WARNING]\n> **Mind the gap**"),
+            "marker uppercased, title moved to its own line: {out}"
+        );
+        assert!(
+            out.contains("> [!TIP]"),
+            "the fold marker is dropped: {out}"
+        );
+        assert!(out.contains(">> [!NOTE]"), "nesting is kept: {out}");
+        assert!(
+            out.contains("[!not a callout]"),
+            "a bracket that isn't a type is left alone: {out}"
+        );
+    }
+
+    #[test]
+    fn unclosed_marks_are_left_alone() {
+        let (d, g, src) = one_note_vault("unclosed");
+        let out = prepare(
+            &g,
+            &d,
+            src,
+            "2 == 2 is true, and 50%% of nothing.\nx ^ y is a caret.\n",
+        );
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(out.contains("2 == 2"), "a lone == is arithmetic: {out}");
+        assert!(out.contains("x ^ y"), "a lone ^ is a caret: {out}");
+    }
 
     #[test]
     fn tg_urls_round_trip() {
