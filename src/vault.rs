@@ -84,6 +84,13 @@ const SKIPPED_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
+/// Whether a directory name is deliberately outside the graph. Creation
+/// uses the same predicate so it cannot successfully write an invisible
+/// note below a subtree the scanner will always prune.
+pub(crate) fn is_skipped_dir_name(name: &str) -> bool {
+    SKIPPED_DIRS.contains(&name)
+}
+
 /// Raster formats the scan turns into Image nodes. SVG is excluded — the
 /// viewer has no vector rasterizer.
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
@@ -124,9 +131,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         .filter_entry(|e| {
             !(e.depth() > 0
                 && e.file_type().is_some_and(|t| t.is_dir())
-                && e.file_name()
-                    .to_str()
-                    .is_some_and(|n| SKIPPED_DIRS.contains(&n)))
+                && e.file_name().to_str().is_some_and(is_skipped_dir_name))
         })
         .build();
     for entry in walker {
@@ -205,11 +210,11 @@ fn rel_str(root: &Path, path: &Path) -> String {
 fn in_skipped_dir(root: &Path, path: &Path) -> bool {
     path.strip_prefix(root)
         .unwrap_or(path)
-        .components()
-        .any(|c| {
-            SKIPPED_DIRS
-                .iter()
-                .any(|s| c.as_os_str().to_str() == Some(s))
+        .parent()
+        .is_some_and(|parent| {
+            parent
+                .components()
+                .any(|c| c.as_os_str().to_str().is_some_and(is_skipped_dir_name))
         })
 }
 
@@ -253,7 +258,11 @@ pub fn watch_relevant(root: &Path, p: &Path) -> bool {
     let hidden = rel
         .components()
         .any(|c| c.as_os_str().to_str().is_some_and(|s| s.starts_with('.')));
-    !hidden && !in_skipped_dir(root, p)
+    let skipped_leaf_dir = p.is_dir()
+        && p.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_skipped_dir_name);
+    !hidden && !in_skipped_dir(root, p) && !skipped_leaf_dir
 }
 
 /// Read at most `max_bytes` of a file as (lossy) text — for previewing
@@ -500,6 +509,25 @@ mod tests {
         );
         assert!(scan.assets.is_empty(), "target/ contents never surface");
         assert_eq!(scan.files.len(), 1);
+    }
+
+    #[test]
+    fn skipped_names_are_allowed_for_files_but_not_ancestor_directories() {
+        let d = std::env::temp_dir().join(format!("tg-skip-leaf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("target-dir/target")).unwrap();
+        std::fs::write(d.join("target"), "an extensionless asset").unwrap();
+        std::fs::write(d.join("target-dir/target/hidden.md"), "# hidden").unwrap();
+
+        let scanned = scan(&d).unwrap();
+        assert_eq!(scanned.assets, ["target"]);
+        assert!(scanned.files.is_empty());
+        assert!(watch_relevant(&d, &d.join("target")));
+
+        let _ = std::fs::remove_file(d.join("target"));
+        std::fs::create_dir(d.join("target")).unwrap();
+        assert!(!watch_relevant(&d, &d.join("target")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Walk errors must come out sorted — readdir order is not stable

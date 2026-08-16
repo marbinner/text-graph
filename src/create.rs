@@ -19,7 +19,9 @@ pub fn note_rel_path(dir: &str, input: &str) -> Result<String> {
         .checked_sub(3)
         .and_then(|i| rel.get(i..))
         .is_some_and(|s| s.eq_ignore_ascii_case(".md"));
-    Ok(if has_md { rel } else { format!("{rel}.md") })
+    let rel = if has_md { rel } else { format!("{rel}.md") };
+    reject_skipped_components(&rel, false)?;
+    Ok(rel)
 }
 
 /// Materialize a ghost: the file whose STEM must equal the ghost's target.
@@ -27,12 +29,16 @@ pub fn note_rel_path(dir: &str, input: &str) -> Result<String> {
 /// target `x.md` (resolution strips one suffix), so the note that resolves
 /// it is `x.md.md`, not `x.md`.
 pub fn ghost_rel_path(target: &str) -> Result<String> {
-    Ok(format!("{}.md", clean_rel("", target)?))
+    let rel = format!("{}.md", clean_rel("", target)?);
+    reject_skipped_components(&rel, false)?;
+    Ok(rel)
 }
 
 /// Same, for a folder (no extension handling).
 pub fn folder_rel_path(dir: &str, input: &str) -> Result<String> {
-    clean_rel(dir, input)
+    let rel = clean_rel(dir, input)?;
+    reject_skipped_components(&rel, true)?;
+    Ok(rel)
 }
 
 fn clean_rel(dir: &str, input: &str) -> Result<String> {
@@ -73,6 +79,19 @@ fn clean_rel(dir: &str, input: &str) -> Result<String> {
     })
 }
 
+/// Reject directory components the vault scanner deliberately prunes. For
+/// files, the last component is a filename (`target.md` is fine); for a
+/// folder it is another directory and must be checked too.
+fn reject_skipped_components(rel: &str, leaf_is_dir: bool) -> Result<()> {
+    let mut parts = rel.split('/').peekable();
+    while let Some(part) = parts.next() {
+        if (leaf_is_dir || parts.peek().is_some()) && crate::vault::is_skipped_dir_name(part) {
+            bail!("'{part}' is excluded from the graph");
+        }
+    }
+    Ok(())
+}
+
 /// Refuse to create through a symlinked path component: a linked dir (or
 /// leaf) inside the vault could redirect the write outside it. The walker
 /// doesn't follow links, so nothing behind one is part of the graph anyway.
@@ -92,6 +111,7 @@ fn reject_symlink_components(root: &Path, rel: &str) -> Result<()> {
 /// Create an empty note at `rel` (creating parent folders), refusing to
 /// overwrite anything. Returns the absolute path.
 pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
+    reject_skipped_components(rel, false)?;
     reject_symlink_components(root, rel)?;
     let abs = root.join(rel);
     if let Some(parent) = abs.parent() {
@@ -115,6 +135,7 @@ pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Create a folder at `rel` (and parents). Idempotent.
 pub fn make_folder(root: &Path, rel: &str) -> Result<PathBuf> {
+    reject_skipped_components(rel, true)?;
     reject_symlink_components(root, rel)?;
     let abs = root.join(rel);
     if abs.is_file() {
@@ -158,6 +179,31 @@ mod tests {
         ] {
             assert!(note_rel_path("", bad).is_err(), "should reject {bad:?}");
         }
+    }
+
+    #[test]
+    fn rejects_paths_below_directories_the_scanner_skips() {
+        for bad in ["target/note", "deep/node_modules/note", "__pycache__/note"] {
+            assert!(note_rel_path("", bad).is_err(), "should reject {bad:?}");
+        }
+        assert!(note_rel_path("target", "note").is_err());
+        assert!(folder_rel_path("", "target").is_err());
+        assert!(folder_rel_path("notes", "deep/target").is_err());
+        assert_eq!(
+            note_rel_path("", "target").unwrap(),
+            "target.md",
+            "a filename stem is not a skipped directory"
+        );
+    }
+
+    #[test]
+    fn write_helpers_enforce_the_skip_policy_too() {
+        let root = scratch();
+        assert!(write_note(&root, "target/n.md").is_err());
+        assert!(make_folder(&root, "node_modules").is_err());
+        assert!(!root.join("target").exists());
+        assert!(!root.join("node_modules").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
