@@ -9,7 +9,6 @@
 //! notes, absolute `file://` for images). Code spans and fences stay
 //! byte-for-byte untouched. Pure string work — egui-free, headless-tested.
 
-use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
 
@@ -117,17 +116,9 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
     let excluded = vault::excluded_ranges(body);
     let in_code = |at: usize| excluded.iter().any(|r| r.contains(&at));
 
-    // Resolution for wikilinks comes from the graph's own edges, matched
-    // back to occurrences by byte offset (so display uses exactly what the
-    // resolver decided); duplicate occurrences of the same target reuse the
-    // first edge's node.
-    let by_offset: HashMap<usize, NodeId> = g.outlinks(source).map(|l| (l.offset, l.to)).collect();
-    let mut by_target: HashMap<String, NodeId> = HashMap::new();
-    for raw in vault::extract_links(body) {
-        if let Some(&to) = by_offset.get(&raw.offset) {
-            by_target.entry(raw.target).or_insert(to);
-        }
-    }
+    // Resolution comes from the graph's per-occurrence index, not its
+    // deduplicated edge list: two different spellings can resolve to the
+    // same node while both still need clickable preview links.
 
     let mut reps: Vec<(Range<usize>, String)> = Vec::new();
 
@@ -176,7 +167,7 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
                 }
                 None => {}
             }
-        } else if let Some(&id) = by_target.get(target) {
+        } else if let Some(id) = g.wikilink_at(source, start) {
             reps.push((
                 span_start..inner_end + 2,
                 format!("[{}]({})", display_text(inner), node_url(id)),
@@ -565,6 +556,35 @@ mod tests {
         assert_eq!(parse_url(&node_url(NodeId(7))), Some(7));
         assert_eq!(parse_url("https://x"), None);
         assert_eq!(parse_url("tg://nope"), None);
+    }
+
+    #[test]
+    fn every_wikilink_occurrence_survives_edge_deduplication() {
+        let d = std::env::temp_dir().join(format!("tg-mdview-occ-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("dir")).unwrap();
+        let body = "[[target|bare]] [[dir/target|qualified]] [[target|again]]";
+        std::fs::write(d.join("source.md"), body).unwrap();
+        std::fs::write(d.join("dir/target.md"), "# target").unwrap();
+        let g = crate::graph::build(vault::scan(&d).unwrap());
+        let source = g.by_path("source.md").unwrap();
+        let target = g.by_path("dir/target.md").unwrap();
+
+        assert_eq!(
+            g.outlinks(source).filter(|link| link.to == target).count(),
+            1,
+            "topology still deduplicates the shared destination"
+        );
+        for raw in vault::extract_links(body) {
+            assert_eq!(g.wikilink_at(source, raw.offset), Some(target));
+        }
+        let out = prepare(&g, &d, source, body);
+        assert_eq!(
+            out.matches(&format!("({})", node_url(target))).count(),
+            3,
+            "each spelling and duplicate must be clickable: {out}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

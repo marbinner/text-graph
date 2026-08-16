@@ -129,6 +129,9 @@ pub struct Graph {
     links_in: Vec<Vec<u32>>,
     /// `Node::ident()` → id. Idents are unique (ghosts are namespaced).
     ident_index: HashMap<String, NodeId>,
+    /// Every resolved wikilink occurrence, including duplicate edges. Graph
+    /// topology deduplicates `(from, to)`; Markdown rendering cannot.
+    wikilink_occurrences: HashMap<(NodeId, usize), NodeId>,
 }
 
 impl Graph {
@@ -146,6 +149,7 @@ impl Graph {
             links_out: Vec::new(),
             links_in: Vec::new(),
             ident_index: HashMap::new(),
+            wikilink_occurrences: HashMap::new(),
         }
     }
 
@@ -200,6 +204,17 @@ impl Graph {
     /// Look a node up by its `Node::ident()` (includes ghosts).
     pub fn by_ident(&self, ident: &str) -> Option<NodeId> {
         self.ident_index.get(ident).copied()
+    }
+
+    /// Destination chosen for the wikilink beginning at `offset` in
+    /// `source`'s frontmatter-stripped body. Unlike `outlinks`, this keeps
+    /// duplicate spellings that collapse to one graph edge.
+    pub fn wikilink_at(&self, source: NodeId, offset: usize) -> Option<NodeId> {
+        self.wikilink_occurrences.get(&(source, offset)).copied()
+    }
+
+    pub(crate) fn record_wikilink(&mut self, source: NodeId, offset: usize, to: NodeId) {
+        self.wikilink_occurrences.insert((source, offset), to);
     }
 
     /// Recursive counts for the subtree UNDER `id` (`id` itself excluded):

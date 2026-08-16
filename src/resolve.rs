@@ -131,6 +131,9 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                 }
             };
 
+            // Rendering needs every textual occurrence even when graph
+            // topology drops a self-link or deduplicates the edge below.
+            g.record_wikilink(*src, link.offset, to);
             if to == *src {
                 g.self_links_dropped += 1;
                 continue;
