@@ -120,10 +120,12 @@ the agent until `Ctrl+Q`.
 
 ### Finding and browsing
 
-Navigation is built around one list. It floats just below the middle of
-the canvas with its results stacked underneath — telescope style, so your
-eye stays near the center of the screen — while the pane on the right
-previews whatever is highlighted. It has two **sources**, not two
+Navigation is built around one list. It floats over the middle of the
+window with its results stacked underneath, filling everything below the
+prompt — telescope style, so your eye stays near the center of the screen
+(⚙ *finder position* moves the prompt up for more rows at once, or down
+for a more central one) — while the pane on the right previews whatever
+is highlighted. It has two **sources**, not two
 surfaces:
 
 **Find** (`f`, `/` or `Ctrl+F`) searches everything in the vault: note
