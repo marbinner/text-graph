@@ -31,17 +31,20 @@
     - we want to track a history of which panels were focused so we can jump back and forth quickly.
     - when fuzzy searching we want to put higher priority on recently visited nodes.
     - the telescope like fuzzy search
+- make it so that the mouse cursor only highlights things if it was moved, if the user is doing other thigns to moev the camera around or etc then the mouse should not highlight stuff that it's pointing at. 
+- when a folder node is higlighted, the names of all the nodes in that folder should be visible by default so that we can see which one we want to visit potentially.
 
 # todo next
 
 # in progress
-- ctrl+q should always deselect/unfocus everything. So when I'm in an active terminal for example it should deselect it completely so that i can for example press f to start searching.
-- shift+g shoudl zoom into the currently selected node. The zoom shoudl be appropriate to show the local neighbourhood of that node.
-
+- when opening a new terminal aor agent pane etc, it should open inside the current camera view so that we can see it.
 
 
 
 # done
+- ctrl+q should always deselect/unfocus everything. So when I'm in an active terminal for example it should deselect it completely so that i can for example press f to start searching.
+- shift+g shoudl zoom into the currently selected node. The zoom shoudl be appropriate to show the local neighbourhood of that node.
+
 - in the normal graph view pressing tab and shift+tab should scroll me through the terminal/agent panes. It should change the zoom but it should take me around in a deterministic order and expand the terminals. I can press enter to focus if I wanna type
 - whenever a node is highlighted, for example due to it being the most relevant node currently in the search, then it should be expanded in the graph view for the user. For example if it's a terminal pane. 
 - syntax highlighting in the text previewer. It should show me highlighting for code. It should render markdown files ina pretty way that's nice to read. And it should support most obsidian markdown style features in a nice way. 
