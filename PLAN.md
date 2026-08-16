@@ -221,6 +221,20 @@ mode: `$VISUAL`/`$EDITOR`/`$TERMINAL` simply aren't there when the viewer
 is started from an IDE or a desktop entry, the same class of bug as the
 agent-launch PATH rescue.
 
+**C+++ — Navigation centered on the finder. ✓ done 2026-08-16.** The pane
+was doing two jobs — choosing a file (sibling column) and looking at one
+(preview) — so each chooser grew its own preview and they drifted. Now:
+overlays choose, the pane shows. ONE `Preview`, built by
+`sync_pane_preview` for whatever the current subject is (the overlay's
+highlighted row, else the selection), drawn by one `preview_pane`. The
+ranger stopped being a surface and became a SOURCE of the overlay —
+`b` lists a folder, typing filters it (the scoped search that was always
+meant to be a query mode), `Tab` swaps source, `Enter` descends,
+`Backspace` ascends. An empty find prompt lists what changed last, which
+under working agents is the question you actually had. `r` switches any
+preview between rendered markdown and numbered source. Adding a third
+source (links? tags?) means adding a source, not a surface.
+
 Checkpoint after C: daily-drive it against the real vault; annoyances set D's order.
 
 **D — Scale & polish (as needed, not speculatively).** Collapse/expand subtrees

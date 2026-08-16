@@ -99,7 +99,7 @@
   relative markdown dests resolve against the SOURCE note's directory
   (standard markdown semantics) and must never escape the vault —
   absolute and `..`-escaping dests stay untouched, or a preview could
-  mint `file://` URLs outside it. The pane's shared `preview_column`
+  mint `file://` URLs outside it. The pane's `preview_column`
   intercepts `tg://` OpenUrl commands and jumps instead of opening a
   browser — keep that interception where the markdown is rendered, or
   wikilink clicks leak to the OS.
@@ -107,8 +107,8 @@
   camera/canvas painting + key dispatch; `picker.rs` = the finder (state,
   keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
-  lifecycle; `navigator.rs` = the side pane (mode dispatch, ranger,
-  shared preview column); `actions.rs` = right-click
+  lifecycle; `navigator.rs` = the side pane (the one previewer: subject
+  header, bodies, connections strip); `actions.rs` = right-click
   menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
   worker pump + apply + persistence glue; `diag.rs` = health badge;
   `settings.rs` = the ⚙ window (registry-driven) + the key list;
@@ -197,9 +197,19 @@
   its OWN first stage of the Esc dismiss chain (the search prompt is,
   via the picker branch, which is also the one deliberate exception to
   the guard: its Enter/Esc/arrows act while its own field is focused).
-- The picker (`f`, `/`, `Ctrl+F`) is the ONE search surface — there is no
-  second, directory-scoped finder (the old ranger `f` prompt is gone; a
-  scoped search would be a query prefix, not another keybind): names/aliases/paths
+- The overlay is the ONE list surface, and navigation is centered on it.
+  It has SOURCES, never siblings: `f`/`/`/`Ctrl+F` = find (fuzzy over the
+  whole vault), `b` = browse (one folder's entries, tree order, typing
+  filters them — the scoped search that was always meant to be a query
+  mode rather than a second keybind), and an empty find prompt = the 30
+  most recently edited files (agents rewrite notes all day; "what
+  changed" is the useful default). Tab swaps source keeping the query;
+  browsing descends on Enter, ascends on Backspace-with-empty-filter,
+  takes the folder ITSELF on Shift+Enter, and never reads a file. The
+  browsed folder is held as a PATH — reloads renumber the arena under an
+  open overlay. Adding a third source means adding a source, NOT a second
+  surface with its own preview and its own keys; that is exactly how the
+  ranger drifted. Find mode's engine: names/aliases/paths
   fuzzy (nucleo, scored per FIELD — one concatenated haystack manufactured
   subsequence matches straddling name and path), file CONTENT literal (all
   terms on one line, smart case). Content is NEVER indexed: `search::
@@ -252,26 +262,31 @@
 - The side pane's WIDTH belongs to the user: a quarter of the window the
   first time, then whatever they drag it to (`pane_width`, persisted per
   vault). Never size it from the inside — `ui.set_min_width` in the mode
-  bodies is what used to resize it on every ranger↔search switch and snap
-  it back when dragged narrower; content columns take a SHARE of the pane
+  bodies is what used to resize it on every mode switch and snap it back
+  when dragged narrower; content columns take a SHARE of the pane
   instead. The only automatic change is a window too narrow to hold it,
   where the 60% ceiling outranks the 300pt floor, and the drag is
   recorded only while the pointer is down — otherwise that clamp gets
   saved as the user's choice.
-- ONE side pane, two modes (`navigator::side_pane`): the highlighted
-  result's preview while a search is live, else the ranger (with nothing
-  selected it falls back to the vault root, so `f` never opens onto a
-  blank pane). Both modes share `preview_column`, which is therefore also
-  the one place that renders markdown and so the one place that claims
-  `tg://` OpenUrl commands — moving that claim back into a single mode
-  leaks wikilink clicks to the OS browser. With an empty query the
-  picker's arrow keys drive the RANGER (`walk_siblings`), never an
-  invisible result list.
-- hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
+- ONE previewer, and the chooser only picks its SUBJECT: the overlay's
+  highlighted row while it is open, else the selection
+  (`sync_pane_preview` in the picker pump — the preview is state, not
+  paint). `preview_pane` draws it: header (glyph, name, the path as
+  clickable ancestors, size · age), body, then the SELECTION's
+  connections strip (hidden while the overlay is open — `]`/`[` index the
+  selection's list, not somebody else's). Body rules: rendered markdown
+  for notes via `preview_column` — still the one place markdown renders
+  and so the one place `tg://` OpenUrl commands are claimed, or wikilink
+  clicks leak to the OS browser — and numbered SOURCE when a content hit
+  needs showing where it lives, or when `r` (the `preview_raw` setting)
+  asks for it. The cache is keyed by subject identity, so `r` and a
+  STRUCTURAL reload must both drop it: the first changes the reading, the
+  second renumbers the NodeId inside it.
+- hjkl are MODAL on selection: node selected = tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
   anything else in either mode; `l` guards against key-repeat spawning
-  editors. `f` opens the picker from BOTH modes. `]`/`[` walk
+  editors. `f` and `b` open the overlay from BOTH modes. `]`/`[` walk
   `conn_cursor` over the connections strip —
   `navigator::connections()` is the single source of its entry order
   (children, outs, backs); Enter/l follow, Esc dismisses it FIRST, tree

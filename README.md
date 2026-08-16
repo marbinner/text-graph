@@ -60,11 +60,11 @@ assets raw, images large, folders show their listing plus direct and
 recursive counts and the total wiki + external links leaving their files,
 ghosts list their referencers — all without selecting anything.
 
-Selecting a node opens the **navigator**: a ranger-style pane with a
-clickable breadcrumb, the selection's siblings in a cursor column (dirs
-colored, `/`-suffixed), and a preview — rendered markdown for notes, the
-child listing for folders, the picture for images. Walk it with vim keys
-(`hjkl`, `gg`, `G`, `f` to find within the directory); the graph camera
+Selecting a node opens the **preview pane**: file-type glyph, name, the
+path as clickable ancestors, size and age, then the file itself —
+rendered markdown for notes, source with line numbers for code (`r`
+switches either way), the child listing for folders, the picture for
+images. Walk the tree with vim keys (`hjkl`, `gg`, `G`); the graph camera
 follows the walk, so the neighborhood you're reading is always the
 neighborhood you're seeing. A **connections strip** along the bottom lists
 everything the node touches, color-coded and clickable: blue `▸ folder/`
@@ -115,53 +115,59 @@ the agent until `Ctrl+Q`.
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
 | `,` or `⚙` (bottom-right) | **settings** — see below |
 | `?` | every keybinding, in the settings window |
-| `f`, `/` or `Ctrl+F` | **the picker** — see below |
+| `f`, `/` or `Ctrl+F` | **find** anything — see below |
+| `b` | **browse** the folder you're in, in the same list |
 
 ### Finding and browsing
 
-Click any node — or press `f` — and the right-hand pane opens. It has two
-modes:
+Navigation is built around one list. It floats just below the middle of
+the canvas with its results stacked underneath — telescope style, so your
+eye stays near the center of the screen — while the pane on the right
+previews whatever is highlighted. It has two **sources**, not two
+surfaces:
+
+**Find** (`f`, `/` or `Ctrl+F`) searches everything in the vault: note
+names, aliases, paths, the **text inside every file**, and the live agent
+terminals. Names, aliases and paths match fuzzily (`apbn` finds
+`agent-protocol-benchmark.md`); file content matches literally — every
+word you type has to appear on the same line, case-insensitively unless
+you type a capital. Content is never indexed: a worker thread streams the
+vault per query and stops the moment you type another character, so
+nothing goes stale under agents that rewrite notes while you search. With
+**nothing typed**, it lists what changed last — the 30 most recently
+edited files, newest first, which is usually the question you had.
+
+**Browse** (`b`) lists one folder's entries instead, in tree order, and
+typing filters *that folder* — the same keys, the same preview, scoped.
+`Enter` walks into a directory, `Backspace` on an empty filter walks back
+out, `Shift+Enter` takes the folder itself. `Tab` swaps between the two
+sources and keeps what you typed: a filter that found nothing here is
+usually what you wanted to search the whole vault for.
+
+The preview is the same one for both, and the same one a selected node
+gets — there is no second place to look at a file. A **content** hit
+shows the file's raw lines with every match highlighted and the hit
+scrolled into view; `r` switches any note between rendered markdown and
+source. A search rides out vault reloads: agents saving notes underneath
+you re-scan in the background without emptying the list, moving your
+cursor, or blinking the preview. On the canvas, matching nodes stay lit
+and the highlighted result **glides into view** as you arrow down — into
+the band above the prompt, so it never hides behind it.
 
 The pane opens at a quarter of the window and then keeps whatever width
-you drag it to (per vault, across restarts) — switching between its two
-modes never resizes it.
-
-**Browsing** (the ranger): breadcrumb, sibling column with the cursor,
-preview (rendered markdown for notes, raw text for code/config assets,
-the picture for images, the listing for folders), and the color-coded
-connections strip — every row led by its file-type icon.
-
-**Searching** (`f`, `/` or `Ctrl+F`): the prompt floats just below the
-middle of the canvas with its results stacked underneath — telescope
-style, so your eye stays near the center of the screen — while the pane
-on the right previews whatever is highlighted. One finder over
-everything in the vault — note names, aliases, paths, the
-**text inside every file**, and the live agent terminals. Names, aliases
-and paths match fuzzily (`apbn` finds `agent-protocol-benchmark.md`);
-file content matches literally — every word you type has to appear on the
-same line, case-insensitively unless you type a capital. Content is never
-indexed: a worker thread streams the vault per query and stops the moment
-you type another character, so nothing goes stale under agents that
-rewrite notes while you search.
-
-The preview is the same one browsing gives you, except for a **content**
-hit, which shows the file's raw lines with every match highlighted and
-the hit scrolled into view. A search rides out vault reloads: agents
-saving notes underneath you re-scan in the background without emptying
-the list, moving your cursor, or blinking the preview. On the canvas, matching nodes stay lit and
-the highlighted result **glides into view** as you arrow down — into the
-band above the prompt, so it never hides behind it. An empty prompt is
-just the ranger, so `f` costs nothing when you only meant to look
-around.
+you drag it to (per vault, across restarts).
 
 | Input | Action |
 |---|---|
 | type | filter — names first, then paths, then terminals, then content hits (with the matching line and its number) |
-| `↑` `↓` / `Ctrl+P` `Ctrl+N` | move through results (with an empty prompt: walk the siblings, like `j`/`k`) |
+| `↑` `↓` / `Ctrl+P` `Ctrl+N` | move through the list |
 | `PageUp` `PageDown` / `Ctrl+U` `Ctrl+D` | half-page jumps |
-| `Enter` / click | take the result — select it, frame it, and drop back into browsing on it (a terminal card lands focused and centered, at your current zoom) |
+| `Enter` / click | take it — select it, frame it, and drop back into the graph on it (a terminal card lands focused and centered, at your current zoom); while browsing, `Enter` on a folder goes *into* it |
+| `Shift+Enter` | take a folder itself instead of entering it |
+| `Backspace` | browsing, with an empty filter: up one folder |
+| `Tab` | swap find ⇄ browse, keeping the query |
 | `Ctrl+Enter` | open the file in `$VISUAL`/`$EDITOR` **at the matched line** |
-| `Esc` | close the search, keeping the selection |
+| `Esc` | close the list, keeping the selection |
 
 ### Navigating a selection
 
@@ -180,6 +186,8 @@ instead of snapping, and never changes your zoom.
 | `h` | up to the parent |
 | `l` | enter a directory / open a file in the editor |
 | `gg` / `G` | first / last sibling |
+| `b` | **browse this folder** in the finder — the list, scoped |
+| `r` | read the preview as source (line numbers) or as markdown |
 | `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
@@ -396,9 +404,10 @@ src/
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
               scanning (streamed from disk, never indexed), ranked rows
   app/        egui shell: transform, input, painting, reload worker,
-              terminal cards + focus; navigator.rs = the side pane (ranger
-              + shared preview column), picker.rs = its search mode (state,
-              keys, results), images.rs = thumbnail textures, previews.rs =
+              terminal cards + focus; navigator.rs = the side pane (THE
+              previewer: header, bodies, connections strip), picker.rs =
+              the list overlay and its sources (find / browse / recent),
+              images.rs = thumbnail textures, previews.rs =
               canvas text previews + hover popup, diag.rs = health badge,
               settings.rs = the ⚙ window + the key list
 assets/
