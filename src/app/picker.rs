@@ -409,6 +409,14 @@ impl Picker {
         self.set_scanning(!q.is_empty());
         self.dirty = true;
     }
+
+    /// A mirrored screen changed after this frame's picker pump. Rebuild on
+    /// the next frame so literal pane matches follow live terminal output.
+    pub(super) fn terminal_content_changed(&mut self) {
+        if self.open && !self.query.trim().is_empty() {
+            self.dirty = true;
+        }
+    }
 }
 
 impl Viewer {
@@ -1755,5 +1763,17 @@ mod scan_generation_tests {
         assert_eq!(picker.live.load(Ordering::Relaxed), 42);
         assert_eq!(picker.pending_scan.as_ref(), Some(&q));
         assert!(picker.scanning);
+    }
+
+    #[test]
+    fn live_terminal_output_invalidates_an_open_finder() {
+        let mut picker = Picker::new();
+        picker.open = true;
+        picker.query = "panic".into();
+        picker.dirty = false;
+
+        picker.terminal_content_changed();
+
+        assert!(picker.dirty);
     }
 }

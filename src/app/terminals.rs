@@ -723,12 +723,14 @@ impl Viewer {
             self.terms.focused = None;
         }
 
+        let mut terminal_content_changed = false;
         for (s, m) in &mut self.terms.mirrors {
             if m.pump() {
                 self.terms.activity.insert(s.clone(), Instant::now());
             }
             let mgen = m.generation();
             if self.terms.mirror_gen.get(s).copied() != Some(mgen) {
+                terminal_content_changed = true;
                 self.terms.mirror_gen.insert(s.clone(), mgen);
                 let grids = m.grids();
                 self.terms
@@ -740,6 +742,9 @@ impl Viewer {
                         .insert((s.clone(), pane), build_cached(&grid));
                 }
             }
+        }
+        if terminal_content_changed {
+            self.picker.terminal_content_changed();
         }
 
         // glow fades need a few follow-up frames
