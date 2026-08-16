@@ -9,8 +9,14 @@
 //! corrupt lines of a known kind are simply dropped.
 
 use std::collections::{HashMap, HashSet};
-use std::io;
+use std::io::{self, Read as _};
 use std::path::Path;
+
+/// View state is a compact list of coordinates and pane identities. A
+/// megabyte leaves room for thousands of cards while preventing a planted
+/// file (or an endless device reached through a symlink) from exhausting
+/// memory during startup.
+const MAX_VIEW_STATE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewState {
@@ -81,24 +87,30 @@ pub fn to_text(s: &ViewState) -> String {
 
 pub fn from_text(text: &str) -> ViewState {
     let mut s = ViewState::default();
+    // Borrow keys from `text`: the sets exist only while parsing, and avoid
+    // both quadratic Vec scans and a second owned copy of every identity.
+    let mut seen_cards: HashSet<(&str, &str)> = HashSet::new();
+    let mut seen_pins: HashSet<(&str, &str)> = HashSet::new();
     for line in text.lines() {
-        match line.split('\t').next() {
-            Some("camera") => {
-                let mut f = line.split('\t').skip(1);
+        let (kind, fields) = line.split_once('\t').unwrap_or((line, ""));
+        match kind {
+            "camera" => {
+                let mut f = fields.split('\t');
                 if let (Some(x), Some(y), Some(z)) = (num(f.next()), num(f.next()), num(f.next()))
                     && z > 0.0
                 {
                     s.camera = Some((x, y, z));
                 }
             }
-            Some("card") => {
-                let fields: Vec<&str> = line.splitn(5, '\t').collect();
-                if let [_, dx, dy, pane, session] = fields[..]
+            "card" => {
+                let mut f = fields.splitn(4, '\t');
+                if let (Some(dx), Some(dy), Some(pane), Some(session)) =
+                    (f.next(), f.next(), f.next(), f.next())
                     && let (Some(dx), Some(dy)) = (num(Some(dx)), num(Some(dy)))
                     // first occurrence wins: a duplicated line (git merge,
                     // hand edit) would otherwise ride claim()'s fallback
                     // pass onto a pane the user never arranged
-                    && !s.cards.iter().any(|c| c.session == session && c.pane == pane)
+                    && seen_cards.insert((session, pane))
                 {
                     s.cards.push(CardPos {
                         session: session.to_string(),
@@ -113,31 +125,25 @@ pub fn from_text(text: &str) -> ViewState {
             // computed default on the first frame, when the window is
             // still eframe's 1280 — and a width nobody picked must not
             // outlive the fix. `pane_w` is only ever written by a drag.
-            Some("pane") => {}
-            Some("pane_w") => {
+            "pane" => {}
+            "pane_w" => {
                 // clamped on the way in like the camera: a corrupt width
                 // could park the pane over the whole window
-                s.pane_width = line
-                    .split('\t')
-                    .nth(1)
-                    .and_then(|v| num(Some(v)))
-                    .map(|w| w.clamp(120.0, 4000.0));
+                s.pane_width = num(Some(fields)).map(|w| w.clamp(120.0, 4000.0));
             }
-            Some("hide_web") => s.hide_web = true,
-            Some("light") => s.light = Some(true),
-            Some("agent") => {
-                if let Some((_, a)) = line.split_once('\t')
-                    && !a.is_empty()
-                {
-                    s.default_agent = Some(a.to_string());
+            "hide_web" => s.hide_web = true,
+            "light" => s.light = Some(true),
+            "agent" => {
+                if !fields.is_empty() {
+                    s.default_agent = Some(fields.to_string());
                 }
             }
-            Some("pin") => {
-                let fields: Vec<&str> = line.splitn(3, '\t').collect();
-                if let [_, pane, session] = fields[..]
+            "pin" => {
+                let mut f = fields.splitn(2, '\t');
+                if let (Some(pane), Some(session)) = (f.next(), f.next())
                     // dedup like cards: a doubled pin line spontaneously
                     // pins a second pane of the session via claim()
-                    && !s.pins.iter().any(|(se, p)| se == session && p == pane)
+                    && seen_pins.insert((session, pane))
                 {
                     s.pins.push((session.to_string(), pane.to_string()));
                 }
@@ -219,9 +225,21 @@ pub fn claim<V: Copy>(
 }
 
 pub fn load(vault: &Path) -> ViewState {
-    std::fs::read_to_string(vault.join(".text-graph/view"))
-        .map(|t| from_text(&t))
-        .unwrap_or_default()
+    load_path(&vault.join(".text-graph/view")).unwrap_or_default()
+}
+
+fn load_path(path: &Path) -> io::Result<ViewState> {
+    let file = std::fs::File::open(path)?;
+    let mut text = String::new();
+    file.take(MAX_VIEW_STATE_BYTES as u64 + 1)
+        .read_to_string(&mut text)?;
+    if text.len() > MAX_VIEW_STATE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("view state exceeds {MAX_VIEW_STATE_BYTES} bytes"),
+        ));
+    }
+    Ok(from_text(&text))
 }
 
 /// Write-temp-then-rename, so a crash mid-write can't leave a torn file.
@@ -363,6 +381,24 @@ mod tests {
             "first occurrence wins; distinct panes all load"
         );
         assert_eq!(s.pins, vec![("s".to_string(), "%1".to_string())]);
+    }
+
+    #[test]
+    fn oversized_view_state_is_rejected() {
+        let base = std::env::temp_dir().join(format!("tg-state-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("view");
+        std::fs::write(&path, vec![b'x'; MAX_VIEW_STATE_BYTES + 1]).unwrap();
+
+        let error = load_path(&path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("view state exceeds"),
+            "unexpected error: {error}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
