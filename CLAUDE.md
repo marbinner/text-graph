@@ -69,14 +69,16 @@
   relative markdown dests resolve against the SOURCE note's directory
   (standard markdown semantics) and must never escape the vault —
   absolute and `..`-escaping dests stay untouched, or a preview could
-  mint `file://` URLs outside it. The navigator intercepts `tg://`
-  OpenUrl commands and jumps instead of opening a browser — keep that
-  interception, or wikilink clicks leak to the OS.
+  mint `file://` URLs outside it. The pane's shared `preview_column`
+  intercepts `tg://` OpenUrl commands and jumps instead of opening a
+  browser — keep that interception where the markdown is rendered, or
+  wikilink clicks leak to the OS.
   Only the bin's `app/` tree touches egui. Its layout: `mod.rs` = Viewer +
   camera/canvas painting + key dispatch; `picker.rs` = the finder (state,
   keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
-  lifecycle; `navigator.rs` = the ranger pane; `actions.rs` = right-click
+  lifecycle; `navigator.rs` = the side pane (mode dispatch, ranger,
+  shared preview column); `actions.rs` = right-click
   menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
   worker pump + apply + persistence glue; `diag.rs` = health badge;
   `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
@@ -181,10 +183,18 @@
   row's IDENTITY, since reloads renumber the arena. Content lines are
   matched against the RAW file, frontmatter included — that is what makes
   the line number the one `$EDITOR +N` wants (Ctrl+Enter). Browsing
-  results must NOT set the selection (it would open the navigator and
-  squeeze out the canvas the picker previews into) and an empty prompt
-  lists the vault without moving the camera. The picker docks LEFT and
-  the navigator is suppressed while it is open.
+  results must NOT set the selection — that is what Enter COMMITS to, so
+  Esc can leave you where you were.
+- ONE side pane, two modes (`navigator::side_pane`): the search prompt on
+  top whenever the picker is open, then its results (query non-empty) or
+  the ranger (query empty — the prompt FILTERS the pane, it doesn't
+  replace it; with nothing selected the ranger falls back to the vault
+  root so `f` never opens onto a blank column). Both modes share
+  `preview_column`, which is therefore also the one place that renders
+  markdown and so the one place that claims `tg://` OpenUrl commands —
+  moving that claim back into a single mode leaks wikilink clicks to the
+  OS browser. With an empty query the picker's arrow keys drive the
+  RANGER (`walk_siblings`), never an invisible result list.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to

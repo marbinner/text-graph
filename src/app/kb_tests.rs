@@ -435,8 +435,8 @@ fn content_search_finds_words_inside_notes() {
 }
 
 /// Arrowing through results moves the cursor by identity and, after its
-/// dwell, glides the camera — without selecting anything (a selection would
-/// open the navigator and squeeze the canvas the picker previews into).
+/// dwell, glides the camera — without selecting anything: the selection is
+/// what you COMMIT to with Enter, so Esc has to leave you where you were.
 #[test]
 fn arrows_walk_results_and_the_camera_follows_after_a_dwell() {
     let mut h = harness();
@@ -519,7 +519,7 @@ fn picker_ui_renders_prompt_results_and_preview() {
         |ui, v: &mut Viewer| {
             v.pump_picker(ui.ctx());
             if v.picker.open {
-                v.picker_ui(ui);
+                v.side_pane(ui);
             }
         },
         viewer,
@@ -541,47 +541,39 @@ fn picker_ui_renders_prompt_results_and_preview() {
     );
 }
 
-/// An empty prompt lists the whole vault (the picker doubles as a
-/// browser) — but merely opening it must not yank the camera to the first
-/// file. Arrowing through that listing on purpose still follows.
+/// An empty prompt IS the ranger: no result rows, nothing lit on the
+/// canvas, and the arrows walk the sibling column exactly like j/k. The
+/// pane opens on the vault root when nothing is selected yet.
 #[test]
-fn an_empty_prompt_lists_the_vault_without_moving_the_camera() {
+fn an_empty_prompt_leaves_the_ranger_in_place_and_the_arrows_walk_it() {
     let mut h = harness();
-    press(&mut h, Key::Slash);
+    select(&mut h, "bom.md");
+    press(&mut h, Key::F);
     h.step();
-    assert_eq!(
-        h.state().picker.rows.len(),
-        h.state().g.nodes.len(),
-        "every node is listed"
+    assert!(h.state().picker.open);
+    assert!(
+        h.state().picker.rows.is_empty(),
+        "an empty query ranks nothing"
     );
-    let keys: Vec<String> = h
-        .state()
-        .picker
-        .rows
-        .iter()
-        .map(|r| r.key.clone())
-        .collect();
-    let mut sorted = keys.clone();
-    sorted.sort();
-    assert_eq!(keys, sorted, "listed in a deterministic order");
     assert!(
         h.state().picker.node_scores.iter().all(Option::is_none),
-        "a bare listing dims nothing on the canvas"
+        "and dims nothing on the canvas"
     );
 
-    h.state_mut().cam_anim = None;
-    for _ in 0..8 {
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(
-        h.state().cam_anim.is_none(),
-        "opening the picker must not move the camera"
-    );
     press(&mut h, Key::ArrowDown);
-    wait_for(&mut h, "the camera glide after a deliberate move", |v| {
-        v.cam_anim.is_some()
-    });
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("empty.md"),
+        "↓ steps to the next sibling, like j"
+    );
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"), "↑ steps back");
+    assert!(h.state().cam_anim.is_some(), "the camera follows the walk");
+
+    // …and with nothing selected, the first step enters the vault root
+    h.state_mut().selected = None;
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(selected_path(&h).as_deref(), Some("assets"));
 }
 
 /// The keystroke that OPENS the picker must not land in its prompt: the
@@ -599,7 +591,7 @@ fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
             // like the real ui(): the pane exists only while it is open,
             // and its prompt holds the keyboard for exactly that long
             if v.picker.open {
-                v.picker_ui(ui);
+                v.side_pane(ui);
             }
         },
         viewer,
@@ -615,4 +607,50 @@ fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
     h.step();
     assert!(h.state().picker.open, "the picker opened");
     assert_eq!(h.state().picker.query, "", "and its prompt is empty");
+}
+
+/// A [[wikilink]] clicked in a preview must jump, never reach the OS
+/// browser — and that has to hold in BOTH pane modes, since they share one
+/// preview column. Regression risk: the claim used to live in the ranger
+/// body, which the search mode does not render.
+#[test]
+fn tg_links_are_claimed_in_the_search_preview_too() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root);
+    let target = viewer.g.by_path("topics/grafér.md").expect("target exists");
+    let mut h = Harness::new_ui_state(
+        move |ui, v: &mut Viewer| {
+            // stand in for a click inside the rendered markdown
+            ui.ctx().output_mut(|o| {
+                o.commands.push(eframe::egui::OutputCommand::OpenUrl(
+                    eframe::egui::output::OpenUrl::same_tab(format!(
+                        "{}{}",
+                        text_graph::mdview::SCHEME,
+                        target.0
+                    )),
+                ));
+            });
+            v.pump_picker(ui.ctx());
+            v.side_pane(ui);
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    // search mode: a name match, so the preview is the shared column
+    h.state_mut().picker.open = true;
+    h.state_mut().picker.query = "index".into();
+    h.step();
+    h.step();
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("topics/grafér.md"),
+        "the tg:// click jumped instead of opening a browser"
+    );
+    let leaked = h.ctx.output(|o| {
+        o.commands
+            .iter()
+            .any(|c| matches!(c, eframe::egui::OutputCommand::OpenUrl(_)))
+    });
+    assert!(!leaked, "and the command was claimed, not passed to the OS");
 }

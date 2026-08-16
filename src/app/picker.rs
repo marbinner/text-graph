@@ -56,14 +56,15 @@ struct PreviewLine {
 }
 
 enum PreviewBody {
+    /// Raw file lines around a content hit, every match highlighted — the
+    /// only view that can justify a content match.
     Text(Vec<PreviewLine>),
-    /// Vault-relative path of an image.
-    Image(String),
-    /// Icon + label listings: a folder's children, a ghost's/web node's
-    /// referrers.
-    Entries(Vec<(char, Color32, String)>),
     /// A terminal pane's screen.
     Screen(Vec<String>),
+    /// No matched line to show: the navigator's own preview column renders
+    /// it (markdown, picture, folder listing, referrers) — the pane looks
+    /// the same whether you got here by searching or by walking.
+    Node(NodeId),
     Note(String),
 }
 
@@ -310,12 +311,41 @@ impl Viewer {
             self.picker.close();
             return;
         }
+        // An empty query IS the ranger: the arrows drive its sibling
+        // column, exactly like j/k do when the prompt isn't focused. There
+        // is no result list to walk yet, and stepping an invisible one
+        // would move the camera for no visible reason.
+        if !self.picker.searching() {
+            if step != 0 {
+                self.walk_siblings(step);
+            }
+            if enter {
+                self.picker.close(); // nothing to take — back to plain browsing
+            }
+            return;
+        }
         if step != 0 {
             self.picker.move_cursor(step);
         }
         if enter {
             // Ctrl/Alt+Enter opens the file in $EDITOR at the matched line
             self.picker_accept(ctrl || alt);
+        }
+    }
+
+    /// Step the ranger's cursor by `delta` siblings (arrow keys with an
+    /// empty prompt). With nothing selected yet, the first step enters the
+    /// vault root, so `f` + ↓ starts browsing.
+    fn walk_siblings(&mut self, delta: isize) {
+        let to = match self.selected {
+            Some(sel) => self.g.nav_sibling(sel, delta),
+            None => self.g.nav_enter(self.g.root),
+        };
+        if let Some(t) = to {
+            self.selected = Some(t);
+            self.frame_node(t);
+            self.nav_scroll = true;
+            self.conn_cursor = None;
         }
     }
 
@@ -503,10 +533,13 @@ impl Viewer {
         self.picker.names_for = Some(self.picker.query.clone());
         let mut scores: Vec<Option<u32>> = vec![None; self.g.nodes.len()];
         let mut rows: Vec<Row> = Vec::new();
-        // an empty prompt lists the whole vault (in path order, since every
-        // row scores 0): the picker doubles as a browser, and opening it
-        // already shows something to arrow through
-        let listing = Query::parse(&self.picker.query).is_empty();
+        // an empty prompt leaves the ranger in place, so there is nothing
+        // to rank and nothing to light on the canvas
+        if Query::parse(&self.picker.query).is_empty() {
+            self.picker.name_scores = scores;
+            self.picker.name_rows = rows;
+            return;
+        }
         let pat = search::pattern(&self.picker.query);
         for (i, n) in self.g.nodes.iter().enumerate() {
             // hidden web nodes aren't on the canvas to jump to
@@ -518,17 +551,7 @@ impl Viewer {
                 aliases: &n.aliases,
                 path: &n.path,
             };
-            let hit = if listing {
-                Some(search::NameHit {
-                    class: Class::Name,
-                    score: 0,
-                    field: n.display_name().to_string(),
-                    ranges: Vec::new(),
-                })
-            } else {
-                search::score_names(&pat, &mut self.matcher, names)
-            };
-            let Some(hit) = hit else {
+            let Some(hit) = search::score_names(&pat, &mut self.matcher, names) else {
                 continue;
             };
             // the title is always the node's name; when the match landed on
@@ -545,11 +568,7 @@ impl Viewer {
                 }
                 _ => (Vec::new(), n.path.clone(), hit.ranges),
             };
-            // a bare listing lights nothing on the canvas — dimming the
-            // whole graph to "everything matches" says nothing
-            if !listing {
-                scores[i] = Some(hit.score);
-            }
+            scores[i] = Some(hit.score);
             rows.push(Row {
                 target: Target::Node(i as u32),
                 class: hit.class,
@@ -813,74 +832,37 @@ impl Viewer {
             meta = super::previews::size_and_age(&m);
         }
         let mut focus = None;
-        // markdown always, other leaves only when their extension is
-        // textual — a binary excerpt would be mojibake
+        // A matched LINE is the only thing the navigator's rendered
+        // preview can't show you, so that is exactly when the raw view
+        // takes over. Markdown always reads better than source otherwise.
         let textual =
             kind == NodeKind::File || (kind == NodeKind::Asset && filetype::is_text(&path));
-        let body = if textual {
-            match vault::read_head(&self.root.join(&path), PREVIEW_BYTES) {
+        let body = match row.snippet.as_ref().map(|s| s.line).filter(|_| textual) {
+            None => PreviewBody::Node(id),
+            Some(hit) => match vault::read_head(&self.root.join(&path), PREVIEW_BYTES) {
                 Ok(text) => {
                     // the scan works on the RAW file, so line numbers here
                     // are the ones an editor's +N expects
-                    let hit = row.snippet.as_ref().map(|s| s.line);
-                    let start = hit.map_or(1, |l| l.saturating_sub(PREVIEW_BEFORE).max(1));
+                    let start = hit.saturating_sub(PREVIEW_BEFORE).max(1);
                     let mut buf = String::new();
                     let mut lines = Vec::new();
                     for (i, line) in text.lines().enumerate().skip(start - 1).take(PREVIEW_LINES) {
                         let no = i + 1;
                         let m = q.match_line(line, &mut buf);
-                        if hit == Some(no) {
+                        if hit == no {
                             focus = Some(lines.len());
                         }
                         lines.push(PreviewLine {
                             no,
                             text: cap_chars(line, PREVIEW_LINE_CAP),
                             ranges: m.map(|m| m.ranges).unwrap_or_default(),
-                            hit: hit == Some(no),
+                            hit: hit == no,
                         });
                     }
                     PreviewBody::Text(lines)
                 }
                 Err(e) => PreviewBody::Note(format!("cannot read: {e}")),
-            }
-        } else {
-            match kind {
-                NodeKind::File | NodeKind::Asset => PreviewBody::Note("binary file".into()),
-                NodeKind::Image => PreviewBody::Image(path.clone()),
-                NodeKind::Dir => PreviewBody::Entries(
-                    self.g
-                        .node(id)
-                        .children
-                        .clone()
-                        .iter()
-                        .map(|c| {
-                            let (glyph, color) = self.node_icon(*c);
-                            let suffix = if self.g.node(*c).kind == NodeKind::Dir {
-                                "/"
-                            } else {
-                                ""
-                            };
-                            (
-                                glyph,
-                                color,
-                                format!("{}{suffix}", self.g.node(*c).display_name()),
-                            )
-                        })
-                        .collect(),
-                ),
-                NodeKind::Ghost | NodeKind::Web => PreviewBody::Entries(
-                    self.g
-                        .backlinks(id)
-                        .map(|l| l.from)
-                        .collect::<Vec<_>>()
-                        .iter()
-                        .map(|f| {
-                            let (glyph, color) = self.node_icon(*f);
-                            (glyph, color, self.g.node(*f).path.clone())
-                        })
-                        .collect(),
-                ),
-            }
+            },
         };
         let subtitle = match kind {
             NodeKind::Ghost => format!("[[{path}]] — not written yet"),
@@ -923,8 +905,10 @@ fn cap_chars(s: &str, n: usize) -> String {
 // ---------------------------------------------------------------- painting
 
 impl Viewer {
-    /// The docked picker: prompt, ranked results, live preview.
-    pub(super) fn picker_ui(&mut self, ui: &mut egui::Ui) {
+    /// The search prompt at the top of the side pane, with its counts and
+    /// key hints. Shown whenever the picker is open — an empty query
+    /// leaves the ranger below it untouched.
+    pub(super) fn picker_prompt(&mut self, ui: &mut egui::Ui) {
         let dim = self.theme.text;
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -947,7 +931,7 @@ impl Viewer {
             let n = self.picker.rows.len();
             let content = self.picker.content.len();
             let mut line = if self.picker.query.trim().is_empty() {
-                format!("{n} entries · type to filter names, paths and contents")
+                "type to search names, paths, contents and terminals".to_string()
             } else {
                 format!(
                     "{n} result{} · {content} file{} by content",
@@ -960,15 +944,24 @@ impl Viewer {
             }
             ui.label(egui::RichText::new(line).small().color(dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new("↑↓ move · ↵ jump · ^↵ edit at line · esc close")
-                        .small()
-                        .color(dim),
-                );
+                let hints = if self.picker.searching() {
+                    "↑↓ move · ↵ jump · ^↵ edit at line · esc close"
+                } else {
+                    "↑↓ walk · esc close"
+                };
+                ui.label(egui::RichText::new(hints).small().color(dim));
             });
         });
         ui.separator();
-        let list_w = (ui.available_width() * 0.42).clamp(220.0, 520.0);
+    }
+
+    /// Results | preview — the ranger's two columns, filtered. Only shown
+    /// while the query is non-empty; an empty one IS the ranger.
+    pub(super) fn picker_body(&mut self, ui: &mut egui::Ui) {
+        // wider than the ranger's sibling column: result rows carry a path
+        // and a matched line under the name
+        ui.set_min_width(620.0);
+        let list_w = (ui.available_width() * 0.45).clamp(240.0, 460.0);
         let full_h = ui.available_height();
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
@@ -1196,36 +1189,16 @@ impl Viewer {
                         }
                     });
             }
-            PreviewBody::Image(path) => {
-                let ctx = ui.ctx().clone();
-                self.thumbs.request(&ctx, path, self.root.join(path));
-                match self.thumbs.cache.get(path) {
-                    Some(images::ThumbState::Ready { tex, .. }) => {
-                        let size = tex.size_vec2();
-                        let w = ui.available_width().min(size.x.max(64.0));
-                        let h = w * size.y / size.x.max(1.0);
-                        ui.add(egui::Image::new(egui::load::SizedTexture::new(
-                            tex.id(),
-                            egui::vec2(w, h),
-                        )));
-                    }
-                    Some(images::ThumbState::Failed) => {
-                        ui.label(egui::RichText::new("could not decode this image").weak());
-                    }
-                    _ => {
-                        ui.label(egui::RichText::new("loading…").weak());
-                    }
+            PreviewBody::Node(id) => {
+                // a name match, a folder, a picture: the pane shows exactly
+                // what walking to it would show
+                if let Some(j) = self.preview_column(ui, *id, false) {
+                    // a link clicked inside the preview is a jump, and a
+                    // jump ends the search like taking a result does
+                    self.selected = Some(j);
+                    self.frame_node(j);
+                    self.picker.close();
                 }
-            }
-            PreviewBody::Entries(entries) => {
-                egui::ScrollArea::vertical()
-                    .id_salt("tg-picker-entries")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for (glyph, color, label) in entries {
-                            ui.label(icon_label(*glyph, *color, label, text_color, 12.0));
-                        }
-                    });
             }
             PreviewBody::Note(note) => {
                 ui.label(egui::RichText::new(note.as_str()).color(dim));

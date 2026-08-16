@@ -195,13 +195,15 @@ degree-scaled node sizes, alias resolution, ghosts rendered hollow.
 5. Navigation: `f` frames selection, `Home` fits all, `Esc` deselects.
 
 **C+ — The picker. ✓ done.** The search bar grew into a telescope-style finder
-(lib `search.rs` + `app/picker.rs`): one docked pane over names, aliases, paths,
-**file contents**, and live terminal panes, with a ranked result list, a preview
-that highlights every match in context, arrow-key browsing that glides the camera
-to the highlighted node, `Ctrl+Enter` to open `$EDITOR` at the matched line, and
-an empty prompt that lists the whole vault. Content is streamed from disk per
-query on a cancellable worker (never indexed — bodies stay out of memory and
-nothing goes stale under agents writing notes).
+(lib `search.rs` + `app/picker.rs`) and then MERGED into the navigator: one side
+pane with two modes, browsing (ranger) and searching (names, aliases, paths,
+**file contents**, live terminal panes), sharing one preview column. Ranked
+results, matches highlighted in context, arrow-key browsing that glides the
+camera to the highlighted node, `Ctrl+Enter` to open `$EDITOR` at the matched
+line. `f` opens it; the old find-in-directory prompt is gone (one finder, one
+key). Content is streamed from disk per query on a cancellable worker (never
+indexed — bodies stay out of memory and nothing goes stale under agents writing
+notes).
 
 Checkpoint after C: daily-drive it against the real vault; annoyances set D's order.
 

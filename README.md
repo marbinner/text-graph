@@ -115,9 +115,18 @@ the agent until `Ctrl+Q`.
 | `⚙` (bottom-right) | settings: **dark / light theme** and the **default agent** for one-click launching — both persisted per vault |
 | `f`, `/` or `Ctrl+F` | **the picker** — see below |
 
-### The picker (`f`, `/` or `Ctrl+F`)
+### The side pane: navigator and picker
 
-One finder over everything in the vault: note names, aliases, paths, the
+Click any node — or press `f` — to open the pane on the right. It has two
+modes and one skeleton (a list column, a preview column):
+
+**Browsing** (the ranger): breadcrumb, sibling column with the cursor,
+preview (rendered markdown for notes, raw text for code/config assets,
+the picture for images, the listing for folders), and the color-coded
+connections strip — every row led by its file-type icon.
+
+**Searching** (`f`, `/` or `Ctrl+F` focuses the prompt at the top): one
+finder over everything in the vault — note names, aliases, paths, the
 **text inside every file**, and the live agent terminals. Names, aliases
 and paths match fuzzily (`apbn` finds `agent-protocol-benchmark.md`);
 file content matches literally — every word you type has to appear on the
@@ -126,27 +135,26 @@ indexed: a worker thread streams the vault per query and stops the moment
 you type another character, so nothing goes stale under agents that
 rewrite notes while you search.
 
-It docks to the left — prompt, ranked results, live preview — leaving the
-canvas visible on the right, where matching nodes stay lit and the
-highlighted result **glides into view** as you arrow through the list. An
-empty prompt lists the whole vault, so `/` doubles as a browser.
+Typing filters the pane: the sibling column becomes the ranked result
+list and the preview follows the highlighted row — the same rendered
+preview as when browsing, except for a **content** hit, which shows the
+file's raw lines with every match highlighted and the hit scrolled into
+view. On the canvas, matching nodes stay lit and the highlighted result
+**glides into view** as you arrow down. An empty prompt is just the
+ranger, so `f` costs nothing when you only meant to look around.
 
 | Input | Action |
 |---|---|
 | type | filter — names first, then paths, then terminals, then content hits (with the matching line and its number) |
-| `↑` `↓` / `Ctrl+P` `Ctrl+N` | move through results; the preview and the camera follow |
+| `↑` `↓` / `Ctrl+P` `Ctrl+N` | move through results (with an empty prompt: walk the siblings, like `j`/`k`) |
 | `PageUp` `PageDown` / `Ctrl+U` `Ctrl+D` | half-page jumps |
-| `Enter` / click | select the result and frame it (a terminal card lands focused, ready to type) |
+| `Enter` / click | take the result — select it, frame it, and drop back into browsing on it (a terminal card lands focused, ready to type) |
 | `Ctrl+Enter` | open the file in `$VISUAL`/`$EDITOR` **at the matched line** |
-| `Esc` | close |
+| `Esc` | close the search, keeping the selection |
 
-### Navigator (a node is selected)
+### Navigating a selection
 
-Click any node (or search into one) to open the navigator pane:
-breadcrumb, sibling column with the cursor, preview (rendered markdown
-for notes, raw text for code/config assets, the picture for images, the
-listing for folders), and the color-coded connections strip — every row
-led by its file-type icon. Note previews render **Obsidian-flavored**:
+Note previews render **Obsidian-flavored**:
 `[[wikilinks]]` are real links that jump to their node (ghosts included),
 `![[image embeds]]` and relative image paths render inline, relative
 markdown links to vault files jump too, footnote-style citations
@@ -342,10 +350,11 @@ src/
   keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
               scanning (streamed from disk, never indexed), ranked rows
-  app/        egui shell: transform, input, painting, picker, navigator,
-              reload worker, terminal cards + focus; picker.rs = the finder
-              (state, keys, preview), images.rs = thumbnail textures,
-              previews.rs = text previews + hover popup, diag.rs = health badge
+  app/        egui shell: transform, input, painting, reload worker,
+              terminal cards + focus; navigator.rs = the side pane (ranger
+              + shared preview column), picker.rs = its search mode (state,
+              keys, results), images.rs = thumbnail textures, previews.rs =
+              canvas text previews + hover popup, diag.rs = health badge
 assets/
   icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
   gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs

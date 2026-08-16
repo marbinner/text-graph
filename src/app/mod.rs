@@ -1934,21 +1934,14 @@ impl eframe::App for Viewer {
             self.handle_keys(ui);
         }
         self.pump_picker(ui.ctx());
-        if self.picker.open {
-            // docked left, so the canvas keeps the right of the window and
-            // the highlighted result glides into what's still visible
-            let w = (ui.available_width() * 0.62).clamp(420.0, 1100.0);
-            egui::Panel::left("tg-picker")
-                .default_size(w)
-                .size_range(360.0..=1500.0)
-                .show(ui, |ui| self.picker_ui(ui));
-        }
-        // the navigator would squeeze the canvas out from between the two
-        // panels — the picker is the navigator while it's open
-        if self.selected.is_some() && !self.picker.open {
+        // ONE side pane: the ranger, or the search that filters it. The
+        // canvas keeps the rest of the window either way, and `canvas()`
+        // compensates the camera as the pane widens, so the highlighted
+        // result glides into what stays visible.
+        if self.selected.is_some() || self.picker.open {
             egui::Panel::right("detail")
                 .resizable(true)
-                .show(ui, |ui| self.detail_pane(ui));
+                .show(ui, |ui| self.side_pane(ui));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(self.theme.bg))

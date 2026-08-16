@@ -1,6 +1,9 @@
-//! The ranger-style navigator pane: breadcrumb, sibling column with the
-//! cursor and find-in-directory prompt, preview column (markdown / dir
-//! listing / ghost backrefs). Keyboard walking lives in handle_keys.
+//! The side pane, in its two modes. Browsing (the ranger): breadcrumb,
+//! sibling column with the cursor, preview column (markdown / dir listing
+//! / ghost backrefs), connections strip. Searching: the picker's prompt
+//! and results take over the pane — see `picker.rs`. Both modes share the
+//! preview column and the `tg://` link interception below, and keyboard
+//! walking lives in handle_keys.
 
 use super::*;
 
@@ -23,6 +26,199 @@ impl Viewer {
         }
     }
 
+    /// The preview column, shared by both pane modes: rendered markdown for
+    /// a note, the picture for an image, raw head for a text asset, listing
+    /// for a folder, referrers for ghosts and web nodes. Returns a node to
+    /// jump to when the user clicks a link inside it. `acting` shows the
+    /// open-in-editor button — the ranger has an Enter/l for it, the picker
+    /// does not (its Enter takes the result instead).
+    pub(super) fn preview_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: NodeId,
+        acting: bool,
+    ) -> Option<NodeId> {
+        let mut jump: Option<NodeId> = None;
+        let (kind, path) = {
+            let n = self.g.node(id);
+            let p = if n.path.is_empty() {
+                n.name.clone()
+            } else {
+                n.path.clone()
+            };
+            (n.kind, p)
+        };
+        if self.detail.as_ref().map(|(i, _)| *i) != Some(id) {
+            self.detail = Some((id, self.load_body(id)));
+        }
+        match kind {
+            NodeKind::File => {
+                if acting {
+                    if ui.button("open in editor  (Enter / l)").clicked() {
+                        self.open_in_editor(id);
+                    }
+                    ui.add_space(4.0);
+                }
+                // take/put-back so the markdown cache and the body can
+                // be borrowed simultaneously without a per-frame clone
+                let detail = self.detail.take();
+                if let Some((_, body)) = &detail {
+                    egui::ScrollArea::vertical()
+                        .id_salt("nav-preview")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            CommonMarkViewer::new().max_image_width(Some(400)).show(
+                                ui,
+                                &mut self.md_cache,
+                                body,
+                            );
+                        });
+                }
+                self.detail = detail;
+            }
+            NodeKind::Dir => {
+                let children = self.g.node(id).children.clone();
+                egui::ScrollArea::vertical()
+                    .id_salt("nav-preview")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.label(format!("{} entries — l enters", children.len()));
+                        ui.add_space(4.0);
+                        for c in children {
+                            let child = self.g.node(c);
+                            let label = if child.kind == NodeKind::Dir {
+                                format!("{}/", child.display_name())
+                            } else {
+                                child.display_name().to_string()
+                            };
+                            let (glyph, color) = self.node_icon(c);
+                            let job =
+                                icon_label(glyph, color, &label, ui.visuals().text_color(), 12.5);
+                            if ui.link(job).clicked() {
+                                jump = Some(c);
+                            }
+                        }
+                    });
+            }
+            NodeKind::Image => {
+                if acting {
+                    if ui.button("open  (Enter / l)").clicked() {
+                        self.open_in_editor(id);
+                    }
+                    ui.add_space(4.0);
+                }
+                let key = self.g.node(id).path.clone();
+                let ctx = ui.ctx().clone();
+                self.thumbs.request(&ctx, &key, self.root.join(&key));
+                match self.thumbs.cache.get(&key) {
+                    Some(images::ThumbState::Ready { tex, .. }) => {
+                        let size = tex.size_vec2();
+                        let w = ui.available_width().min(size.x.max(96.0));
+                        let h = w * size.y / size.x.max(1.0);
+                        ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                            tex.id(),
+                            egui::vec2(w, h),
+                        )));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} × {} (thumbnail)",
+                                size.x as u32, size.y as u32
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
+                    Some(images::ThumbState::Failed) => {
+                        ui.label(egui::RichText::new("could not decode this image").weak());
+                    }
+                    _ => {
+                        ui.label(egui::RichText::new("loading…").weak());
+                    }
+                }
+            }
+            NodeKind::Asset => {
+                if acting {
+                    if ui.button("open  (Enter / l)").clicked() {
+                        self.open_in_editor(id);
+                    }
+                    ui.add_space(4.0);
+                }
+                if filetype::is_text(&path) {
+                    let detail = self.detail.take();
+                    if let Some((_, body)) = &detail {
+                        egui::ScrollArea::vertical()
+                            .id_salt("nav-preview")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(body.as_str()).monospace().size(11.0),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                    }
+                    self.detail = detail;
+                } else {
+                    let size = std::fs::metadata(self.root.join(&path))
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "binary file · {size} bytes — Enter opens it externally"
+                        ))
+                        .weak(),
+                    );
+                }
+            }
+            NodeKind::Web => {
+                if acting {
+                    if ui.button("open in browser  (Enter / l)").clicked() {
+                        self.open_in_editor(id);
+                    }
+                    ui.add_space(4.0);
+                }
+                ui.label("Cited from:");
+                ui.add_space(2.0);
+                let refs: Vec<NodeId> = self.g.backlinks(id).map(|l| l.from).collect();
+                for r in refs {
+                    if ui.link(self.g.node(r).path.clone()).clicked() {
+                        jump = Some(r);
+                    }
+                }
+            }
+            NodeKind::Ghost => {
+                ui.label("Not written yet. Referenced from:");
+                ui.add_space(4.0);
+                let refs: Vec<NodeId> = self.g.backlinks(id).map(|l| l.from).collect();
+                for r in refs {
+                    if ui.link(self.g.node(r).path.clone()).clicked() {
+                        jump = Some(r);
+                    }
+                }
+            }
+        }
+        // Clicked [[wikilinks]] in the rendered markdown arrive as OpenUrl
+        // commands on our tg:// scheme — claimed HERE, in the one place
+        // that renders markdown, so BOTH pane modes intercept them (a
+        // missed claim leaks the click to the OS browser). External links
+        // pass through untouched and open normally.
+        ui.ctx().output_mut(|o| {
+            o.commands.retain(|c| {
+                if let egui::OutputCommand::OpenUrl(u) = c
+                    && let Some(idx) = mdview::parse_url(&u.url)
+                {
+                    if (idx as usize) < self.g.nodes.len() {
+                        jump = Some(NodeId(idx));
+                    }
+                    return false; // stale ids (pre-reload) are dropped too
+                }
+                true
+            })
+        });
+        jump
+    }
+
     /// The connections strip's entries in render order: children, then
     /// outgoing links, then incoming. `]`/`[` walk this list by index, so
     /// the strip render below must build entries in exactly this order.
@@ -33,24 +229,41 @@ impl Viewer {
         v
     }
 
-    /// The ranger-style navigator: breadcrumb, sibling column with the
-    /// cursor, preview column. Keyboard walking happens in `handle_keys`
+    /// The pane: the search prompt on top whenever the picker is open,
+    /// then either its results or the ranger. A search with an empty query
+    /// IS the ranger — the prompt filters the pane rather than replacing
+    /// it — and with nothing selected the ranger falls back to the vault
+    /// root, so `f` never opens onto a blank column.
+    pub(super) fn side_pane(&mut self, ui: &mut egui::Ui) {
+        if self.picker.open {
+            self.picker_prompt(ui);
+        }
+        if self.picker.searching() {
+            self.picker_body(ui);
+        } else if let Some(sel) = self
+            .selected
+            .or_else(|| self.picker.open.then_some(self.g.root))
+        {
+            self.navigator_body(ui, sel);
+        }
+    }
+
+    /// The ranger: breadcrumb, sibling column with the cursor, preview
+    /// column, connections strip. Keyboard walking happens in `handle_keys`
     /// (hjkl / gg / G while a node is selected); this renders the state and
     /// accepts clicks.
-    pub(super) fn detail_pane(&mut self, ui: &mut egui::Ui) {
-        let Some(sel) = self.selected else { return };
-        if self.detail.as_ref().map(|(id, _)| *id) != Some(sel) {
-            self.detail = Some((sel, self.load_body(sel)));
-        }
+    fn navigator_body(&mut self, ui: &mut egui::Ui, sel: NodeId) {
         // Owned copies so the panel closures below can borrow self freely.
-        let (kind, display, sub, parent) = {
+        // (The body itself is loaded by `preview_column`, which the search
+        // mode shares.)
+        let (display, sub, parent) = {
             let node = self.g.node(sel);
             let sub = if node.path.is_empty() {
                 node.name.clone()
             } else {
                 node.path.clone()
             };
-            (node.kind, node.display_name().to_string(), sub, node.parent)
+            (node.display_name().to_string(), sub, node.parent)
         };
 
         ui.set_min_width(430.0);
@@ -144,154 +357,7 @@ impl Viewer {
                 ui.separator();
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width());
-                    match kind {
-                        NodeKind::File => {
-                            if ui.button("open in editor  (Enter / l)").clicked() {
-                                self.open_in_editor(sel);
-                            }
-                            ui.add_space(4.0);
-                            // take/put-back so the markdown cache and the body can
-                            // be borrowed simultaneously without a per-frame clone
-                            let detail = self.detail.take();
-                            if let Some((_, body)) = &detail {
-                                egui::ScrollArea::vertical()
-                                    .id_salt("nav-preview")
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        CommonMarkViewer::new().max_image_width(Some(400)).show(
-                                            ui,
-                                            &mut self.md_cache,
-                                            body,
-                                        );
-                                    });
-                            }
-                            self.detail = detail;
-                        }
-                        NodeKind::Dir => {
-                            let children = self.g.node(sel).children.clone();
-                            egui::ScrollArea::vertical()
-                                .id_salt("nav-preview")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.label(format!("{} entries — l enters", children.len()));
-                                    ui.add_space(4.0);
-                                    for c in children {
-                                        let child = self.g.node(c);
-                                        let label = if child.kind == NodeKind::Dir {
-                                            format!("{}/", child.display_name())
-                                        } else {
-                                            child.display_name().to_string()
-                                        };
-                                        let (glyph, color) = self.node_icon(c);
-                                        let job = icon_label(
-                                            glyph,
-                                            color,
-                                            &label,
-                                            ui.visuals().text_color(),
-                                            12.5,
-                                        );
-                                        if ui.link(job).clicked() {
-                                            jump = Some(c);
-                                        }
-                                    }
-                                });
-                        }
-                        NodeKind::Image => {
-                            if ui.button("open  (Enter / l)").clicked() {
-                                self.open_in_editor(sel);
-                            }
-                            ui.add_space(4.0);
-                            let key = self.g.node(sel).path.clone();
-                            let ctx = ui.ctx().clone();
-                            self.thumbs.request(&ctx, &key, self.root.join(&key));
-                            match self.thumbs.cache.get(&key) {
-                                Some(images::ThumbState::Ready { tex, .. }) => {
-                                    let size = tex.size_vec2();
-                                    let w = ui.available_width().min(size.x.max(96.0));
-                                    let h = w * size.y / size.x.max(1.0);
-                                    ui.add(egui::Image::new(egui::load::SizedTexture::new(
-                                        tex.id(),
-                                        egui::vec2(w, h),
-                                    )));
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} × {} (thumbnail)",
-                                            size.x as u32, size.y as u32
-                                        ))
-                                        .small()
-                                        .weak(),
-                                    );
-                                }
-                                Some(images::ThumbState::Failed) => {
-                                    ui.label(
-                                        egui::RichText::new("could not decode this image").weak(),
-                                    );
-                                }
-                                _ => {
-                                    ui.label(egui::RichText::new("loading…").weak());
-                                }
-                            }
-                        }
-                        NodeKind::Asset => {
-                            if ui.button("open  (Enter / l)").clicked() {
-                                self.open_in_editor(sel);
-                            }
-                            ui.add_space(4.0);
-                            if filetype::is_text(&sub) {
-                                let detail = self.detail.take();
-                                if let Some((_, body)) = &detail {
-                                    egui::ScrollArea::vertical()
-                                        .id_salt("nav-preview")
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(body.as_str())
-                                                        .monospace()
-                                                        .size(11.0),
-                                                )
-                                                .wrap(),
-                                            );
-                                        });
-                                }
-                                self.detail = detail;
-                            } else {
-                                let size = std::fs::metadata(self.root.join(&sub))
-                                    .map(|m| m.len())
-                                    .unwrap_or(0);
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "binary file · {size} bytes — Enter opens it externally"
-                                    ))
-                                    .weak(),
-                                );
-                            }
-                        }
-                        NodeKind::Web => {
-                            if ui.button("open in browser  (Enter / l)").clicked() {
-                                self.open_in_editor(sel);
-                            }
-                            ui.add_space(4.0);
-                            ui.label("Cited from:");
-                            ui.add_space(2.0);
-                            let refs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
-                            for r in refs {
-                                if ui.link(self.g.node(r).path.clone()).clicked() {
-                                    jump = Some(r);
-                                }
-                            }
-                        }
-                        NodeKind::Ghost => {
-                            ui.label("Not written yet. Referenced from:");
-                            ui.add_space(4.0);
-                            let refs: Vec<NodeId> = self.g.backlinks(sel).map(|l| l.from).collect();
-                            for r in refs {
-                                if ui.link(self.g.node(r).path.clone()).clicked() {
-                                    jump = Some(r);
-                                }
-                            }
-                        }
-                    }
+                    jump = self.preview_column(ui, sel, true).or(jump);
                 });
             });
         });
@@ -372,23 +438,6 @@ impl Viewer {
                 });
         }
         self.nav_scroll = false;
-        // Clicked [[wikilinks]] in the rendered markdown arrive as OpenUrl
-        // commands on our tg:// scheme — claim them here (so the browser
-        // never sees them) and jump to the node instead. External links
-        // pass through untouched and open normally.
-        ui.ctx().output_mut(|o| {
-            o.commands.retain(|c| {
-                if let egui::OutputCommand::OpenUrl(u) = c
-                    && let Some(idx) = mdview::parse_url(&u.url)
-                {
-                    if (idx as usize) < self.g.nodes.len() {
-                        jump = Some(NodeId(idx));
-                    }
-                    return false; // stale ids (pre-reload) are dropped too
-                }
-                true
-            })
-        });
         if let Some(j) = jump {
             self.selected = Some(j);
             self.frame_node(j);
