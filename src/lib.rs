@@ -18,6 +18,7 @@ pub mod layout;
 pub mod mdview;
 pub mod mirror;
 pub mod resolve;
+pub mod search;
 pub mod sim;
 pub mod state;
 pub mod stats;

@@ -27,7 +27,6 @@
     - each file should have some mandatory metadata like date created, date modified, immutable id.
     - quick description and purpose of this file.
     - tags
-- fuzzy search across the entire graph including contents of the text files. We should replace our existing search feature with a more highly powered nvim telescope like search. We want to be able to match file,names,content etc. and be able to easily preview and pick the node we want. quickly finding the exact node we want using keyboard and search should be one of the central features. If the fuzzy search gives many results I should be able to quickly use the arrow keys to select the one I ant from the menu, where I can quickly preview each search result as I scroll through them like in telescope. This is a very important freature to get just right.
 - make it so I can drag and drop files and paste shit into the gui.
 - for opening an agent with 'a' or editor with 'e' or most other bindings like these, we should only have to hover over a node with the cursor, we shouldn't have to click on it first. So I shoudl be able to just hover over a node, press 'e' and then it opens up in the editor. Or I shoudl be able to do the same with 'a' and it opens up the default agent in the corresponding folder.
 - add a bunch of basic stuff to the settings so they're centralized and configuarable.
@@ -38,7 +37,10 @@
 - the side pane should have a more predictable witdth. The default hsould be 25% or so of the total window by default, and it should not resize automatically. It should stay the width it is set to by the user.
 
 
+
+
 # in progress
+- fuzzy search across the entire graph including contents of the text files. We should replace our existing search feature with a more highly powered nvim telescope like search. We want to be able to match file,names,content etc. and be able to easily preview and pick the node we want. quickly finding the exact node we want using keyboard and search should be one of the central features. If the fuzzy search gives many results I should be able to quickly use the arrow keys to select the one I ant from the menu, where I can quickly preview each search result as I scroll through them like in telescope. This is a very important freature to get just right.
 
 # done
 - when I start a new terminal/agent it should be focused by default. also I wanna start adding more keybindngs. For example when I have a folder focused and I press 'a' then the default agent pane should open in that folder. When I press t a terminal pane should open. (remove the existing keybinding that says t shoudl jump between panes. we don't need that). when I press e it should open the node in my default editor, whether it is a text file or a folder.
