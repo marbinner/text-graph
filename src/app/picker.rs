@@ -396,6 +396,19 @@ impl Picker {
                 None => false,
             });
     }
+
+    /// Apply a prompt edit immediately. Retiring the current generation here,
+    /// before the debounce, is what prevents its late batches from repopulating
+    /// rows under a different query.
+    fn query_changed(&mut self, q: &Query, prev: &Query) {
+        self.cancel();
+        self.built = self.query.clone();
+        self.refilter(q, prev);
+        self.pending_scan = Some(q.clone());
+        self.pending_at = Instant::now();
+        self.set_scanning(!q.is_empty());
+        self.dirty = true;
+    }
 }
 
 impl Viewer {
@@ -564,12 +577,7 @@ impl Viewer {
         let q = Query::parse(&self.picker.query);
         if self.picker.query != self.picker.built {
             let prev = Query::parse(&self.picker.built);
-            self.picker.built = self.picker.query.clone();
-            self.picker.refilter(&q, &prev);
-            self.picker.pending_scan = Some(q.clone());
-            self.picker.pending_at = Instant::now();
-            self.picker.set_scanning(!q.is_empty());
-            self.picker.dirty = true;
+            self.picker.query_changed(&q, &prev);
         }
         // the pane list changes underneath the rows (agents come and go)
         let panes: Vec<(String, String)> = self
@@ -1724,5 +1732,28 @@ fn push_marked_font(
     }
     if at < text.len() {
         job.append(&text[at..], lead, fmt(base));
+    }
+}
+
+#[cfg(test)]
+mod scan_generation_tests {
+    use super::*;
+
+    #[test]
+    fn query_edit_retires_the_worker_before_the_debounce() {
+        let mut picker = Picker::new();
+        picker.built = "old".into();
+        picker.query = "new".into();
+        picker.generation = 41;
+        picker.live.store(41, Ordering::Relaxed);
+
+        let q = Query::parse(&picker.query);
+        let prev = Query::parse(&picker.built);
+        picker.query_changed(&q, &prev);
+
+        assert_eq!(picker.generation, 42);
+        assert_eq!(picker.live.load(Ordering::Relaxed), 42);
+        assert_eq!(picker.pending_scan.as_ref(), Some(&q));
+        assert!(picker.scanning);
     }
 }
