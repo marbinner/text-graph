@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -26,18 +27,23 @@ usage:
 ";
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let strs: Vec<&str> = args.iter().map(String::as_str).collect();
-    match strs[..] {
-        ["--help" | "-h"] => {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    match args.as_slice() {
+        [flag]
+            if flag.as_os_str() == OsStr::new("--help") || flag.as_os_str() == OsStr::new("-h") =>
+        {
             print!("{USAGE}");
             ExitCode::SUCCESS
         }
-        ["--version" | "-V"] => {
+        [flag]
+            if flag.as_os_str() == OsStr::new("--version")
+                || flag.as_os_str() == OsStr::new("-V") =>
+        {
             println!("text-graph {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        ["stats", p] => match run_stats(Path::new(p)) {
+        [command, p] if command.as_os_str() == OsStr::new("stats") => match run_stats(Path::new(p))
+        {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e:#}");
@@ -45,7 +51,7 @@ fn main() -> ExitCode {
             }
         },
         #[cfg(feature = "gui")]
-        [p] if !p.starts_with('-') => app::run(Path::new(p)),
+        [p] if !p.to_string_lossy().starts_with('-') => app::run(Path::new(p)),
         _ => {
             eprint!("{USAGE}");
             ExitCode::from(2)
