@@ -66,7 +66,7 @@ impl Default for Config {
             label_density: 1.0,
             node_scale: 1.0,
             focus_fade: 0.18,
-            finder_y: 0.38,
+            finder_y: 0.45,
             thumbnails: true,
             canvas_previews: true,
             spread: 1.0,
@@ -385,8 +385,9 @@ static SPECS: &[Spec] = specs![
         num(0.0, 1.0, 0.02, "", 2), focus_fade, Num;
 
         "finder_y", Section::Appearance, "finder position",
-        "how far down the window the finder's prompt sits — lower it for \
-         a prompt near the middle, raise it to see more results at once",
+        "how far down the window the finder's prompt sits — raise it to \
+         see more results at once, lower it to keep more of the graph's \
+         middle in view",
         num(0.1, 0.7, 0.01, "", 2), finder_y, Num;
 
         "thumbnails", Section::Appearance, "image thumbnails",
@@ -473,9 +474,18 @@ pub fn spec(key: &str) -> Option<&'static Spec> {
 
 // ---- file ----
 
+/// Only what the user actually CHANGED is written. Writing every key
+/// would freeze this build's defaults into the file forever: a later
+/// version could improve a default and never reach anyone who had opened
+/// the app once. It also makes the file say something — the settings
+/// window is the list of what exists; the file is the list of what you
+/// picked.
 pub fn to_text(c: &Config) -> String {
     let mut out = String::from("text-graph config v1\n");
     for s in specs() {
+        if s.is_default(c) {
+            continue;
+        }
         out.push_str(s.key);
         out.push('\t');
         out.push_str(&(s.get)(c).wire());

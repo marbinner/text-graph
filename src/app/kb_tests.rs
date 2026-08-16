@@ -1346,3 +1346,57 @@ fn the_finder_list_fills_the_window_and_shows_the_empty_prompt_rows() {
          supposed to run to the bottom margin"
     );
 }
+
+/// The pane's width is OURS, not egui's. egui remembers a panel's size
+/// in its own memory and only honours `default_size` while it remembers
+/// nothing — so one narrow frame (a startup window, a window resize
+/// clamping against the 60% ceiling) became the width from then on, and
+/// the pane "randomly" stayed small. Shrinking the window and growing it
+/// back must give the width back.
+#[test]
+fn the_pane_recovers_its_width_after_the_window_narrows() {
+    use eframe::egui::Vec2;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
+    let seen = Arc::new(AtomicU32::new(0));
+    let probe = seen.clone();
+    let mut h = Harness::builder()
+        .with_size(Vec2::new(1600.0, 800.0))
+        .build_ui_state(
+            move |ui, v: &mut Viewer| {
+                v.pump_picker(ui.ctx());
+                let w = v.side_panel(ui);
+                probe.store(w.round() as u32, Ordering::Relaxed);
+            },
+            viewer,
+        );
+    super::install_icon_font(&h.ctx);
+    let id = h.state().g.by_path("index.md").expect("index");
+    h.state_mut().selected = Some(id);
+    h.run();
+    let wide = seen.load(Ordering::Relaxed);
+    assert!(wide >= 470, "a share of a 1600pt window, got {wide}");
+
+    // a narrow window has to clamp it — the canvas keeps its share
+    h.set_size(Vec2::new(500.0, 800.0));
+    h.run();
+    let squeezed = seen.load(Ordering::Relaxed);
+    assert!(squeezed < wide, "a 500pt window clamps it, got {squeezed}");
+
+    // …and giving the space back gives the width back
+    h.set_size(Vec2::new(1600.0, 800.0));
+    h.run();
+    assert_eq!(
+        seen.load(Ordering::Relaxed),
+        wide,
+        "the pane kept a width it was only ever squeezed into"
+    );
+    assert_eq!(
+        h.state().pane_width,
+        None,
+        "and none of that counted as the user choosing a width"
+    );
+}

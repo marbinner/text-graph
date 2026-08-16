@@ -2002,23 +2002,34 @@ impl Viewer {
         let win_w = ui.available_width();
         let want = pane_width(win_w, self.pane_width);
         let max = (win_w * 0.6).max(1.0);
+        // egui remembers a panel's width ITSELF, in its own memory, from
+        // the previous frame's CONTENT-driven rect — and `default_size`
+        // only applies while it has nothing remembered. So any frame that
+        // came out narrow (a startup window, a moment of wide content, a
+        // window resize clamping against the 60% ceiling) became the
+        // width from then on, and our recomputed value never got a say.
+        //
+        // The width is OURS: pinned to an exact range every frame, so the
+        // only thing egui can remember is what we already decided. The
+        // range opens up for exactly as long as the resize handle is
+        // being dragged — that is the one moment the user is the author,
+        // and what they land on is what we store.
+        let resize_id = egui::Id::new("detail").with("__resize");
+        let dragging = ui.ctx().is_being_dragged(resize_id);
+        let range = if dragging {
+            PANE_MIN.min(max)..=max
+        } else {
+            want..=want
+        };
         let resp = egui::Panel::right("detail")
             .resizable(true)
-            .size_range(PANE_MIN.min(max)..=max)
-            .default_size(want)
+            .size_range(range)
             .show(ui, |ui| self.side_pane(ui));
-        // Record the width only while the pointer is down — that means a
-        // DRAG. A computed default is NEVER written back: the first frame
-        // sees eframe's startup window, not the one the user ends up with,
-        // and persisting that froze the pane at a fraction of a window
-        // that no longer existed. Without the pointer guard, a window
-        // briefly too narrow would clamp the pane and save the clamp as
-        // the user's choice. The stored value is clamped too: the reported
-        // rect is CONTENT-driven, so nothing that overflows the pane may
-        // enter the width the user thinks they chose.
+        // The reported rect is content-driven, so clamp what we keep:
+        // nothing that overflows the pane may become the width the user
+        // thinks they chose.
         let got = resp.response.rect.width();
-        let dragging = ui.input(|i| i.pointer.any_down());
-        if dragging && (got - want).abs() > 0.5 {
+        if dragging {
             self.pane_width = Some(got.clamp(PANE_MIN.min(max), max));
         }
         got
