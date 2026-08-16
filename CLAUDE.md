@@ -340,7 +340,12 @@
   `gg` refitting the whole graph while `0` resets ONLY the zoom. Choosing
   a node is the overlay's job (`f`/`b`); the only tree move left on the
   canvas is `p` (parent), which clears `conn_cursor` because that indexes
-  the node you were on. Don't reintroduce a keyboard tree-walk: two ways
+  the node you were on. `G` frames the selection's NEIGHBOURHOOD (parent,
+  children, links) rather than a fixed step — the node stays centered, so
+  the zoom comes from how far its furthest neighbour reaches — and
+  `Ctrl+Q` is the way back: card focus, card cursor, selection, link
+  cursor, open overlays AND egui's widget focus all let go at once, or
+  leaving a terminal lands you somewhere `f` types into a text field. Don't reintroduce a keyboard tree-walk: two ways
   to choose a node is exactly what the ranger was. `]`/`[` walk
   `conn_cursor` over the connections strip —
   `navigator::connections()` is the single source of its entry order
