@@ -128,6 +128,10 @@ pub(super) struct Picker {
     /// Result the camera is dwelling on, and when it landed there.
     follow: Option<(NodeId, Instant)>,
     followed: Option<NodeId>,
+    /// The cursor was moved by hand. Opening the picker on a bare listing
+    /// must not yank the camera to the vault's first file — but arrowing
+    /// through that listing deliberately should still follow.
+    user_moved: bool,
 }
 
 impl Picker {
@@ -162,6 +166,7 @@ impl Picker {
             preview: None,
             follow: None,
             followed: None,
+            user_moved: false,
         }
     }
 
@@ -191,6 +196,7 @@ impl Picker {
         self.preview = None;
         self.follow = None;
         self.followed = None;
+        self.user_moved = false;
         self.node_scores.fill(None);
         self.cancel();
     }
@@ -243,6 +249,7 @@ impl Picker {
         }
         let last = self.rows.len() as isize - 1;
         self.cursor = (self.cursor as isize + delta).clamp(0, last) as usize;
+        self.user_moved = true;
         self.cursor_key = self.cursor_row().map(|r| r.key.clone());
         self.scroll = true;
     }
@@ -496,11 +503,10 @@ impl Viewer {
         self.picker.names_for = Some(self.picker.query.clone());
         let mut scores: Vec<Option<u32>> = vec![None; self.g.nodes.len()];
         let mut rows: Vec<Row> = Vec::new();
-        if Query::parse(&self.picker.query).is_empty() {
-            self.picker.name_scores = scores;
-            self.picker.name_rows = rows;
-            return;
-        }
+        // an empty prompt lists the whole vault (in path order, since every
+        // row scores 0): the picker doubles as a browser, and opening it
+        // already shows something to arrow through
+        let listing = Query::parse(&self.picker.query).is_empty();
         let pat = search::pattern(&self.picker.query);
         for (i, n) in self.g.nodes.iter().enumerate() {
             // hidden web nodes aren't on the canvas to jump to
@@ -512,7 +518,17 @@ impl Viewer {
                 aliases: &n.aliases,
                 path: &n.path,
             };
-            let Some(hit) = search::score_names(&pat, &mut self.matcher, names) else {
+            let hit = if listing {
+                Some(search::NameHit {
+                    class: Class::Name,
+                    score: 0,
+                    field: n.display_name().to_string(),
+                    ranges: Vec::new(),
+                })
+            } else {
+                search::score_names(&pat, &mut self.matcher, names)
+            };
+            let Some(hit) = hit else {
                 continue;
             };
             // the title is always the node's name; when the match landed on
@@ -529,7 +545,11 @@ impl Viewer {
                 }
                 _ => (Vec::new(), n.path.clone(), hit.ranges),
             };
-            scores[i] = Some(hit.score);
+            // a bare listing lights nothing on the canvas — dimming the
+            // whole graph to "everything matches" says nothing
+            if !listing {
+                scores[i] = Some(hit.score);
+            }
             rows.push(Row {
                 target: Target::Node(i as u32),
                 class: hit.class,
@@ -711,6 +731,10 @@ impl Viewer {
     /// highlighted node for a moment. Selection is NOT touched: browsing
     /// results must not open the navigator and squeeze the canvas.
     fn picker_follow(&mut self, ctx: &egui::Context) {
+        if !self.picker.searching() && !self.picker.user_moved {
+            self.picker.follow = None;
+            return;
+        }
         match (self.picker.cursor_node(), self.picker.follow) {
             (Some(id), Some((prev, at))) if prev == id => {
                 let waited = at.elapsed();
@@ -920,7 +944,7 @@ impl Viewer {
             let n = self.picker.rows.len();
             let content = self.picker.content.len();
             let mut line = if self.picker.query.trim().is_empty() {
-                "names, aliases, paths and file contents".to_string()
+                format!("{n} entries · type to filter names, paths and contents")
             } else {
                 format!(
                     "{n} result{} · {content} file{} by content",

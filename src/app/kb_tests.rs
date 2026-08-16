@@ -524,3 +524,46 @@ fn picker_ui_renders_prompt_results_and_preview() {
         "the preview header names the previewed file"
     );
 }
+
+/// An empty prompt lists the whole vault (the picker doubles as a
+/// browser) — but merely opening it must not yank the camera to the first
+/// file. Arrowing through that listing on purpose still follows.
+#[test]
+fn an_empty_prompt_lists_the_vault_without_moving_the_camera() {
+    let mut h = harness();
+    press(&mut h, Key::Slash);
+    h.step();
+    assert_eq!(
+        h.state().picker.rows.len(),
+        h.state().g.nodes.len(),
+        "every node is listed"
+    );
+    let keys: Vec<String> = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .map(|r| r.key.clone())
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "listed in a deterministic order");
+    assert!(
+        h.state().picker.node_scores.iter().all(Option::is_none),
+        "a bare listing dims nothing on the canvas"
+    );
+
+    h.state_mut().cam_anim = None;
+    for _ in 0..8 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        h.state().cam_anim.is_none(),
+        "opening the picker must not move the camera"
+    );
+    press(&mut h, Key::ArrowDown);
+    wait_for(&mut h, "the camera glide after a deliberate move", |v| {
+        v.cam_anim.is_some()
+    });
+}

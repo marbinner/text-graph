@@ -1747,7 +1747,7 @@ impl Viewer {
                     self.theme.hover
                 };
                 ring(color, 2.0);
-            } else if searching && cursor_node == Some(id) {
+            } else if cursor_node == Some(id) {
                 ring(self.theme.hover, 2.0);
             } else if partners.contains(&id) {
                 ring(self.theme.wiki, 1.5);
