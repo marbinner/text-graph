@@ -508,8 +508,9 @@ fn a_reload_rebuilds_the_rows_but_keeps_query_and_cursor() {
 }
 
 /// The picker's own UI renders headlessly (canvas does not — it would
-/// attach tmux mirrors). This exercises the real layout path: prompt,
-/// virtualized result list, and the preview pane's per-line layout jobs.
+/// attach tmux mirrors). This exercises the real layout path: the floating
+/// prompt and its virtualized result list, plus the side pane's preview
+/// with its per-line layout jobs.
 #[test]
 fn picker_ui_renders_prompt_results_and_preview() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
@@ -521,6 +522,7 @@ fn picker_ui_renders_prompt_results_and_preview() {
             if v.picker.open {
                 v.side_pane(ui);
             }
+            v.picker_overlay_ui(ui.ctx());
         },
         viewer,
     );
@@ -588,11 +590,13 @@ fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
         |ui, v: &mut Viewer| {
             v.handle_keys(ui);
             v.pump_picker(ui.ctx());
-            // like the real ui(): the pane exists only while it is open,
-            // and its prompt holds the keyboard for exactly that long
-            if v.picker.open {
+            // like the real ui(): the pane exists only while something is
+            // selected or a search is live, and the floating prompt holds
+            // the keyboard for exactly as long as the picker is open
+            if v.picker.open || v.selected.is_some() {
                 v.side_pane(ui);
             }
+            v.picker_overlay_ui(ui.ctx());
         },
         viewer,
     );
@@ -633,6 +637,7 @@ fn tg_links_are_claimed_in_the_search_preview_too() {
             });
             v.pump_picker(ui.ctx());
             v.side_pane(ui);
+            v.picker_overlay_ui(ui.ctx());
         },
         viewer,
     );

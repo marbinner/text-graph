@@ -229,17 +229,15 @@ impl Viewer {
         v
     }
 
-    /// The pane: the search prompt on top whenever the picker is open,
-    /// then either its results or the ranger. A search with an empty query
-    /// IS the ranger — the prompt filters the pane rather than replacing
-    /// it — and with nothing selected the ranger falls back to the vault
-    /// root, so `f` never opens onto a blank column.
+    /// The pane, in whichever mode applies: previewing the highlighted
+    /// search result (the prompt and its result list float over the canvas
+    /// — see `picker_overlay_ui`), or the ranger. A search with an empty
+    /// query IS the ranger, and with nothing selected the ranger falls back
+    /// to the vault root, so `f` never opens onto a blank pane.
     pub(super) fn side_pane(&mut self, ui: &mut egui::Ui) {
-        if self.picker.open {
-            self.picker_prompt(ui);
-        }
         if self.picker.searching() {
-            self.picker_body(ui);
+            ui.set_min_width(430.0);
+            self.picker_preview_ui(ui);
         } else if let Some(sel) = self
             .selected
             .or_else(|| self.picker.open.then_some(self.g.root))

@@ -185,16 +185,24 @@
   the line number the one `$EDITOR +N` wants (Ctrl+Enter). Browsing
   results must NOT set the selection — that is what Enter COMMITS to, so
   Esc can leave you where you were.
-- ONE side pane, two modes (`navigator::side_pane`): the search prompt on
-  top whenever the picker is open, then its results (query non-empty) or
-  the ranger (query empty — the prompt FILTERS the pane, it doesn't
-  replace it; with nothing selected the ranger falls back to the vault
-  root so `f` never opens onto a blank column). Both modes share
-  `preview_column`, which is therefore also the one place that renders
-  markdown and so the one place that claims `tg://` OpenUrl commands —
-  moving that claim back into a single mode leaks wikilink clicks to the
-  OS browser. With an empty query the picker's arrow keys drive the
-  RANGER (`walk_siblings`), never an invisible result list.
+- Finder layout: the prompt + result list FLOAT (an egui Area, order
+  Foreground) centered on the CANVAS rect — not the window, or the side
+  pane would sit half on top of them — with the prompt at
+  `PROMPT_Y_FRAC` down it (just below middle, telescope-style) and
+  results stacked BELOW. Previews never live there: the side pane is the
+  one place a file previews, searched-to or walked-to. Framing
+  compensates (`frame_target` lifts a followed node by `FRAME_LIFT_FRAC`
+  of the canvas height) — without it, following a result parks it behind
+  the overlay, the one place you can't see.
+- ONE side pane, two modes (`navigator::side_pane`): the highlighted
+  result's preview while a search is live, else the ranger (with nothing
+  selected it falls back to the vault root, so `f` never opens onto a
+  blank pane). Both modes share `preview_column`, which is therefore also
+  the one place that renders markdown and so the one place that claims
+  `tg://` OpenUrl commands — moving that claim back into a single mode
+  leaks wikilink clicks to the OS browser. With an empty query the
+  picker's arrow keys drive the RANGER (`walk_siblings`), never an
+  invisible result list.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to

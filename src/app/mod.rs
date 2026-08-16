@@ -980,6 +980,17 @@ impl Viewer {
         Pos2::new(self.sim.x[i], self.sim.y[i])
     }
 
+    /// Where the camera has to sit for node `i` to land somewhere VISIBLE:
+    /// dead center normally, lifted into the band above the floating
+    /// finder while that covers the middle of the canvas.
+    fn frame_target(&self, i: usize, rect: Rect) -> Pos2 {
+        let mut p = self.world_pos(i);
+        if self.picker.open {
+            p.y += rect.height() * picker::FRAME_LIFT_FRAC / self.zoom;
+        }
+        p
+    }
+
     /// Frame the whole graph (first paint only — rect is unknown before then).
     fn fit(&mut self, rect: Rect) {
         let mut min = Pos2::new(f32::INFINITY, f32::INFINITY);
@@ -1101,7 +1112,7 @@ impl Viewer {
             if (id.0 as usize) < self.g.nodes.len() {
                 let t = (t0.elapsed().as_secs_f32() / CAM_ANIM_SECS).min(1.0);
                 let e = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
-                self.center = from.lerp(self.world_pos(id.0 as usize), e);
+                self.center = from.lerp(self.frame_target(id.0 as usize, rect), e);
                 if t >= 1.0 {
                     self.cam_anim = None;
                 }
@@ -1947,6 +1958,9 @@ impl eframe::App for Viewer {
             .frame(egui::Frame::new().fill(self.theme.bg))
             .show(ui, |ui| self.canvas(ui));
         let ctx = ui.ctx().clone();
+        // over the canvas, after it: the finder floats, the preview of
+        // whatever it highlights stays in the side pane
+        self.picker_overlay_ui(&ctx);
         self.create_dialog_ui(&ctx);
         self.diag_ui(&ctx);
         self.settings_ui(&ctx);

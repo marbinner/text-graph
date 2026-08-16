@@ -40,6 +40,20 @@ const PREVIEW_LINE_CAP: usize = 400;
 const ROW_H: f32 = 34.0;
 /// Rows a Ctrl+D / Ctrl+U half-page jump moves.
 const HALF_PAGE: isize = 8;
+/// The floating finder's width, as a fraction of the canvas and clamped.
+const OVERLAY_W_FRAC: f32 = 0.46;
+const OVERLAY_W_MIN: f32 = 380.0;
+const OVERLAY_W_MAX: f32 = 760.0;
+/// Where the prompt sits down the canvas — just below the middle, so the
+/// results have room to stack under it without leaving the eye's center.
+const PROMPT_Y_FRAC: f32 = 0.52;
+/// Height budget for the result list under the prompt.
+const LIST_H_FRAC: f32 = 0.36;
+/// How far ABOVE the canvas center a framed node is placed while the
+/// finder floats there — the middle of the band left free above the
+/// prompt. Without it, following a result would park it under the
+/// overlay, which is the one place you cannot see.
+pub(super) const FRAME_LIFT_FRAC: f32 = 0.5 - PROMPT_Y_FRAC * 0.5;
 
 pub(super) enum ScanMsg {
     Hits(u64, Vec<FileHits>),
@@ -905,80 +919,88 @@ fn cap_chars(s: &str, n: usize) -> String {
 // ---------------------------------------------------------------- painting
 
 impl Viewer {
-    /// The search prompt at the top of the side pane, with its counts and
-    /// key hints. Shown whenever the picker is open — an empty query
-    /// leaves the ranger below it untouched.
-    pub(super) fn picker_prompt(&mut self, ui: &mut egui::Ui) {
+    /// The finder itself: a floating prompt a little BELOW the middle of
+    /// the canvas with its results stacked underneath, telescope-style.
+    /// It is an Area rather than a panel, so the graph keeps its full
+    /// width behind it and the eye stays near the center of the screen
+    /// instead of being dragged to the top edge. The preview does not live
+    /// here — it stays in the side pane, where previews always are.
+    pub(super) fn picker_overlay_ui(&mut self, ctx: &egui::Context) {
+        if !self.picker.open {
+            return;
+        }
+        // center over the CANVAS, not the window: the side pane holds the
+        // preview, and an overlay centered on the window would sit half
+        // underneath it
+        let screen = self.last_canvas_rect.unwrap_or_else(|| ctx.content_rect());
+        let w = (screen.width() * OVERLAY_W_FRAC)
+            .clamp(OVERLAY_W_MIN, OVERLAY_W_MAX)
+            .min((screen.width() - 24.0).max(120.0));
+        let pos = Pos2::new(
+            screen.center().x - w * 0.5,
+            screen.top() + screen.height() * PROMPT_Y_FRAC,
+        );
+        let list_h = (screen.height() * LIST_H_FRAC).clamp(120.0, 520.0);
         let dim = self.theme.text;
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("find").color(dim));
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut self.picker.query)
-                    .hint_text("name, path, or words in the text")
-                    .font(FontId::proportional(15.0))
-                    .desired_width(f32::INFINITY),
-            );
-            // the prompt owns the keyboard for as long as the picker is
-            // open: a click into the preview drops widget focus, and every
-            // keystroke after it would fall through to the graph keybinds
-            if self.picker.focus_pending || ui.memory(|m| m.focused().is_none()) {
-                resp.request_focus();
-                self.picker.focus_pending = false;
-            }
-        });
-        ui.horizontal(|ui| {
-            let n = self.picker.rows.len();
-            let content = self.picker.content.len();
-            let mut line = if self.picker.query.trim().is_empty() {
-                "type to search names, paths, contents and terminals".to_string()
-            } else {
-                format!(
-                    "{n} result{} · {content} file{} by content",
-                    if n == 1 { "" } else { "s" },
-                    if content == 1 { "" } else { "s" }
-                )
-            };
-            if self.picker.scanning {
-                line.push_str(" · scanning…");
-            }
-            ui.label(egui::RichText::new(line).small().color(dim));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let hints = if self.picker.searching() {
-                    "↑↓ move · ↵ jump · ^↵ edit at line · esc close"
-                } else {
-                    "↑↓ walk · esc close"
-                };
-                ui.label(egui::RichText::new(hints).small().color(dim));
+        egui::Area::new(egui::Id::new("tg-picker"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .constrain_to(screen.shrink(8.0))
+            .show(ctx, |ui| {
+                ui.set_width(w);
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(w);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("find").color(dim));
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.picker.query)
+                                .hint_text("name, path, or words in the text")
+                                .font(FontId::proportional(15.0))
+                                .desired_width(f32::INFINITY),
+                        );
+                        // the prompt owns the keyboard for as long as the
+                        // picker is open: a click anywhere else drops widget
+                        // focus, and every keystroke after it would fall
+                        // through to the graph keybinds
+                        if self.picker.focus_pending || ui.memory(|m| m.focused().is_none()) {
+                            resp.request_focus();
+                            self.picker.focus_pending = false;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let n = self.picker.rows.len();
+                        let content = self.picker.content.len();
+                        let mut line = if self.picker.query.trim().is_empty() {
+                            "type to search names, paths, contents and terminals".to_string()
+                        } else {
+                            format!(
+                                "{n} result{} · {content} file{} by content",
+                                if n == 1 { "" } else { "s" },
+                                if content == 1 { "" } else { "s" }
+                            )
+                        };
+                        if self.picker.scanning {
+                            line.push_str(" · scanning…");
+                        }
+                        ui.label(egui::RichText::new(line).small().color(dim));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let hints = if self.picker.searching() {
+                                "↑↓ move · ↵ jump · ^↵ edit at line · esc close"
+                            } else {
+                                "↑↓ walk · esc close"
+                            };
+                            ui.label(egui::RichText::new(hints).small().color(dim));
+                        });
+                    });
+                    if self.picker.searching() {
+                        ui.separator();
+                        self.picker_list(ui, list_h);
+                    }
+                });
             });
-        });
-        ui.separator();
     }
 
-    /// Results | preview — the ranger's two columns, filtered. Only shown
-    /// while the query is non-empty; an empty one IS the ranger.
-    pub(super) fn picker_body(&mut self, ui: &mut egui::Ui) {
-        // wider than the ranger's sibling column: result rows carry a path
-        // and a matched line under the name
-        ui.set_min_width(620.0);
-        let list_w = (ui.available_width() * 0.45).clamp(240.0, 460.0);
-        let full_h = ui.available_height();
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new(list_w, full_h),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| self.picker_list(ui),
-            );
-            ui.separator();
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), full_h),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| self.picker_preview_ui(ui),
-            );
-        });
-    }
-
-    fn picker_list(&mut self, ui: &mut egui::Ui) {
+    fn picker_list(&mut self, ui: &mut egui::Ui, max_h: f32) {
         if self.picker.rows.is_empty() {
             ui.add_space(6.0);
             ui.label(
@@ -996,7 +1018,8 @@ impl Viewer {
         let cursor = self.picker.cursor;
         let mut area = egui::ScrollArea::vertical()
             .id_salt("tg-picker-list")
-            .auto_shrink([false, false]);
+            .max_height(max_h)
+            .auto_shrink([false, true]);
         if self.picker.scroll {
             self.picker.scroll = false;
             // keep the cursor row inside the viewport with the SMALLEST
@@ -1114,7 +1137,10 @@ impl Viewer {
         resp.clicked()
     }
 
-    fn picker_preview_ui(&mut self, ui: &mut egui::Ui) {
+    /// The highlighted result, previewed in the side pane — the same place
+    /// a walked-to node previews, so the eye never has to learn a second
+    /// spot for "what is this file".
+    pub(super) fn picker_preview_ui(&mut self, ui: &mut egui::Ui) {
         let Some(preview) = self.picker.preview.take() else {
             return;
         };
