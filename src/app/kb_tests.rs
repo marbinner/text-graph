@@ -878,3 +878,47 @@ fn hover_previews_can_be_turned_off() {
         "the dwell popup must stay closed when previews are off"
     );
 }
+
+/// `?` goes straight to the key list — the one thing in the settings
+/// window people look for by name. There was no help surface at all
+/// before it.
+#[test]
+fn question_mark_opens_the_key_list() {
+    let mut h = harness();
+    press(&mut h, Key::Questionmark);
+    assert!(h.state().settings.open);
+    assert!(
+        matches!(h.state().settings.tab, super::settings::Tab::Keys),
+        "? lands on the keys tab, not wherever the window was left"
+    );
+}
+
+#[test]
+fn the_key_list_renders_and_a_filter_falls_back_to_settings() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
+    let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.settings_ui(ui.ctx()), viewer);
+    h.state_mut().open_key_help();
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label_contains("browsing (a node selected)")
+            .is_some(),
+        "the key groups render"
+    );
+    assert!(
+        h.query_by_label_contains("launch the default agent there")
+            .is_some(),
+        "…with what each key does"
+    );
+
+    // typing in the filter box is always a search for a SETTING
+    h.state_mut().settings.filter = "dwell".into();
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label_contains("hover dwell").is_some(),
+        "a filter reaches the settings even from the keys tab"
+    );
+}

@@ -739,6 +739,8 @@ impl Viewer {
         });
         let no_mods = ui.input(|i| i.modifiers.is_none());
         let settings_key = no_mods && pressed_fresh(ui, Key::Comma);
+        // '?' carries Shift on every layout that has it — no no_mods here
+        let help_key = pressed_fresh(ui, Key::Questionmark);
         let (term_key, web_key, edit_key, agent_key) = (
             no_mods && pressed_fresh(ui, Key::T),
             no_mods && pressed_fresh(ui, Key::W),
@@ -758,6 +760,8 @@ impl Viewer {
             self.picker.open();
         } else if settings_key && widget_free {
             self.toggle_settings();
+        } else if help_key && widget_free {
+            self.open_key_help();
         } else if esc && self.settings_escape() {
             // the ⚙ window dismisses before the graph does: a pending text
             // edit first, then the window. Unguarded by `widget_free` for

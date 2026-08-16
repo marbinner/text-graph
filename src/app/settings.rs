@@ -26,9 +26,18 @@ const SIDE_W: f32 = 118.0;
 /// A second click within this window confirms "restore defaults".
 const CONFIRM: Duration = Duration::from_secs(3);
 
+/// What the right-hand pane is showing. Keys aren't settings, but they
+/// belong in the same window: it is where you look when you want to know
+/// what the app can do.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Tab {
+    Set(Section),
+    Keys,
+}
+
 pub(super) struct SettingsUi {
     pub(super) open: bool,
-    pub(super) section: Section,
+    pub(super) tab: Tab,
     pub(super) filter: String,
     /// The text field being typed into and its buffer. Free-text values are
     /// committed on focus loss, never per keystroke: `Spec::apply` trims,
@@ -42,7 +51,7 @@ impl Default for SettingsUi {
     fn default() -> Self {
         SettingsUi {
             open: false,
-            section: Section::Appearance,
+            tab: Tab::Set(Section::Appearance),
             filter: String::new(),
             editing: None,
             armed: None,
@@ -88,6 +97,14 @@ impl Viewer {
             }
             _ => {}
         }
+    }
+
+    /// `?` — straight to the key list, which is the one thing in here
+    /// people look for by name.
+    pub(super) fn open_key_help(&mut self) {
+        self.settings.open = true;
+        self.settings.filter.clear();
+        self.settings.tab = Tab::Keys;
     }
 
     pub(super) fn toggle_settings(&mut self) {
@@ -168,15 +185,25 @@ impl Viewer {
             ui.vertical(|ui| {
                 ui.set_width(SIDE_W);
                 for sec in Section::ALL {
-                    let on = !filtering && self.settings.section == sec;
+                    let on = !filtering && self.settings.tab == Tab::Set(sec);
                     if ui
                         .selectable_label(on, sec.title())
                         .on_hover_text(sec.blurb())
                         .clicked()
                     {
                         self.settings.filter.clear();
-                        self.settings.section = sec;
+                        self.settings.tab = Tab::Set(sec);
                     }
+                }
+                ui.add_space(8.0);
+                let on = !filtering && self.settings.tab == Tab::Keys;
+                if ui
+                    .selectable_label(on, "keys")
+                    .on_hover_text("every keybinding (?)")
+                    .clicked()
+                {
+                    self.settings.filter.clear();
+                    self.settings.tab = Tab::Keys;
                 }
             });
             ui.separator();
@@ -184,7 +211,10 @@ impl Viewer {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .max_height(WIN_H - 74.0)
-                    .show(ui, |ui| self.settings_rows(ui, filtering));
+                    .show(ui, |ui| match self.settings.tab {
+                        Tab::Keys if !filtering => keys_pane(ui),
+                        _ => self.settings_rows(ui, filtering),
+                    });
             });
         });
 
@@ -194,7 +224,12 @@ impl Viewer {
 
     fn settings_rows(&mut self, ui: &mut egui::Ui, filtering: bool) {
         let filter = self.settings.filter.clone();
-        let section = self.settings.section;
+        // a filter typed while the keys tab is open searches the settings;
+        // the section it falls back to is the first one
+        let section = match self.settings.tab {
+            Tab::Set(s) => s,
+            Tab::Keys => Section::Appearance,
+        };
         let rows: Vec<&'static Spec> = config::specs()
             .iter()
             .filter(|s| {
@@ -353,5 +388,91 @@ impl Viewer {
                     .on_hover_text(path);
             });
         });
+    }
+}
+
+/// Every keybinding, grouped the way they are learned. This is the ONE
+/// list — the README's table is written from it, and a binding that
+/// isn't here is a binding nobody can find.
+const KEYS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "camera",
+        &[
+            ("h j k l", "pan (with nothing selected)"),
+            ("drag / scroll", "pan / zoom toward the cursor"),
+            ("0  Home", "fit the whole graph"),
+            ("z", "center on the selection"),
+        ],
+    ),
+    (
+        "finding",
+        &[
+            (
+                "f  /  Ctrl+F",
+                "open the picker: names, aliases, paths, contents",
+            ),
+            ("↑ ↓  Ctrl+P Ctrl+N", "move through results"),
+            ("PageUp/Down  Ctrl+U/D", "half-page jumps"),
+            ("Enter", "take the result and keep browsing from it"),
+            ("Ctrl+Enter", "open the file at the matched line"),
+            ("Esc", "close the picker, keeping your selection"),
+        ],
+    ),
+    (
+        "browsing (a node selected)",
+        &[
+            ("j / k", "step through siblings"),
+            ("h", "up to the parent"),
+            ("l", "enter a directory, or open a file"),
+            ("gg / G", "first / last sibling"),
+            ("] / [", "walk the connections strip"),
+            ("Enter", "open in the editor (folders: the file manager)"),
+            ("Esc", "dismiss what's transient, then deselect"),
+        ],
+    ),
+    (
+        "doing things",
+        &[
+            ("e", "edit the file in a terminal card, in the graph"),
+            ("t", "new terminal card at this node's folder"),
+            ("a", "launch the default agent there"),
+            ("right-click", "new note or folder, launches, card actions"),
+        ],
+    ),
+    (
+        "terminal cards",
+        &[
+            ("click", "focus it — the keyboard goes to the pane"),
+            ("Ctrl+click", "pin it open at any zoom"),
+            ("drag", "arrange it around its anchor"),
+            ("Ctrl+Q  /  click away", "release focus back to the graph"),
+            ("dwell", "peek at a compact card full-screen"),
+        ],
+    ),
+    (
+        "view",
+        &[
+            ("w", "show or hide web (cited-URL) nodes"),
+            (",", "these settings"),
+            ("?", "this list"),
+        ],
+    ),
+];
+
+fn keys_pane(ui: &mut egui::Ui) {
+    for (group, rows) in KEYS {
+        ui.label(RichText::new(*group).strong());
+        ui.add_space(2.0);
+        egui::Grid::new(group)
+            .num_columns(2)
+            .spacing([14.0, 4.0])
+            .show(ui, |ui| {
+                for (keys, what) in *rows {
+                    ui.label(RichText::new(*keys).monospace());
+                    ui.label(RichText::new(*what).weak());
+                    ui.end_row();
+                }
+            });
+        ui.add_space(10.0);
     }
 }
