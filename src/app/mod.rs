@@ -754,6 +754,47 @@ impl Viewer {
         }
     }
 
+    /// Tab / Shift+Tab: step the terminal cursor to the next card in a
+    /// stable order, centering on it and leaving the zoom alone — the card
+    /// expands because it is the cursor, so it is readable wherever you
+    /// were. Enter then takes you INTO it.
+    fn step_card_cursor(&mut self, delta: isize) {
+        let keys = self.terms.cards_in_order();
+        if keys.is_empty() {
+            self.set_flash("no agent or terminal cards yet — t starts one".into());
+            return;
+        }
+        let at = self
+            .terms
+            .cursor
+            .as_ref()
+            .and_then(|c| keys.iter().position(|k| k == c));
+        let next = match at {
+            // first Tab lands on the first card, not on the second
+            None if delta > 0 => 0,
+            None => keys.len() - 1,
+            Some(i) => (i as isize + delta).rem_euclid(keys.len() as isize) as usize,
+        };
+        let key = keys[next].clone();
+        self.terms.cursor = Some(key.clone());
+        self.fly_to_card_at(key, false);
+    }
+
+    /// The node the finder is highlighting, if it is highlighting a node —
+    /// the canvas opens it up (preview card, thumbnail) while it is what
+    /// the reader is looking at.
+    pub(super) fn highlighted_node(&self) -> Option<NodeId> {
+        if !self.picker.open {
+            return None;
+        }
+        match self.picker.cursor_row().map(|r| &r.target) {
+            Some(text_graph::search::Target::Node(i)) if (*i as usize) < self.g.nodes.len() => {
+                Some(NodeId(*i))
+            }
+            _ => None,
+        }
+    }
+
     /// Glide the camera to center on `id` — zoom stays exactly as it is,
     /// and the quick movement (instead of a snap) shows where the jump
     /// came from and where it lands.
@@ -783,6 +824,20 @@ impl Viewer {
             )
         });
         let settings_key = no_mods && pressed_fresh(ui, Key::Comma);
+        // Consumed, not just read: egui's own Tab focus navigation would
+        // otherwise move focus into the side pane and swallow the next
+        // one. Only while the overlay is CLOSED — Tab is its source swap,
+        // and consuming it here would eat that.
+        let (back_tab, tab) = if self.picker.open {
+            (false, false)
+        } else {
+            ui.input_mut(|i| {
+                // SHIFT first: a bare-modifier match is not exact, so
+                // asking for NONE would swallow Shift+Tab and step forward
+                let back = i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
+                (back, i.consume_key(egui::Modifiers::NONE, Key::Tab))
+            })
+        };
         let browse_key = no_mods && pressed_fresh(ui, Key::B);
         let raw_key = no_mods && pressed_fresh(ui, Key::R);
         // '?' carries Shift on every layout that has it — no no_mods here
@@ -804,6 +859,8 @@ impl Viewer {
             self.picker_keys(ui);
         } else if open_key && widget_free {
             self.picker.open();
+        } else if (tab || back_tab) && widget_free {
+            self.step_card_cursor(if back_tab { -1 } else { 1 });
         } else if browse_key && widget_free {
             // b = the same overlay, listing a folder instead of searching
             // everything. Finding is the default way around the vault;
@@ -1072,14 +1129,24 @@ impl Viewer {
         Rect::from_center_size(s, Vec2::new(aspect * half_h, half_h) * 2.0)
     }
 
+    /// Screen radius the finder's highlighted node is drawn at when it
+    /// would otherwise be too small to read.
+    const OPENED_MIN_R: f32 = 24.0;
+
     /// UNCLAMPED screen radius above which a File node shows its text
     /// preview card. (The clamped radius caps at 16, so zoom depth would be
     /// invisible through it.)
     const PREVIEW_MIN_R: f32 = 13.0;
 
     /// The card rect a File node's text preview occupies at this zoom.
-    fn preview_box(&self, id: NodeId, s: Pos2) -> Rect {
-        let ur = self.radius[id.0 as usize] * self.zoom;
+    /// `opened` (the finder's highlight) gets a readable floor: opening a
+    /// node the reader is looking at into a card too small to read would
+    /// be a worse answer than the dot it replaced.
+    fn preview_box(&self, id: NodeId, s: Pos2, opened: bool) -> Rect {
+        let mut ur = self.radius[id.0 as usize] * self.zoom;
+        if opened {
+            ur = ur.max(Self::OPENED_MIN_R);
+        }
         let size = Vec2::new((ur * 5.2).min(280.0), (ur * 6.0).min(320.0));
         Rect::from_center_size(s, size)
     }
@@ -1123,13 +1190,18 @@ impl Viewer {
     /// preview card — if it is expanded at the current zoom. Hover targets,
     /// selection rings, and label anchors all follow this shape.
     fn node_box(&self, id: NodeId, s: Pos2, r: f32) -> Option<Rect> {
+        // the finder's highlighted node is drawn opened, so it has to be
+        // HIT like that too — rings, labels and clicks follow the shape
+        // the reader can see
+        let open = self.highlighted_node() == Some(id);
+        let r = if open { r.max(Self::OPENED_MIN_R) } else { r };
         match self.g.node(id).kind {
             NodeKind::Image if r >= Self::IMG_BOX_MIN_R => Some(self.image_box(id, s, r)),
             NodeKind::File | NodeKind::Asset
-                if self.radius[id.0 as usize] * self.zoom >= Self::PREVIEW_MIN_R
+                if (self.radius[id.0 as usize] * self.zoom >= Self::PREVIEW_MIN_R || open)
                     && self.previewable(id) =>
             {
-                Some(self.preview_box(id, s))
+                Some(self.preview_box(id, s, open))
             }
             _ => None,
         }
@@ -1597,6 +1669,12 @@ impl Viewer {
         // Reserve a slot here; paint_terminals fills it.
         let tether_slot = painter.add(egui::Shape::Noop);
 
+        // What the finder is highlighting opens up wherever it sits: the
+        // preview card for a note, the picture for an image. You are
+        // looking at it in the list; the graph should show you the thing,
+        // not a dot you have to zoom into.
+        let opened = self.highlighted_node();
+
         // nodes
         for &(id, s, r) in &visible {
             let node = self.g.node(id);
@@ -1656,8 +1734,9 @@ impl Viewer {
                     // presence fades so the disc↔card flip never pops.
                     // Binary assets stay discs at every zoom.
                     let ur = self.radius[id.0 as usize] * self.zoom;
+                    let open_here = opened == Some(id);
                     let want = self.cfg.canvas_previews
-                        && ur >= Self::PREVIEW_MIN_R
+                        && (ur >= Self::PREVIEW_MIN_R || open_here)
                         && self.previewable(id);
                     let presence = ui.ctx().animate_value_with_time(
                         egui::Id::new(("preview", &node.path)),
@@ -1689,7 +1768,7 @@ impl Viewer {
                             0.15,
                         );
                         let a = presence * dim_a;
-                        let bx = self.preview_box(id, s);
+                        let bx = self.preview_box(id, s, open_here);
                         painter.rect_filled(bx, 3.0, self.theme.panel.gamma_multiply(a));
                         painter.rect_stroke(
                             bx,
@@ -1697,7 +1776,8 @@ impl Viewer {
                             Stroke::new(1.0, self.theme.edge.gamma_multiply(a)),
                             egui::StrokeKind::Outside,
                         );
-                        let fs = (ur * 0.22).clamp(6.5, 12.0);
+                        let fs = (ur.max(if open_here { Self::OPENED_MIN_R } else { 0.0 }) * 0.22)
+                            .clamp(6.5, 12.0);
                         // notes read as prose, assets read as code
                         let font = if node.kind == NodeKind::File {
                             FontId::proportional(fs)
@@ -1722,14 +1802,23 @@ impl Viewer {
                     }
                 }
                 NodeKind::Image => {
-                    if r < Self::IMG_BOX_MIN_R || !self.cfg.thumbnails {
+                    let open_here = opened == Some(id);
+                    if (r < Self::IMG_BOX_MIN_R && !open_here) || !self.cfg.thumbnails {
                         painter.circle_filled(s, r, dimmed(self.theme.img));
                     } else {
                         // decode on demand, draw the thumbnail once it lands;
                         // a framed placeholder with the photo glyph meanwhile
                         self.thumbs
                             .request(ui.ctx(), &node.path, self.root.join(&node.path));
-                        let bx = self.image_box(id, s, r);
+                        let bx = self.image_box(
+                            id,
+                            s,
+                            if open_here {
+                                r.max(Self::OPENED_MIN_R)
+                            } else {
+                                r
+                            },
+                        );
                         // dim/undim FADES for pictures: the neighborhood
                         // dim snapping a photo between bright and near-black
                         // on every hover change read as flicker

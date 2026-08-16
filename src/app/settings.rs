@@ -456,6 +456,8 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "terminal cards",
         &[
+            ("Tab / Shift+Tab", "step through the cards, expanding each"),
+            ("Enter", "go into the card the cursor is on"),
             ("click", "focus it — the keyboard goes to the pane"),
             ("Ctrl+click", "pin it open at any zoom"),
             ("drag", "arrange it around its anchor"),

@@ -1562,3 +1562,104 @@ fn obsidian_flavored_markdown_renders() {
     assert!(tag, "#tags render");
     assert!(!blockid, "^block-ids are addresses, not text");
 }
+
+/// Tab walks the terminal cards in a stable order, centering on each and
+/// leaving the zoom alone — the card expands because it is the cursor, so
+/// it is readable wherever you were standing. Enter then goes INTO it.
+#[test]
+fn tab_walks_the_cards_in_order_and_expands_them() {
+    use text_graph::agents::AgentPane;
+    let mut h = harness();
+    let pane = |session: &str, pane: &str| AgentPane {
+        session: session.into(),
+        pane: pane.into(),
+        pid: 1,
+        cwd: h.state().root.clone(),
+        agent: "pi".into(),
+        ours: true,
+        anchor: None,
+    };
+    // discovery order is not sorted order: %10 must come after %2, and a
+    // string sort gets that backwards
+    h.state_mut().terms.panes = vec![
+        pane("tg_pi", "%10"),
+        pane("tg_claude", "%3"),
+        pane("tg_pi", "%2"),
+    ];
+    let order = h.state().terms.cards_in_order();
+    assert_eq!(
+        order,
+        vec![
+            ("tg_claude".to_string(), "%3".to_string()),
+            ("tg_pi".to_string(), "%2".to_string()),
+            ("tg_pi".to_string(), "%10".to_string()),
+        ]
+    );
+
+    let zoom = h.state().zoom;
+    press(&mut h, Key::Tab);
+    assert_eq!(
+        h.state().terms.cursor.as_ref(),
+        Some(&order[0]),
+        "first Tab"
+    );
+    assert!(
+        h.state().terms.is_expanded(&order[0]),
+        "the card under the cursor is open"
+    );
+    assert_eq!(h.state().zoom, zoom, "and the zoom is left alone");
+    press(&mut h, Key::Tab);
+    assert_eq!(h.state().terms.cursor.as_ref(), Some(&order[1]));
+    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::Tab);
+    h.step();
+    assert_eq!(h.state().terms.cursor.as_ref(), Some(&order[0]), "back");
+    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::Tab);
+    h.step();
+    assert_eq!(
+        h.state().terms.cursor.as_ref(),
+        Some(&order[2]),
+        "and around the end"
+    );
+
+    press(&mut h, Key::Enter);
+    assert_eq!(
+        h.state().terms.focused.as_ref(),
+        Some(&order[2]),
+        "Enter takes you into the card the cursor is on"
+    );
+}
+
+/// Whatever the finder highlights is opened on the canvas while you look
+/// at it — a card expands, a note becomes its preview box — so the graph
+/// shows the thing itself instead of a dot you would have to zoom into.
+#[test]
+fn the_finders_highlight_opens_the_node_on_the_canvas() {
+    let mut h = harness();
+    press(&mut h, Key::F);
+    h.state_mut().picker.query = "grafer".into();
+    wait_for(&mut h, "the name match", |v| !v.picker.rows.is_empty());
+    let id = h.state().g.by_path("topics/grafér.md").expect("the note");
+    assert_eq!(
+        h.state().highlighted_node(),
+        Some(id),
+        "the highlighted row is the highlighted node"
+    );
+    // zoomed far out, where it would otherwise be a dot
+    h.state_mut().zoom = 0.05;
+    h.step();
+    let rect = h
+        .state()
+        .node_box(id, eframe::egui::Pos2::ZERO, 1.0)
+        .expect("an opened node has a box, however far out you are");
+    assert!(
+        rect.width() > 60.0,
+        "and it is big enough to read: {rect:?}"
+    );
+
+    press(&mut h, Key::Escape);
+    assert_eq!(
+        h.state().highlighted_node(),
+        None,
+        "closing the finder closes it again"
+    );
+}

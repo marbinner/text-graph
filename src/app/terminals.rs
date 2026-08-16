@@ -105,6 +105,28 @@ impl Terminals {
         self.focused.as_ref() == Some(key)
             || self.cursor.as_ref() == Some(key)
             || self.pinned.contains_key(key)
+            // the finder's highlighted row: whatever you are looking at in
+            // the list is open on the canvas while you look at it
+            || self.best.as_ref().is_some_and(|(_, k)| k == key)
+    }
+
+    /// Every live card, in a stable order: session name, then pane number
+    /// (numeric — `%10` comes after `%2`, which a string sort gets wrong).
+    /// Tab walks this, so it must not depend on discovery order.
+    pub(super) fn cards_in_order(&self) -> Vec<(String, String)> {
+        let mut keys: Vec<(String, String)> = self
+            .panes
+            .iter()
+            .map(|a| (a.session.clone(), a.pane.clone()))
+            .collect();
+        keys.sort_by_key(|(s, p)| {
+            (
+                s.clone(),
+                p.trim_start_matches('%').parse::<u32>().unwrap_or(u32::MAX),
+                p.clone(),
+            )
+        });
+        keys
     }
 
     /// Ctrl+click: pin ⇄ unpin. Unpinning also drops the session's PARKED
