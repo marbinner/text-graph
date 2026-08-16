@@ -240,10 +240,14 @@
   `SCAN_HINT_DELAY` before showing, or it strobes once per keystroke and
   once per agent save. Anything that resets per reload will be SEEN.
 - Finder layout: the prompt + result list FLOAT (an egui Area, order
-  Foreground) centered on the CANVAS rect — not the window, or the side
-  pane would sit half on top of them — with the prompt at
-  `PROMPT_Y_FRAC` down it (just below middle, telescope-style) and
-  results stacked BELOW. Previews never live there: the side pane is the
+  Foreground) centered on the WINDOW — Foreground means it draws over the
+  side pane, so it sits in the same place whether the pane is open or not
+  — with the prompt `cfg.finder_y` down it and the list filling
+  everything from there to the bottom margin. Never cap the list at a
+  fraction: prompt height and visible rows trade against each other, and
+  a cap turned a laptop screen into three visible results. The list is
+  drawn whenever there are ROWS, not only while a query is live (an empty
+  prompt has the recently-edited ones). Previews never live there: the side pane is the
   one place a file previews, searched-to or walked-to. Framing
   compensates (`frame_target` lifts a followed node by `FRAME_LIFT_FRAC`
   of the canvas height) — without it, following a result parks it behind
