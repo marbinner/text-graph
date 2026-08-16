@@ -161,6 +161,10 @@ impl Viewer {
             // it by (mtime, len) if the file itself changed.
             self.detail = None;
             self.detail_stamp = None;
+            // the pane's preview is keyed by SUBJECT identity, which a
+            // structural reload doesn't change — but the NodeId inside it
+            // does, and a stale one previews (and jumps to) another node
+            self.pane_preview = None;
         }
         // evict only thumbnails/excerpts whose file actually changed —
         // reloads are frequent (agents writing notes) and a full clear made

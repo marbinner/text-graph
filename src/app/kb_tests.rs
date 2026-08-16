@@ -1195,3 +1195,44 @@ fn r_switches_the_preview_between_markdown_and_source() {
         "and back"
     );
 }
+
+/// The pane's preview is cached by SUBJECT identity, which a structural
+/// reload leaves alone — but the NodeId inside it moves, and a stale one
+/// would preview (and jump to) a different node.
+#[test]
+fn a_structural_reload_reaims_the_pane_at_the_right_node() {
+    let d = std::env::temp_dir().join(format!("tg-reaim-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("keeper.md"), "# keeper\n").unwrap();
+    std::fs::write(d.join("zzz.md"), "# zzz\n").unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            v.pump_picker(ui.ctx());
+        },
+        viewer,
+    );
+    h.step();
+    select(&mut h, "keeper.md");
+    h.step();
+    let subject = h.state().pane_preview.as_ref().and_then(|p| p.subject);
+    assert_eq!(subject, h.state().selected, "the pane is on the selection");
+
+    // a new file sorts BEFORE it, shifting every index after it
+    std::fs::write(d.join("aaa.md"), "# aaa\n").unwrap();
+    let rebuilt = graph::build(vault::scan(&d).expect("rescan"));
+    h.state_mut().apply_graph(rebuilt);
+    h.step();
+    let subject = h
+        .state()
+        .pane_preview
+        .as_ref()
+        .and_then(|p| p.subject)
+        .expect("still previewing something");
+    let path = h.state().g.node(subject).path.clone();
+    let _ = std::fs::remove_dir_all(&d);
+    assert_eq!(path, "keeper.md", "and it followed the file, not the index");
+}
