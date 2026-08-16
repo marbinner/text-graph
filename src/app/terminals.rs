@@ -40,7 +40,8 @@ pub(super) struct Terminals {
     /// A just-launched session to focus the moment discovery shows it
     /// (with a takeover deadline — a dead launch must not steal keys later).
     pub(super) focus_pending: Option<(String, Instant)>,
-    /// The card the terminal cursor is on: highlighted, Enter focuses it.
+    /// The card the terminal cursor is on: expanded, Enter focuses it.
+    /// Tab / Shift+Tab step it through `cards_in_order`.
     pub(super) cursor: Option<(String, String)>,
     /// (card, dwell start, screen anchor) — drives the hover peek popup on
     /// compact cards, like `Viewer::hover_since` does for nodes.

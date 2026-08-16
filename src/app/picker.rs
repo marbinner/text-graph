@@ -1,11 +1,15 @@
-//! The picker: one keyboard-driven finder over everything in the graph —
-//! note names, aliases, paths, file CONTENT, and live terminal panes.
+//! The picker: THE list surface, and the way around the graph. It has
+//! sources, not siblings — find (fuzzy over note names, aliases, paths,
+//! file CONTENT and live terminal panes), browse (`b`: one folder's
+//! entries, filtered by what you type), and, with an empty find prompt,
+//! what changed last. A new way to choose a file belongs here as another
+//! source; a second surface with its own preview is how the ranger drifted.
 //!
-//! The prompt and its results FLOAT over the canvas, centered on it with
-//! the prompt just below the middle (telescope-style) so the eye stays near
-//! the center of the screen; previews stay in the side pane, where a
-//! walked-to file previews too. `frame_target` lifts the followed node into
-//! the band above the overlay, so the graph stays readable behind it.
+//! The prompt and its results FLOAT over the WINDOW, with the prompt
+//! `cfg.finder_y` down it (telescope-style) and the list filling
+//! everything below; previews stay in the side pane, where a selected file
+//! previews too. `frame_target` lifts the followed node into the band
+//! above the overlay, so the graph stays readable behind it.
 //!
 //! Per keystroke: names/aliases/paths re-score in memory (instant), while
 //! file content is scanned by a worker thread after a short debounce and

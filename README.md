@@ -113,7 +113,6 @@ focus a terminal and every key goes to the agent until `Ctrl+Q`.
 | drag a node | move it — pins to the cursor, the simulation responds live |
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
-| `Tab` / `Shift+Tab` | step through the terminal cards — each expands where it sits, `Enter` goes in |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
 | `,` or `⚙` (bottom-right) | **settings** — see below |
 | `?` | every keybinding, in the settings window |
@@ -194,17 +193,18 @@ instead of snapping, and never changes your zoom.
 | `p` | up to the parent folder |
 | `b` | **browse this folder** in the finder — the list, scoped |
 | `r` | read the preview as source (line numbers) or as markdown |
-| `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` or `l` follows it |
+| `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
 | `t` | new **terminal** card at this node's folder, focused and ready to type |
 | `a` | launch the **default agent** (`,` settings) at this node's folder, focused when it appears |
-| `Esc` | dismiss whatever is transient first — the search prompt, then the link cursor — then deselect, back to camera mode |
+| `Esc` | dismiss whatever is transient first — the finder, then the settings window, then the link or card cursor — then deselect, back to camera mode |
 
 ### Terminal cards
 
 | Input | Action |
 |---|---|
+| `Tab` / `Shift+Tab` | step through every card in a stable order — each expands where it sits, at your zoom; `Enter` goes in |
 | hover + linger on a compact card | **peek**: the full live screen pops up at readable size — inspect an agent without zooming, focusing, or pinning |
 | click a card | select + focus: it expands to full readable size at any zoom, turns **cyan ⌨**, and the keyboard types into the agent |
 | **Ctrl+click a card** | 📌 pin it open — expanded at any zoom, several at once, without taking the keyboard; Ctrl+click again unpins. Pins survive restarts |

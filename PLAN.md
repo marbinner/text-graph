@@ -235,6 +235,32 @@ under working agents is the question you actually had. `r` switches any
 preview between rendered markdown and numbered source. Adding a third
 source (links? tags?) means adding a source, not a surface.
 
+**C4 — The reading surface. ✓ done 2026-08-16.** The preview grew up:
+syntax colouring for code (new lib `highlight.rs` — syntect spans as
+plain RGB, scanned from line one because a highlighter's state is what
+knows whether line 400 is inside a string) in both the source view and
+fenced code, and Obsidian-flavored rendering (callouts of any case with
+titles and fold markers, `==highlights==`, hidden `%%comments%%`, `#tag`
+chips, dropped `^block-ids`) — Obsidian in, CommonMark out, because the
+renderer only speaks CommonMark. Code previews as source by DEFAULT:
+there is nothing to render in a .py, and rendering it strips the
+structure a reader is looking for.
+
+Keys settled around the finder at the same time: hjkl pan
+unconditionally with `s`/`d` zooming (one hand drives the view), `gg`
+refits and `0` resets only the zoom, `p` climbs, `G` frames the
+selection's neighbourhood, `Tab`/`Shift+Tab` step the terminal cards in
+a stable order, and `Ctrl+Q` lets go of everything — including egui's
+widget focus, which is what makes the next `f` reach the graph. Whatever
+the finder highlights is drawn OPENED on the canvas, cards included.
+
+Three egui lessons paid for in bugs and written into CLAUDE.md: a
+constant in POINTS inside the pane is a floor under it, not a ceiling
+(that clipped every preview); egui remembers sizes and only ever
+ratchets them DOWN unless you own them (pane width, finder height); and
+Tab focus is decided in `Memory::begin_pass`, before any app code runs,
+so it has to be taken back rather than prevented.
+
 Checkpoint after C: daily-drive it against the real vault; annoyances set D's order.
 
 **D — Scale & polish (as needed, not speculatively).** Collapse/expand subtrees
