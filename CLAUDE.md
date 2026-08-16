@@ -94,7 +94,11 @@
   makes "code --wait" untypable otherwise), and closing the window commits
   a pending edit. Esc dismisses the pending edit first, then the window —
   and like the picker that branch is deliberately NOT `widget_free`-guarded
-  (egui drops focus at frame START on Escape).
+  (egui drops focus at frame START on Escape). A click OUTSIDE the window
+  closes it (committing a pending edit) but is never consumed — clicking
+  a node closes and selects in one gesture, like the card release —
+  while the gear itself and an open combo-box popup are excluded, since
+  a popup lives on its own layer outside the window rect.
 - `highlight.rs` colours the source view: syntect spans as plain RGB (the
   lib stays egui-free), scanned from line ONE because a highlighter's
   state is what knows whether line 400 is inside a string, and capped by
@@ -173,7 +177,12 @@
   and Enter enters it. Tab is consumed (`input_mut::consume_key`) so
   egui's focus navigation can't eat the next one — but never while the
   overlay is open, where Tab swaps its source, and Shift+Tab must be
-  consumed FIRST because a bare-modifier match isn't exact. Anything the
+  consumed FIRST because a bare-modifier match isn't exact. Consuming is
+  NOT enough on its own: egui picks its Tab focus target in
+  `Memory::begin_pass`, before any of our code runs, so
+  `release_tab_focus` surrenders whatever took focus at the END of the
+  frame — otherwise the corner badges hold the keyboard and the next Tab
+  goes to egui's navigation instead of the next card. Anything the
   finder highlights is drawn OPENED (`terms.best` for cards,
   `highlighted_node()` for the rest, with an `OPENED_MIN_R` floor so it
   is readable at any zoom); `node_box` uses the same rule, or rings and
