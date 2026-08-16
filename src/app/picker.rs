@@ -39,6 +39,8 @@ const PREVIEW_LINE_CAP: usize = 400;
 /// Result row height: title line + snippet line, uniform so the list can
 /// virtualize (`show_rows`) over a vault-sized result set.
 const ROW_H: f32 = 34.0;
+/// Files the empty prompt lists, newest first.
+const RECENT_MAX: usize = 30;
 /// Rows a Ctrl+D / Ctrl+U half-page jump moves.
 const HALF_PAGE: isize = 8;
 /// The floating finder's width, as a fraction of the canvas and clamped.
@@ -180,6 +182,10 @@ pub(super) struct Picker {
     pending_at: Instant,
     /// Pane list the current rows were built from (panes come and go).
     pane_keys: Vec<(String, String)>,
+    /// (node, mtime) for the vault's files, newest first — what an empty
+    /// find prompt lists. Rebuilt after a reload, i.e. after whatever
+    /// changed on disk changed.
+    recent: Option<Vec<(u32, std::time::SystemTime)>>,
     /// Result the camera is dwelling on, and when it landed there.
     follow: Option<(NodeId, Instant)>,
     followed: Option<NodeId>,
@@ -221,6 +227,7 @@ impl Picker {
             pending_scan: None,
             pending_at: Instant::now(),
             pane_keys: Vec::new(),
+            recent: None,
             follow: None,
             followed: None,
             user_moved: false,
@@ -329,6 +336,7 @@ impl Picker {
         // which, so the rescan can't narrow — but it must not throw away
         // what is on screen while it runs
         self.done = None;
+        self.recent = None; // the reload IS a file changing — re-stat
         self.dirty = true;
         if self.open && !self.query.trim().is_empty() {
             self.pending_scan = Some(Query::parse(&self.query));
@@ -726,6 +734,65 @@ impl Viewer {
         self.picker.name_rows = rows;
     }
 
+    /// The most recently modified files, newest first — the empty-prompt
+    /// list. Stat'ing the vault is a few milliseconds and happens once per
+    /// reload, not per keystroke.
+    fn recent_rows(&mut self) {
+        if self.picker.recent.is_none() {
+            let mut v: Vec<(u32, std::time::SystemTime)> = self
+                .g
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| {
+                    matches!(n.kind, NodeKind::File | NodeKind::Asset | NodeKind::Image)
+                })
+                .filter_map(|(i, n)| {
+                    std::fs::metadata(self.root.join(&n.path))
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .map(|t| (i as u32, t))
+                })
+                .collect();
+            // newest first, ties by node index so the list is deterministic
+            v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            v.truncate(RECENT_MAX);
+            self.picker.recent = Some(v);
+        }
+        let recent = self.picker.recent.clone().unwrap_or_default();
+        let rows: Vec<Row> = recent
+            .iter()
+            .filter_map(|(i, t)| {
+                let n = self.g.nodes.get(*i as usize)?;
+                Some(Row {
+                    target: Target::Node(*i),
+                    class: Class::Name,
+                    score: 0,
+                    title: n.display_name().to_string(),
+                    title_ranges: Vec::new(),
+                    subtitle: format!("{} · {}", n.path, super::previews::ago(*t)),
+                    subtitle_ranges: Vec::new(),
+                    snippet: None,
+                    more: 0,
+                    more_capped: false,
+                    key: n.ident(),
+                })
+            })
+            .collect();
+        self.picker.node_scores = vec![None; self.g.nodes.len()];
+        self.picker.rows = rows;
+        let was = self.picker.cursor;
+        self.picker.cursor = self
+            .picker
+            .cursor_key
+            .as_ref()
+            .and_then(|k| self.picker.rows.iter().position(|r| &r.key == k))
+            .unwrap_or(0);
+        if self.picker.cursor != was {
+            self.picker.scroll = true;
+        }
+    }
+
     /// The entries of the browsed folder, in TREE order (dirs first, as
     /// the graph stores them) — never ranked by score, because a list you
     /// are walking must not reorder under the cursor. A query filters it
@@ -832,6 +899,13 @@ impl Viewer {
             return;
         }
         let q = Query::parse(&self.picker.query);
+        if q.is_empty() {
+            // An empty prompt used to mean an empty pane. Under agents that
+            // rewrite notes all day, the useful answer to "f, and now
+            // what?" is what just changed.
+            self.recent_rows();
+            return;
+        }
         self.score_names();
         let mut scores = self.picker.name_scores.clone();
         let mut rows = self.picker.name_rows.clone();
@@ -1292,7 +1366,7 @@ impl Viewer {
                         let mut line = if browsing.is_some() {
                             format!("{n} entr{}", if n == 1 { "y" } else { "ies" })
                         } else if self.picker.query.trim().is_empty() {
-                            "type to search names, paths, contents and terminals".to_string()
+                            format!("{n} recently edited · type to search everything")
                         } else {
                             format!(
                                 "{n} result{} · {content} file{} by content",

@@ -412,7 +412,7 @@ pub(super) fn size_and_age(meta: &std::fs::Metadata) -> String {
 
 /// Compact relative timestamp for popup metadata ("3h ago"). Clock skew or
 /// future mtimes degrade to "just now".
-fn ago(t: std::time::SystemTime) -> String {
+pub(super) fn ago(t: std::time::SystemTime) -> String {
     let secs = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
     match secs {
         0..=59 => "just now".into(),

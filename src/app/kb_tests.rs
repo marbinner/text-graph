@@ -635,22 +635,63 @@ fn b_browses_the_folder_in_the_finder_and_walks_the_tree_with_it() {
     assert!(!h.state().picker.open, "taking a result closes the overlay");
 }
 
-/// An empty FIND prompt has no list, so the arrows have nothing to walk —
-/// they must not move the selection either, or the camera jumps for a
-/// list nobody can see.
+/// An empty find prompt is the launchpad: what changed most recently,
+/// newest first. Under agents that rewrite notes all day, that is the
+/// useful answer to "f, and now what?" — and it must not light up or
+/// move anything until you pick something.
 #[test]
-fn an_empty_find_prompt_walks_nothing() {
-    let mut h = harness();
-    select(&mut h, "bom.md");
-    press(&mut h, Key::F);
-    assert!(h.state().picker.open);
-    assert!(
-        h.state().picker.rows.is_empty(),
-        "an empty query ranks nothing"
+fn an_empty_find_prompt_lists_what_changed_last() {
+    let d = std::env::temp_dir().join(format!("tg-recent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    for name in ["first.md", "second.md", "third.md"] {
+        std::fs::write(d.join(name), "x").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(12));
+    }
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            v.pump_picker(ui.ctx());
+        },
+        viewer,
     );
+    h.step();
+    let id = h.state().g.by_path("first.md").expect("exists");
+    h.state_mut().selected = Some(id);
+    press(&mut h, Key::F);
+    let titles: Vec<String> = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .map(|r| r.title.clone())
+        .collect();
+    let _ = std::fs::remove_dir_all(&d);
+    assert_eq!(
+        titles,
+        vec!["third", "second", "first"],
+        "newest first, without typing a thing"
+    );
+    assert!(
+        h.state().picker.node_scores.iter().all(Option::is_none),
+        "and nothing dims on the canvas until there is a query"
+    );
+
     press(&mut h, Key::ArrowDown);
-    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"));
-    assert!(h.state().cam_anim.is_none(), "and the camera stays put");
+    assert_eq!(h.state().picker.cursor, 1);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("first.md"),
+        "walking the list is browsing, not selecting"
+    );
+    press(&mut h, Key::Enter);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("second.md"),
+        "Enter takes it, like any other result"
+    );
 }
 
 /// Tab swaps the source and keeps what you typed: a filter that found
