@@ -222,8 +222,10 @@ impl Viewer {
             cards,
             pins,
             hide_web: !self.show_web,
-            light: self.theme.light,
-            default_agent: Some(self.default_agent.clone()),
+            // theme and default agent live in the per-user config now;
+            // these two are migration-only fields (see state.rs)
+            light: false,
+            default_agent: None,
             unknown: self.view_unknown.clone(),
         }
     }
@@ -322,7 +324,7 @@ mod tests {
     fn fixture_viewer() -> Viewer {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
         let scan = vault::scan(&root).expect("fixture scans");
-        Viewer::new(graph::build(scan), root)
+        Viewer::new(graph::build(scan), root, config::Config::default())
     }
 
     /// A throwaway 1-file vault, built and cleaned per test.

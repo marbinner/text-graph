@@ -22,10 +22,11 @@ pub struct ViewState {
     /// Web nodes hidden by the `w` toggle. Stored inverted so the derived
     /// Default (false) means the default view: webs visible.
     pub hide_web: bool,
-    /// Light theme on (default false = dark).
+    /// Light theme, as written by builds before preferences moved to the
+    /// per-user config. READ ONLY: parsed so `config::load_or_migrate` can
+    /// seed from it, never written back — `config.rs` owns it now.
     pub light: bool,
-    /// Agent the one-click "Launch <agent>" menu button starts; None =
-    /// the built-in default (pi).
+    /// Default agent from those same older builds — see [`ViewState::light`].
     pub default_agent: Option<String>,
     /// Line kinds this version doesn't understand, verbatim in file order.
     /// Loaded so a save can write them back — the forward-compat promise.
@@ -60,12 +61,9 @@ pub fn to_text(s: &ViewState) -> String {
     if s.hide_web {
         out.push_str("hide_web\n");
     }
-    if s.light {
-        out.push_str("light\n");
-    }
-    if let Some(a) = &s.default_agent {
-        out.push_str(&format!("agent\t{a}\n"));
-    }
+    // `light` and `agent` are deliberately NOT written: they moved to the
+    // per-user config, and a save here would keep resurrecting the old
+    // per-vault copy after the migration read it.
     for l in &s.unknown {
         out.push_str(l);
         out.push('\n');
@@ -254,8 +252,8 @@ mod tests {
                 ("work".to_string(), "%0".to_string()),
             ],
             hide_web: true,
-            light: true,
-            default_agent: Some("claude".into()),
+            light: false,
+            default_agent: None,
             unknown: vec!["future-thing\tdata".to_string()],
         };
         assert_eq!(
@@ -263,6 +261,24 @@ mod tests {
             s,
             "unknown line kinds round-trip too"
         );
+    }
+
+    #[test]
+    fn preferences_are_read_for_migration_but_never_written_back() {
+        let old = "text-graph view v1\nlight\nagent\tclaude\ncamera\t1\t2\t3\n";
+        let s = from_text(old);
+        assert!(s.light, "an older build's theme is still readable");
+        assert_eq!(s.default_agent.as_deref(), Some("claude"));
+        let out = to_text(&s);
+        assert!(
+            !out.contains("light"),
+            "theme moved to the user config: {out}"
+        );
+        assert!(
+            !out.contains("agent"),
+            "agent moved to the user config: {out}"
+        );
+        assert!(out.contains("camera\t1\t2\t3"), "view state still saved");
     }
 
     #[test]

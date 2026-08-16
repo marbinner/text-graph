@@ -271,16 +271,13 @@ impl Viewer {
             }
             // one click launches the DEFAULT agent (⚙ settings); the
             // submenu offers the full list
-            if ui
-                .button(format!("Launch {}", self.default_agent))
-                .clicked()
-            {
+            if ui.button(format!("Launch {}", self.cfg.agent())).clicked() {
                 let ctx = ui.ctx().clone();
-                let agent = self.default_agent.clone();
+                let agent = self.cfg.agent();
                 self.launch_agent(&ctx, &dir, &agent);
             }
             ui.menu_button("Launch other agent", |ui| {
-                for agent in agents::default_allowlist() {
+                for agent in self.cfg.agent_choices() {
                     if ui.button(&agent).clicked() {
                         let ctx = ui.ctx().clone();
                         self.launch_agent(&ctx, &dir, &agent);

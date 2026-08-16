@@ -38,7 +38,7 @@ use text_graph::graph::{Graph, LinkKind, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
-use text_graph::{create, filetype, graph, mdview, state, vault};
+use text_graph::{config, create, filetype, graph, mdview, state, vault};
 
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);
@@ -399,7 +399,8 @@ pub fn run(path: &Path) -> ExitCode {
         }
     };
     let root = scan.root.clone();
-    let viewer = Viewer::new(graph::build(scan), root);
+    let cfg = config::load_or_migrate(&root);
+    let viewer = Viewer::new(graph::build(scan), root, cfg);
     let title = format!("text-graph — {}", viewer.g.node(viewer.g.root).name);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -456,8 +457,9 @@ struct Viewer {
     /// egui visuals need (re)applying (startup, theme toggle).
     apply_visuals: bool,
     settings_open: bool,
-    /// Agent the top-level "Launch <agent>" menu button starts.
-    default_agent: String,
+    /// User preferences (per user, not per vault) — see `config.rs`. The
+    /// canvas reads it live, so every change shows on the next frame.
+    cfg: config::Config,
     /// In-flight camera glide: (start center, target node, start time).
     /// The target is a NODE so a settling sim can't make the glide land
     /// beside it. Manual pan/zoom input cancels it.
@@ -599,7 +601,7 @@ impl Viewer {
         }
     }
 
-    fn new(g: Graph, root: PathBuf) -> Self {
+    fn new(g: Graph, root: PathBuf, cfg: config::Config) -> Self {
         let sim = Sim::new(&g);
         let Derived {
             radius,
@@ -615,16 +617,7 @@ impl Viewer {
         let vs = state::load(&root);
         let cam = vs.camera;
         let show_web = !vs.hide_web;
-        let theme = Theme::get(vs.light);
-        // The view file is UNTRUSTED input and the launch command runs
-        // through `sh -c`: only allowlisted agents may restore, or a
-        // hostile vault could plant `agent\tpi; curl …|sh` behind the
-        // one-click Launch button and the `a` key.
-        let default_agent = vs
-            .default_agent
-            .clone()
-            .filter(|a| agents::default_allowlist().contains(a))
-            .unwrap_or_else(|| "pi".into());
+        let theme = Theme::get(cfg.light);
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
         for c in vs.cards {
             // clamp like the camera below: a corrupt offset would park the
@@ -662,7 +655,7 @@ impl Viewer {
             theme,
             apply_visuals: true,
             settings_open: false,
-            default_agent,
+            cfg,
             cam_anim: None,
             n_files,
             n_dirs,
@@ -840,7 +833,7 @@ impl Viewer {
             // a = the DEFAULT agent (⚙ settings) at the selected node's folder
             let dir = self.node_dir(sel);
             let ctx = ui.ctx().clone();
-            let agent = self.default_agent.clone();
+            let agent = self.cfg.agent();
             self.launch_agent(&ctx, &dir, &agent);
         }
 
