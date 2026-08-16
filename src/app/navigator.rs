@@ -196,6 +196,11 @@ impl Viewer {
                         // pane, clipped at the window edge
                         let w = ui.available_width().max(80.0) as usize;
                         CommonMarkViewer::new()
+                            // mdview emits every allowed image as an explicit,
+                            // vault-checked file URL. Never let a leftover
+                            // absolute/relative destination become a file URL
+                            // by renderer convention.
+                            .explicit_image_uri_scheme(true)
                             .max_image_width(Some(w))
                             .alerts(callouts(&theme))
                             // fenced code is highlighted by the same

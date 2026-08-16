@@ -21,6 +21,13 @@ use crate::vault;
 /// URL scheme for in-graph links; the app intercepts these clicks.
 pub const SCHEME: &str = "tg://";
 
+/// A preview is a glance, not a bulk-file reader. More importantly, the
+/// renderer's generic file loader reads a destination into one Vec before
+/// decoding it; bounding files here keeps a planted image path from exhausting
+/// the process before the image decoder gets a say.
+const MAX_PREVIEW_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+const BLOCKED_IMAGE: &str = "*[image blocked]*";
+
 pub fn node_url(id: NodeId) -> String {
     format!("{SCHEME}{}", id.0)
 }
@@ -64,8 +71,23 @@ fn resolve_name(g: &Graph, target: &str) -> Option<NodeId> {
 
 /// A `file://` URI for a vault-relative path, angle-bracketed so markdown
 /// tolerates spaces in the path.
-fn file_url(root: &Path, rel: &str) -> String {
-    format!("<file://{}>", root.join(rel).display())
+fn file_url(path: &Path) -> String {
+    format!("<file://{}>", path.display())
+}
+
+/// Resolve an image path at PREVIEW time and return a URL only when the final
+/// object is a regular, reasonably sized file inside the canonical vault.
+/// Canonicalizing both sides rejects symlinks out of the vault; emitting the
+/// canonical target also keeps the generic renderer from following the
+/// original symlink later.
+fn safe_image_url(root: &Path, path: &Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    let path = path.canonicalize().ok()?;
+    if !path.starts_with(&root) {
+        return None;
+    }
+    let meta = path.metadata().ok()?;
+    (meta.is_file() && meta.len() <= MAX_PREVIEW_IMAGE_BYTES).then(|| file_url(&path))
 }
 
 /// Resolve a markdown-relative destination against the source note's
@@ -141,10 +163,9 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
                 .or_else(|| resolve_name(g, target));
             match resolved {
                 Some(id) if matches!(g.node(id).kind, NodeKind::Image) => {
-                    reps.push((
-                        span_start..inner_end + 2,
-                        format!("![]({})", file_url(root, &g.node(id).path)),
-                    ));
+                    if let Some(url) = safe_image_url(root, &root.join(&g.node(id).path)) {
+                        reps.push((span_start..inner_end + 2, format!("![]({url})")));
+                    }
                 }
                 // a note embed degrades to a link on the note
                 Some(id) => {
@@ -222,23 +243,38 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
             Event::Start(Tag::Image { dest_url, .. }) => (dest_url.to_string(), true),
             _ => continue,
         };
-        if dest.is_empty() || dest.contains("://") || dest.starts_with('#') {
+        if dest.is_empty() || dest.starts_with('#') {
+            continue;
+        }
+        if dest.contains("://") || dest.starts_with("data:") {
+            // Only URLs minted above by this function may reach the generic
+            // file loader. A note-authored file:// can name anything on the
+            // machine; other schemes are unsupported by this local previewer.
+            if image {
+                reps.push((range, BLOCKED_IMAGE.to_string()));
+            }
             continue;
         }
         // resolve ignoring any #fragment (the rewrite replaces the whole
         // dest span — a tg:// jump has no use for the fragment)
         let path_part = dest.split_once('#').map_or(dest.as_str(), |(p, _)| p);
         let Some(resolved) = resolve_relative(source_dir, path_part) else {
+            if image {
+                reps.push((range, BLOCKED_IMAGE.to_string()));
+            }
             continue;
         };
         let new = if image {
-            root.join(&resolved)
-                .exists()
-                .then(|| file_url(root, &resolved))
+            safe_image_url(root, &root.join(&resolved))
         } else {
             g.by_path(&resolved).map(node_url)
         };
-        let Some(new) = new else { continue };
+        let Some(new) = new else {
+            if image {
+                reps.push((range, BLOCKED_IMAGE.to_string()));
+            }
+            continue;
+        };
         // the destination appears verbatim AFTER the `](` separator —
         // searching the whole construct hit the LABEL first whenever the
         // label contains the dest string (self-labeled [p](p) links),
@@ -557,7 +593,7 @@ mod tests {
 
         assert_eq!(
             prepare(&g, &d, src, "![[b/cover.png]]"),
-            format!("![]({})", file_url(&d, "b/cover.png")),
+            format!("![]({})", file_url(&d.join("b/cover.png"))),
             "the qualified path wins over sorted-leaf order"
         );
         let real = "See [^n].\n\n[^n]: an actual footnote";
@@ -612,7 +648,7 @@ mod tests {
         );
 
         let out = prepare(&g, &d, src, "![p](pic.png) ![b](<pic.png>)");
-        let url = file_url(&d, "docs/pic.png");
+        let url = file_url(&d.join("docs/pic.png"));
         assert_eq!(
             out,
             format!("![p]({url}) ![b]({url})"),
@@ -622,8 +658,8 @@ mod tests {
         let hostile = "[e](../../etc/passwd) [a](/etc/passwd) ![i](../../../etc/passwd)";
         assert_eq!(
             prepare(&g, &d, src, hostile),
-            hostile,
-            "escapes above the vault and absolute paths are never rewritten"
+            format!("[e](../../etc/passwd) [a](/etc/passwd) {BLOCKED_IMAGE}"),
+            "escaping links remain user-clickable text, but images cannot reach the file loader"
         );
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -632,6 +668,51 @@ mod tests {
     /// dest string in the LABEL (it comes first in the construct) and
     /// spliced `tg://N` into the visible text, leaving the real
     /// destination a dangling relative path that leaked to the OS opener.
+    #[test]
+    fn image_destinations_are_confined_to_regular_vault_files() {
+        let (d, g, src) = one_note_vault("safe-images");
+        std::fs::write(d.join("pic.png"), "small").unwrap();
+        let outside = d.with_extension("outside.png");
+        std::fs::write(&outside, "private").unwrap();
+        let huge = d.join("huge.png");
+        std::fs::File::create(&huge)
+            .unwrap()
+            .set_len(MAX_PREVIEW_IMAGE_BYTES + 1)
+            .unwrap();
+
+        let body = format!(
+            "![ok](pic.png) ![absolute]({}) ![explicit](file:///dev/zero)              ![remote](https://example.com/a.png) ![huge](huge.png)",
+            outside.display()
+        );
+        let out = prepare(&g, &d, src, &body);
+        assert!(
+            out.starts_with(&format!("![ok]({})", file_url(&d.join("pic.png")))),
+            "a small regular file in the vault remains renderable: {out}"
+        );
+        assert_eq!(
+            out.matches(BLOCKED_IMAGE).count(),
+            4,
+            "absolute, explicit, remote and oversized images are blocked: {out}"
+        );
+
+        let _ = std::fs::remove_file(outside);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_symlinks_cannot_escape_the_vault() {
+        let (d, g, src) = one_note_vault("safe-image-link");
+        let outside = d.with_extension("outside-link.png");
+        std::fs::write(&outside, "private").unwrap();
+        std::os::unix::fs::symlink(&outside, d.join("link.png")).unwrap();
+
+        assert_eq!(prepare(&g, &d, src, "![x](link.png)"), BLOCKED_IMAGE);
+
+        let _ = std::fs::remove_file(outside);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
     #[test]
     fn relative_link_rewrite_targets_the_destination_not_the_label() {
         let d = std::env::temp_dir().join(format!("tg-mdview-test-{}", std::process::id()));
@@ -652,7 +733,7 @@ mod tests {
         );
         // the image twin: a self-labeled alt text must survive too
         let out = prepare(&g, &d, src, "![pic.png](pic.png)");
-        assert_eq!(out, format!("![pic.png]({})", file_url(&d, "pic.png")));
+        assert_eq!(out, format!("![pic.png]({})", file_url(&d.join("pic.png"))));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

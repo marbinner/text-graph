@@ -256,6 +256,7 @@ impl Viewer {
                                             );
                                         } else {
                                             CommonMarkViewer::new()
+                                                .explicit_image_uri_scheme(true)
                                                 .max_image_width(Some(POPUP_W as usize - 30))
                                                 .show(ui, &mut self.md_cache, body);
                                         }
