@@ -425,8 +425,9 @@ pub fn run(path: &Path) -> ExitCode {
         }
     };
     let root = scan.root.clone();
-    let cfg = config::load_or_migrate(&root);
-    let viewer = Viewer::new(graph::build(scan), root, cfg);
+    let loaded = config::load_or_migrate(&root);
+    let mut viewer = Viewer::new(graph::build(scan), root, loaded.config);
+    viewer.config_error = loaded.read_error;
     let title = format!("text-graph — {}", viewer.g.node(viewer.g.root).name);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -544,6 +545,9 @@ struct Viewer {
     /// Health state, surfaced by the diagnostics badge.
     last_reload: Option<Instant>,
     reload_error: Option<String>,
+    /// A startup config read failure blocks saves: defaults keep the viewer
+    /// usable, but must never overwrite a file we did not successfully load.
+    config_error: Option<String>,
     diag_open: bool,
     // ---- terminals in the graph ----
     /// Dir path → node, for anchoring agent panes at their cwd.
@@ -728,6 +732,7 @@ impl Viewer {
             reload_rx,
             last_reload: None,
             reload_error: None,
+            config_error: None,
             diag_open: false,
             dir_by_path,
             terms: terminals::Terminals::new(restore_offsets, restore_pins),

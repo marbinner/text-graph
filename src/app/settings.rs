@@ -65,6 +65,13 @@ impl Viewer {
     /// flash rather than warn to stderr: this window is where the user is
     /// looking.
     pub(super) fn save_config(&mut self) {
+        if let Some(e) = &self.config_error {
+            self.flash = Some((
+                format!("settings not saved — config failed to load: {e}"),
+                Instant::now(),
+            ));
+            return;
+        }
         if cfg!(test) {
             return; // headless tests must never write the real user config
         }

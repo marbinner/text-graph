@@ -16,6 +16,7 @@ impl Viewer {
             + self.g.ambiguities.len()
             + usize::from(self._watcher.is_none())
             + usize::from(self.reload_error.is_some())
+            + usize::from(self.config_error.is_some())
             + self.terms.attach_backoff.len()
     }
 
@@ -66,6 +67,16 @@ impl Viewer {
                                 RichText::new("showing the previous graph until a save succeeds")
                                     .small()
                                     .color(self.theme.text),
+                            );
+                        }
+                        if let Some(e) = &self.config_error {
+                            ui.colored_label(BAD, format!("settings could not be loaded: {e}"));
+                            ui.label(
+                                RichText::new(
+                                    "settings saves are disabled; fix the config and restart",
+                                )
+                                .small()
+                                .color(self.theme.text),
                             );
                         }
                         // sorted: HashMap order would shuffle the rows between

@@ -523,26 +523,56 @@ pub fn path() -> Option<PathBuf> {
     Some(dir.join("text-graph").join("config"))
 }
 
-/// The stored config, and whether a file was actually there.
-pub fn load() -> (Config, bool) {
-    match path().and_then(|p| std::fs::read_to_string(p).ok()) {
-        Some(text) => (from_text(&text), true),
-        None => (Config::default(), false),
+/// Result of loading per-user preferences. A read error is kept separate
+/// from defaults so the app can remain usable without later overwriting a
+/// config it never successfully read.
+pub struct LoadedConfig {
+    pub config: Config,
+    pub read_error: Option<String>,
+}
+
+fn load_from(p: &Path) -> std::io::Result<(Config, bool)> {
+    match std::fs::read_to_string(p) {
+        Ok(text) => Ok((from_text(&text), true)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Config::default(), false)),
+        Err(e) => Err(std::io::Error::new(
+            e.kind(),
+            format!("cannot read {}: {e}", p.display()),
+        )),
     }
 }
 
 /// First run: seed the per-user config from whatever this vault's view file
 /// carried before preferences moved out of it, so a theme set under an
 /// older build survives the upgrade.
-pub fn load_or_migrate(vault: &Path) -> Config {
-    let (mut c, existed) = load();
+pub fn load_or_migrate(vault: &Path) -> LoadedConfig {
+    load_or_migrate_from(path().as_deref(), vault)
+}
+
+fn load_or_migrate_from(config_path: Option<&Path>, vault: &Path) -> LoadedConfig {
+    let loaded = config_path.map_or_else(|| Ok((Config::default(), false)), load_from);
+    let (mut config, existed) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            return LoadedConfig {
+                config: Config::default(),
+                read_error: Some(e.to_string()),
+            };
+        }
+    };
     // Writing the file only when there was something to take matters: the
     // first vault opened would otherwise stamp defaults over the file and
     // a DIFFERENT vault's stored theme could never migrate afterwards.
-    if !existed && migrate(&mut c, vault) {
-        let _ = save(&c);
+    if !existed
+        && migrate(&mut config, vault)
+        && let Some(p) = config_path
+    {
+        let _ = save_to(p, &config);
     }
-    c
+    LoadedConfig {
+        config,
+        read_error: None,
+    }
 }
 
 /// Copy the preferences an older build stored in the vault's view file.
@@ -762,6 +792,41 @@ mod tests {
         save_to(&fresh, &c).unwrap();
         assert_eq!(from_text(&std::fs::read_to_string(&fresh).unwrap()), c);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unreadable_config_is_not_treated_as_missing_or_migrated_over() {
+        let base = std::env::temp_dir().join(format!("tg-cfgread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let vault = base.join("vault");
+        std::fs::create_dir_all(vault.join(".text-graph")).unwrap();
+        std::fs::write(
+            vault.join(".text-graph/view"),
+            "text-graph view v1
+light
+",
+        )
+        .unwrap();
+        let config_path = base.join("config");
+        let planted = [0xff, 0xfe, 0xfd];
+        std::fs::write(&config_path, planted).unwrap();
+
+        let loaded = load_or_migrate_from(Some(&config_path), &vault);
+
+        assert_eq!(loaded.config, Config::default());
+        assert!(
+            loaded
+                .read_error
+                .as_deref()
+                .is_some_and(|e| e.contains("cannot read")),
+            "the actual read failure must reach the app"
+        );
+        assert_eq!(
+            std::fs::read(&config_path).unwrap(),
+            planted,
+            "migration must never replace a config that failed to load"
+        );
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
