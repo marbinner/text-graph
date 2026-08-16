@@ -442,8 +442,10 @@ agents can read/write the graph, then LLM-assisted ingest).
 ## Development
 
 Rust 1.95 or newer is required. The minimum version is checked in CI.
+The statistics CLI can be built without the native GUI stack:
 
 ```
+cargo run --no-default-features -- stats <vault-path>
 cargo test --all-targets   # unit + integration (asserts fixtures/EXPECTED.md exactly)
 cargo clippy --all-targets
 ```

@@ -3,13 +3,24 @@ use std::process::ExitCode;
 
 use text_graph::{graph, stats, vault};
 
+#[cfg(feature = "gui")]
 mod app;
 
+#[cfg(feature = "gui")]
 const USAGE: &str = "\
 text-graph — markdown vault graph viewer
 
 usage:
   text-graph <vault-path>         open the graph window
+  text-graph stats <vault-path>   headless vault statistics
+  text-graph --help | --version
+";
+
+#[cfg(not(feature = "gui"))]
+const USAGE: &str = "\
+text-graph — markdown vault graph tools
+
+usage:
   text-graph stats <vault-path>   headless vault statistics
   text-graph --help | --version
 ";
@@ -33,6 +44,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        #[cfg(feature = "gui")]
         [p] if !p.starts_with('-') => app::run(Path::new(p)),
         _ => {
             eprint!("{USAGE}");

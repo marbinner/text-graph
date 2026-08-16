@@ -14,6 +14,7 @@ pub mod config;
 pub mod create;
 pub mod filetype;
 pub mod graph;
+#[cfg(feature = "gui")]
 pub mod highlight;
 pub mod keys;
 pub mod layout;
@@ -24,6 +25,7 @@ pub mod search;
 pub mod sim;
 pub mod state;
 pub mod stats;
+#[cfg(feature = "gui")]
 pub mod thumb;
 pub mod tmux;
 pub mod vault;

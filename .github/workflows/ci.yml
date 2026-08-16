@@ -19,6 +19,7 @@ jobs:
       # actually exercises the mirror/typing/resize/launch paths
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - run: cargo fmt -- --check
+      - run: cargo check --locked --no-default-features --lib --bin text-graph
       - run: cargo clippy --locked --all-targets -- -D warnings
       # --all-targets compiles benches/examples too, not just lib+bins+tests
       - run: cargo test --locked --all-targets
