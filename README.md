@@ -18,8 +18,9 @@ The vault is the database: nodes are your `.md` files and directories, edges
 come from the directory structure and `[[wikilinks]]`. text-graph never
 edits your notes — it writes only the empty file or folder you explicitly
 create from the right-click menu, plus a small hidden `.text-graph/` state
-dir (camera, card arrangements, pins, theme and agent settings). Editing happens in your own editor, and the
-graph live-reloads when you save.
+dir (camera, card arrangements, pins). Your preferences live with you, not
+with the vault, in `~/.config/text-graph/config`. Editing happens in your
+own editor, and the graph live-reloads when you save.
 
 ## The graph model
 
@@ -112,7 +113,8 @@ the agent until `Ctrl+Q`.
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
-| `⚙` (bottom-right) | settings: **dark / light theme** and the **default agent** for one-click launching — both persisted per vault |
+| `,` or `⚙` (bottom-right) | **settings** — see below |
+| `?` | every keybinding, in the settings window |
 | `f`, `/` or `Ctrl+F` | **the picker** — see below |
 
 ### Finding and browsing
@@ -178,7 +180,7 @@ instead of snapping, and never changes your zoom.
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
 | `t` | new **terminal** card at this node's folder, focused and ready to type |
-| `a` | launch the **default agent** (⚙ settings) at this node's folder, focused when it appears |
+| `a` | launch the **default agent** (`,` settings) at this node's folder, focused when it appears |
 | `Esc` | dismiss whatever is transient first — the search prompt, then the link cursor — then deselect, back to camera mode |
 
 ### Terminal cards
@@ -193,6 +195,38 @@ instead of snapping, and never changes your zoom.
 | drag a card | arrange it (it stays put, following its anchor node) |
 | drag the corner grip (`tg_` cards, full view) | **natively resize the terminal** — the tmux session itself changes size and the card follows |
 | right-click a card | **Attach in terminal…** (a real terminal window on that session) / **Kill terminal** (confirm submenu), plus the anchor folder's creation actions |
+
+### Settings (`,` or the ⚙ badge)
+
+One centered window, sectioned down the left, everything applying the
+moment you change it — the canvas stays live behind it so a slider can be
+judged against the graph it's changing. Type in the filter box to find a
+setting by name, by section, or by a word from its explanation ("dwell"
+finds the hover delay). A row that's off its default grows a `↺`.
+
+| Section | What's in it |
+|---|---|
+| appearance | theme, label density, node size, how far unrelated nodes fade, canvas thumbnails and text previews |
+| motion | layout spread, freeze the layout, camera glide, zoom speed |
+| previews | hover popups on/off, the dwell before one opens, the picker's follow delay |
+| search | whether file contents are scanned at all, and the per-file size ceiling |
+| tools | editor, terminal and file-manager commands |
+| agents | the default agent, and extra commands to allow |
+| keys | every keybinding (`?` opens straight here) |
+
+The **tools** section matters more than it looks: a viewer started from a
+desktop entry or an IDE inherits an environment you never set, so
+`$VISUAL`/`$EDITOR`/`$TERMINAL` may simply not be there. Set them here and
+they win; leave them blank and the environment is used exactly as before.
+
+Preferences are **per user**, in `~/.config/text-graph/config` (or
+`$XDG_CONFIG_HOME`) — theme and editor follow you between vaults, while
+camera, card arrangement and pins stay with the vault. It's a plain
+`key<TAB>value` file, safe to hand-edit and safe to symlink into a
+dotfiles repo (saves resolve the link instead of replacing it); values out
+of range are clamped on load, and keys a newer version wrote are carried
+through untouched. Anything an older build stored per vault (theme,
+default agent) migrates across the first time you open that vault.
 
 ### Creating (right-click anywhere)
 
@@ -347,6 +381,8 @@ src/
   layout.rs   pure radial layout — the simulation's deterministic seed
   sim.rs      force simulation (springs, repulsion, gravity, cooling)
   state.rs    per-vault persistence (.text-graph/view: camera, cards, pins)
+  config.rs   per-user preferences: one registry the file, the settings
+              window and the clamps are all derived from
   stats.rs    headless statistics (`stats` subcommand)
   thumb.rs    image file → downscaled RGBA pixels (headless decode)
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
@@ -359,7 +395,8 @@ src/
               terminal cards + focus; navigator.rs = the side pane (ranger
               + shared preview column), picker.rs = its search mode (state,
               keys, results), images.rs = thumbnail textures, previews.rs =
-              canvas text previews + hover popup, diag.rs = health badge
+              canvas text previews + hover popup, diag.rs = health badge,
+              settings.rs = the ⚙ window + the key list
 assets/
   icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
   gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs

@@ -205,6 +205,22 @@ key). Content is streamed from disk per query on a cancellable worker (never
 indexed — bodies stay out of memory and nothing goes stale under agents writing
 notes).
 
+**C++ — Settings, centralized. ✓ done 2026-08-16.** Preferences were two
+widgets in a corner window stored per vault, while every other knob was
+either a hardcoded constant or an environment variable a GUI-launched
+viewer can't see. Now: one registry (`config.rs`) where a setting is a
+field plus a `Spec` row, and the file format, the ⚙ window, reset-to-
+default and the load-time clamps all derive from it. Per USER
+(`~/.config/text-graph/config`), so theme and editor follow the person
+while camera/cards/pins stay with the vault; older per-vault values
+migrate on first open, and only when the vault actually stored them.
+Twenty settings across appearance, motion, previews, search, tools and
+agents, applied live, plus a keys tab (`?`) — the first help surface the
+app has had. The **tools** section is the one that fixes a real failure
+mode: `$VISUAL`/`$EDITOR`/`$TERMINAL` simply aren't there when the viewer
+is started from an IDE or a desktop entry, the same class of bug as the
+agent-launch PATH rescue.
+
 Checkpoint after C: daily-drive it against the real vault; annoyances set D's order.
 
 **D — Scale & polish (as needed, not speculatively).** Collapse/expand subtrees

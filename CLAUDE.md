@@ -54,7 +54,7 @@
   the table in `filetype.rs` must stay in sync. Glyphs paint over a
   canvas-colored backing disc; below GLYPH_MIN_R nodes stay discs.
 - The palette is themed (`Theme`, dark/light via the ⚙ settings window,
-  persisted in view state): canvas/navigator/popup painting goes through
+  persisted in the USER config): canvas/navigator/popup painting goes through
   `self.theme.*`, while terminal-card INTERNALS keep the module consts —
   terminals are dark in either theme. New paint code must not reach for
   the bare consts unless it draws inside a card.
@@ -62,8 +62,38 @@
   compensates `center` whenever the rect changes (panel open/close/resize)
   — without that, the world slides out from under the cursor and
   double-clicks miss. Don't reintroduce the slide.
+- Settings are declared ONCE, in `config.rs`: a field plus a `Spec` row
+  (key, section, label, help, kind, get/set fn pointers). The file format,
+  the ⚙ window's widgets, reset-to-default and the load-time clamp are all
+  derived from that table — adding a setting must never mean editing a
+  second list, and `Spec::apply` is the only way a value is written, so the
+  UI and a hand-edited file are validated identically (`default_agent`
+  reaches `sh -c`; it is allowlist-checked, and re-checked at USE, because
+  editing `extra_agents` can strip the choice out from under it). The
+  accessor table is fn pointers, so a copy-pasted row would silently read
+  one field and write another — `every_spec_reads_and_writes_its_own_field`
+  is what catches that. PER-USER (`~/.config/text-graph/config`, XDG-aware)
+  vs per-vault is the dividing line: preferences follow the person, camera/
+  cards/pins/web-toggle stay in `state.rs`. Saves resolve symlinks (config
+  files get linked into dotfiles repos) but do NOT refuse them the way the
+  view file does — different trust level, different rule. `state.rs` still
+  PARSES the old per-vault `light`/`agent` lines and never writes them;
+  `light` is `Option<bool>` because absent ≠ dark, and `load_or_migrate`
+  writes the config only when it actually carried something over, or the
+  first vault opened would lock every other vault's migration out.
+  `save_config` no-ops under `cfg!(test)`: headless tests must never write
+  the real user config.
+- `app/settings.rs` renders the registry, not the individual settings — the
+  only per-setting knowledge there is `after_change` (the handful that need
+  something recomputed: theme visuals, node radii). Its `KEYS` table is the
+  ONE keybinding list; the README's key rows are written from it. Free text
+  commits on focus loss, never per keystroke (`Spec::apply` trims, which
+  makes "code --wait" untypable otherwise), and closing the window commits
+  a pending edit. Esc dismisses the pending edit first, then the window —
+  and like the picker that branch is deliberately NOT `widget_free`-guarded
+  (egui drops focus at frame START on Escape).
 - Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
-  `create`, `state`, `graph`, `filetype`, `mdview`, `search`, …) must stay egui-free
+  `create`, `state`, `config`, `graph`, `filetype`, `mdview`, `search`, …) must stay egui-free
   (headless-testable). `mdview::prepare` rewrites note bodies for display
   ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs);
   relative markdown dests resolve against the SOURCE note's directory
@@ -81,6 +111,7 @@
   shared preview column); `actions.rs` = right-click
   menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
   worker pump + apply + persistence glue; `diag.rs` = health badge;
+  `settings.rs` = the ⚙ window (registry-driven) + the key list;
   `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
   does the pixel work, headless); `previews.rs` = zoom-in text-excerpt
   cache + the all-kind hover popup (metadata header, then content). File-backed canvas caches (thumbs, previews) evict by (mtime,
@@ -240,8 +271,9 @@
   arrangement. Saves are debounced (3s heartbeat repaint keeps them running
   once the sim settles) and the file is sorted for determinism. The file is
   UNTRUSTED input: restores clamp (center/offsets like zoom), dedup
-  (card/pin lines), allowlist-validate the default agent (it runs through
-  `sh -c` on one keypress), and carry unknown line KINDS through
+  (card/pin lines), allowlist-validate the migrated default agent (it runs
+  through `sh -c` on one keypress — that check now lives in
+  `config::migrate`), and carry unknown line KINDS through
   load→save verbatim (`ViewState::unknown`) — the first save lands ~3s
   after open, so anything from_text drops, a newer version loses; for the
   same reason saves REFUSE a symlinked `.text-graph`/`view.tmp` (a
