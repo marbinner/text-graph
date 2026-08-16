@@ -1044,12 +1044,11 @@ impl Viewer {
                 .cache
                 .get(&(a.session.clone(), a.pane.clone()))
                 .map(|c| {
-                    c.rows
+                    c.search_rows
                         .iter()
                         .enumerate()
-                        .filter_map(|(i, row)| {
-                            let line: String = row.iter().map(|r| r.text.as_str()).collect();
-                            let m = q.match_line(&line, &mut buf)?;
+                        .filter_map(|(i, line)| {
+                            let m = q.match_line(line, &mut buf)?;
                             Some(search::LineHit {
                                 line: i + 1,
                                 text: line.trim().to_string(),

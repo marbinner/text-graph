@@ -8,14 +8,19 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::Receiver;
 
+use smol_str::SmolStr;
+
 use crate::tmux::{PaneId, TmuxClient, TmuxEvent};
 
 /// Keep one mirror from monopolizing a frame even when its producer stays hot.
 const MAX_EVENTS_PER_PUMP: usize = 128;
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct TermCell {
-    pub ch: char,
+    /// Full cell contents, including any zero-width combining characters.
+    /// A wide-character continuation cell is the empty string.
+    pub text: SmolStr,
+    pub wide_continuation: bool,
     /// None = the terminal's default foreground.
     pub fg: Option<(u8, u8, u8)>,
     /// None = the terminal's default background.
@@ -353,7 +358,7 @@ pub fn tail_lines(g: &TermGrid, n: usize) -> Vec<String> {
     for r in (0..g.rows as usize).rev() {
         let text: String = g.cells[r * cols..(r + 1) * cols]
             .iter()
-            .map(|c| c.ch)
+            .map(|c| c.text.as_str())
             .collect();
         let t = text
             .trim()
@@ -374,7 +379,8 @@ fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
     let (rows, cols) = s.size();
     let mut cells = Vec::with_capacity(rows as usize * cols as usize);
     let blank = TermCell {
-        ch: ' ',
+        text: " ".into(),
+        wide_continuation: false,
         fg: None,
         bg: None,
         bold: false,
@@ -385,16 +391,27 @@ fn screen_to_grid(s: &vt100::Screen) -> TermGrid {
     for r in 0..rows {
         for c in 0..cols {
             cells.push(match s.cell(r, c) {
-                Some(cell) => TermCell {
-                    ch: cell.contents().chars().next().unwrap_or(' '),
-                    fg: color(cell.fgcolor()),
-                    bg: color(cell.bgcolor()),
-                    bold: cell.bold(),
-                    italic: cell.italic(),
-                    underline: cell.underline(),
-                    inverse: cell.inverse(),
-                },
-                None => blank,
+                Some(cell) => {
+                    let wide_continuation = cell.is_wide_continuation();
+                    let text = if wide_continuation {
+                        SmolStr::default()
+                    } else if cell.contents().is_empty() {
+                        " ".into()
+                    } else {
+                        SmolStr::new(cell.contents())
+                    };
+                    TermCell {
+                        text,
+                        wide_continuation,
+                        fg: color(cell.fgcolor()),
+                        bg: color(cell.bgcolor()),
+                        bold: cell.bold(),
+                        italic: cell.italic(),
+                        underline: cell.underline(),
+                        inverse: cell.inverse(),
+                    }
+                }
+                None => blank.clone(),
             });
         }
     }
@@ -498,7 +515,7 @@ mod tests {
         let (id, g) = &grids[0];
         assert_eq!(id, "%5");
         assert_eq!((g.cols, g.rows), (20, 4));
-        let row0: String = g.cells[..20].iter().map(|c| c.ch).collect();
+        let row0: String = g.cells[..20].iter().map(|c| c.text.as_str()).collect();
         assert_eq!(row0.trim_end(), "hello!");
         assert_eq!(g.cursor, Some((0, 6)));
 
@@ -555,21 +572,34 @@ mod tests {
     fn sgr_colors_and_attrs() {
         let g = grid(b"A\x1b[1;31mB\x1b[0m\x1b[48;5;21mC\x1b[0m");
         let a = &g.cells[0];
-        assert_eq!((a.ch, a.fg, a.bold), ('A', None, false));
+        assert_eq!((a.text.as_str(), a.fg, a.bold), ("A", None, false));
         let b = &g.cells[1];
-        assert_eq!(b.ch, 'B');
+        assert_eq!(b.text.as_str(), "B");
         assert_eq!(b.fg, Some(indexed_rgb(1)));
         assert!(b.bold);
         let c = &g.cells[2];
-        assert_eq!(c.ch, 'C');
+        assert_eq!(c.text.as_str(), "C");
         assert_eq!(c.bg, Some(indexed_rgb(21)));
+    }
+
+    #[test]
+    fn combining_sequences_and_wide_cells_keep_their_text_identity() {
+        let expected = "e\u{301}界x";
+        let g = grid(expected.as_bytes());
+
+        assert_eq!(g.cells[0].text.as_str(), "e\u{301}");
+        assert_eq!(g.cells[1].text.as_str(), "界");
+        assert!(g.cells[2].wide_continuation);
+        assert!(g.cells[2].text.is_empty());
+        assert_eq!(g.cells[3].text.as_str(), "x");
+        assert_eq!(tail_lines(&g, 1), vec![expected.to_string()]);
     }
 
     #[test]
     fn rows_and_cursor() {
         let g = grid(b"hi\r\nthere");
-        assert_eq!(g.cells[0].ch, 'h');
-        assert_eq!(g.cells[20].ch, 't'); // row 1, col 0 (cols = 20)
+        assert_eq!(g.cells[0].text.as_str(), "h");
+        assert_eq!(g.cells[20].text.as_str(), "t"); // row 1, col 0 (cols = 20)
         assert_eq!(g.cursor, Some((1, 5)));
     }
 

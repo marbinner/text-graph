@@ -70,11 +70,14 @@ fn mirrors_a_scripted_session() {
         m.pump();
         let grids = m.grids();
         if let Some((_, g)) = grids.first() {
-            last_row = g.cells[..g.cols as usize].iter().map(|c| c.ch).collect();
+            last_row = g.cells[..g.cols as usize]
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect();
             if let Some(byte_at) = last_row.find("RED") {
-                // cells are indexed by CHAR position, not byte offset
+                // the scripted prefix is ASCII, so its char offset is the cell index
                 let cell_at = last_row[..byte_at].chars().count();
-                let cell = g.cells[cell_at];
+                let cell = &g.cells[cell_at];
                 success =
                     last_row.contains("plain") && cell.bold && cell.fg == Some(indexed_rgb(1));
             }
@@ -287,7 +290,7 @@ fn paste_is_bracketed_by_tmux_not_the_client() {
                 .cells
                 .chunks(g.cols as usize)
                 .take(4)
-                .map(|row| row.iter().map(|c| c.ch).collect::<String>())
+                .map(|row| row.iter().map(|c| c.text.as_str()).collect::<String>())
                 .collect::<Vec<_>>()
                 .join("\n");
             // cat -v renders the ESC[200~/201~ markers as visible text —
@@ -408,7 +411,7 @@ fn typed_input_round_trips() {
                 .cells
                 .chunks(g.cols as usize)
                 .take(3)
-                .map(|row| row.iter().map(|c| c.ch).collect::<String>())
+                .map(|row| row.iter().map(|c| c.text.as_str()).collect::<String>())
                 .collect::<Vec<_>>()
                 .join("\n");
             success = seen.contains("hello graph");

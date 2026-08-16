@@ -47,7 +47,10 @@ fn main() {
             m.exited
         );
         for (id, g) in &grids {
-            let row0: String = g.cells[..g.cols as usize].iter().map(|c| c.ch).collect();
+            let row0: String = g.cells[..g.cols as usize]
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect();
             println!("  {id} {}x{} row0={:?}", g.cols, g.rows, row0.trim_end());
         }
     }

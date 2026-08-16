@@ -1958,7 +1958,8 @@ fn a_launched_card_is_placed_inside_the_view() {
             anchor: Some("index.md".into()),
         }];
         let cell = TermCell {
-            ch: ' ',
+            text: " ".into(),
+            wide_continuation: false,
             fg: None,
             bg: None,
             bold: false,

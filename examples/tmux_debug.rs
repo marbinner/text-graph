@@ -33,7 +33,10 @@ fn main() {
         if m.pump() {
             let grids = m.grids();
             if let Some((_, g)) = grids.first() {
-                let row0: String = g.cells[..g.cols as usize].iter().map(|c| c.ch).collect();
+                let row0: String = g.cells[..g.cols as usize]
+                    .iter()
+                    .map(|c| c.text.as_str())
+                    .collect();
                 eprintln!("gen {} row0: {:?}", m.generation(), row0.trim_end());
             }
         }

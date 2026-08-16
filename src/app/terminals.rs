@@ -263,6 +263,7 @@ pub(super) const TERM_BG_T: (u8, u8, u8) = (0x10, 0x13, 0x19);
 /// a straight pass.
 pub(super) struct Run {
     pub(super) start_col: u16,
+    pub(super) cols: u16,
     pub(super) text: String,
     pub(super) fg: Color32,
     pub(super) bg: Option<Color32>,
@@ -276,6 +277,8 @@ pub(super) struct CachedPane {
     /// Real pane height (rows) — the resize gesture's baseline.
     pub(super) total_rows: u16,
     pub(super) rows: Vec<Vec<Run>>, // trailing blank rows trimmed
+    /// Plain terminal text aligned with `rows`, without wide-cell placeholders.
+    pub(super) search_rows: Vec<String>,
     pub(super) cursor: Option<(u16, u16)>,
     /// The last few screen lines with real content — a TUI's status line, a
     /// shell's last output. Shown on compact cards as "what it's doing".
@@ -298,7 +301,7 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
     let blank_row = |r: usize| {
         grid.cells[r * cols..(r + 1) * cols]
             .iter()
-            .all(|c| c.ch == ' ' && c.bg.is_none() && !c.inverse)
+            .all(|c| c.text == " " && c.bg.is_none() && !c.inverse)
     };
     let mut shown = 0;
     for r in 0..grid.rows as usize {
@@ -315,9 +318,17 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
     let shown = shown.max(2).min(max_rows);
 
     let mut rows = Vec::with_capacity(shown);
+    let mut search_rows = Vec::with_capacity(shown);
     for r in 0..shown {
+        let cells = &grid.cells[r * cols..(r + 1) * cols];
+        let search_line = cells.iter().map(|c| c.text.as_str()).collect();
         let mut runs: Vec<Run> = Vec::new();
-        for (ci, cell) in grid.cells[r * cols..(r + 1) * cols].iter().enumerate() {
+        for (ci, cell) in cells.iter().enumerate() {
+            let display_text = if cell.wide_continuation {
+                " "
+            } else {
+                cell.text.as_str()
+            };
             let (mut fg_t, mut bg_t) = (cell.fg.unwrap_or(TERM_FG_T), cell.bg);
             if cell.inverse {
                 let old = fg_t;
@@ -336,11 +347,13 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
                         && run.italic == cell.italic
                         && run.underline == cell.underline =>
                 {
-                    run.text.push(cell.ch);
+                    run.text.push_str(display_text);
+                    run.cols += 1;
                 }
                 _ => runs.push(Run {
                     start_col: ci as u16,
-                    text: cell.ch.to_string(),
+                    cols: 1,
+                    text: display_text.to_string(),
                     fg,
                     bg,
                     italic: cell.italic,
@@ -349,12 +362,14 @@ pub(super) fn build_cached(grid: &TermGrid) -> CachedPane {
             }
         }
         rows.push(runs);
+        search_rows.push(search_line);
     }
     let tail = text_graph::mirror::tail_lines(grid, TAIL_LINES);
     CachedPane {
         cols: grid.cols,
         total_rows: grid.rows,
         rows,
+        search_rows,
         cursor: grid.cursor,
         tail,
     }
@@ -376,7 +391,7 @@ pub(super) fn paint_pane_rows(
         for run in row {
             if let Some(bg) = run.bg {
                 let x0 = origin.x + run.start_col as f32 * adv;
-                let w = run.text.chars().count() as f32 * adv;
+                let w = run.cols as f32 * adv;
                 p.rect_filled(
                     Rect::from_min_size(Pos2::new(x0, y), Vec2::new(w, line_h)),
                     0.0,
@@ -1490,6 +1505,38 @@ impl Viewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_keeps_combining_text_and_only_paints_wide_placeholders() {
+        let cell = |text: &str, wide_continuation| text_graph::mirror::TermCell {
+            text: text.into(),
+            wide_continuation,
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            inverse: false,
+        };
+        let mut cells = vec![
+            cell("e\u{301}", false),
+            cell("界", false),
+            cell("", true),
+            cell("x", false),
+        ];
+        cells.extend((0..4).map(|_| cell(" ", false)));
+        let cached = build_cached(&TermGrid {
+            cols: 4,
+            rows: 2,
+            cells,
+            cursor: None,
+        });
+
+        assert_eq!(cached.search_rows[0], "e\u{301}界x");
+        assert_eq!(cached.rows[0].len(), 1);
+        assert_eq!(cached.rows[0][0].text, "e\u{301}界 x");
+        assert_eq!(cached.rows[0][0].cols, 4);
+    }
 
     #[test]
     fn lifecycle_tasks_return_before_the_worker_is_released() {
