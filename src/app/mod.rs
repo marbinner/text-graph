@@ -573,6 +573,11 @@ struct Viewer {
     create: Option<CreateDialog>,
     /// Transient status-bar message and its birth time.
     flash: Option<(String, Instant)>,
+    /// Tab was ours this frame — take widget focus back at the end of it.
+    /// egui decides its Tab focus move in `Memory::begin_pass`, BEFORE any
+    /// of our code runs, so consuming the event can't stop it; the gear and
+    /// health badges would take the keyboard and swallow the next Tab.
+    tab_taken: bool,
     /// Select and frame this rel path once a reload turns it into a node.
     pending_select: Option<String>,
 }
@@ -734,6 +739,7 @@ impl Viewer {
             ctx_card: None,
             create: None,
             flash: None,
+            tab_taken: false,
             pending_select: None,
         }
     }
@@ -860,6 +866,7 @@ impl Viewer {
         } else if open_key && widget_free {
             self.picker.open();
         } else if (tab || back_tab) && widget_free {
+            self.tab_taken = true;
             self.step_card_cursor(if back_tab { -1 } else { 1 });
         } else if browse_key && widget_free {
             // b = the same overlay, listing a folder instead of searching
@@ -1055,6 +1062,21 @@ impl Viewer {
                 self.zoom = (self.zoom * zf).clamp(0.02, 50.0);
                 ui.ctx().request_repaint();
             }
+        }
+    }
+
+    /// Called once the frame's widgets have drawn, so egui's Tab focus
+    /// move has landed — and undone. Focus on the gear or the health badge
+    /// means the NEXT Tab goes to egui's navigation instead of the cards,
+    /// which is how Tab "stopped working" after tabbing once. egui decides
+    /// this in `Memory::begin_pass`, before any of our code runs, so
+    /// consuming the event cannot prevent it; taking the focus back after
+    /// the fact can.
+    pub(super) fn release_tab_focus(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.tab_taken)
+            && let Some(id) = ctx.memory(|m| m.focused())
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
         }
     }
 
@@ -2144,6 +2166,7 @@ impl eframe::App for Viewer {
         self.create_dialog_ui(&ctx);
         self.diag_ui(&ctx);
         self.settings_ui(&ctx);
+        self.release_tab_focus(&ctx);
         self.persist_state(false);
         // egui repaints on demand; without a heartbeat the debounced save
         // would never run once the sim settles and input stops

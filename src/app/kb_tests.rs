@@ -1663,3 +1663,93 @@ fn the_finders_highlight_opens_the_node_on_the_canvas() {
         "closing the finder closes it again"
     );
 }
+
+/// Tab is the cards' key, never egui's. egui decides its Tab focus move
+/// in `Memory::begin_pass` — before any of our code runs — so the gear
+/// and the health badge used to take the keyboard, and the next Tab went
+/// to egui's focus navigation instead of the next card.
+#[test]
+fn tab_never_leaves_focus_on_the_corner_badges() {
+    use text_graph::agents::AgentPane;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            let ctx = ui.ctx().clone();
+            v.handle_keys(ui);
+            // the two corner badges are exactly what Tab used to land on
+            v.settings_ui(&ctx);
+            v.diag_ui(&ctx);
+            v.release_tab_focus(&ctx);
+        },
+        viewer,
+    );
+    let cwd = h.state().root.clone();
+    h.state_mut().terms.panes = (0..3)
+        .map(|i| AgentPane {
+            session: format!("tg_pi_{i}"),
+            pane: format!("%{i}"),
+            pid: 1,
+            cwd: cwd.clone(),
+            agent: "pi".into(),
+            ours: true,
+            anchor: None,
+        })
+        .collect();
+    h.step();
+
+    for step in 1..=3 {
+        press(&mut h, Key::Tab);
+        assert!(
+            h.ctx.memory(|m| m.focused()).is_none(),
+            "Tab {step} left focus on a widget — the badges must never take it"
+        );
+        assert_eq!(
+            h.state().terms.cursor.as_ref().map(|(s, _)| s.clone()),
+            Some(format!("tg_pi_{}", step - 1)),
+            "…and every Tab keeps stepping the cards"
+        );
+    }
+}
+
+/// Clicking anywhere outside the settings window closes it, like the
+/// terminal cards' own click-away — and commits a pending text edit
+/// rather than dropping it on the floor.
+#[test]
+fn a_click_outside_the_settings_window_closes_it() {
+    use eframe::egui::{Event, PointerButton, Pos2};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
+    let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.settings_ui(ui.ctx()), viewer);
+    h.state_mut().settings.open = true;
+    h.run();
+
+    // a click in the middle of the window changes nothing
+    let mid = h.ctx.content_rect().center();
+    let click = |h: &mut Harness<'_, Viewer>, pos: Pos2| {
+        h.event(Event::PointerMoved(pos));
+        h.event(Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.event(Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.step();
+    };
+    click(&mut h, mid);
+    assert!(h.state().settings.open, "a click inside keeps it open");
+
+    // a half-typed value is committed, not dropped, when it closes
+    h.state_mut().settings.editing = Some(("editor", "hx".into()));
+    click(&mut h, Pos2::new(4.0, 4.0));
+    assert!(!h.state().settings.open, "a click outside closes it");
+    assert_eq!(h.state().cfg.editor, "hx", "and keeps what was typed");
+}

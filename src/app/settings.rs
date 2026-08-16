@@ -159,26 +159,48 @@ impl Viewer {
     /// (bottom-right; the health badge owns bottom-left).
     pub(super) fn settings_ui(&mut self, ctx: &egui::Context) {
         let mut toggle = false;
-        egui::Area::new(egui::Id::new("settings-badge"))
+        let badge = egui::Area::new(egui::Id::new("settings-badge"))
             .anchor(Align2::RIGHT_BOTTOM, Vec2::new(-10.0, -10.0))
             .show(ctx, |ui| {
                 toggle = ui
                     .button(RichText::new("⚙").strong())
                     .on_hover_text("settings (,)")
                     .clicked();
-            });
+            })
+            .response
+            .rect;
         if toggle {
             self.toggle_settings();
+            return; // the click that opened it is not a click away from it
         }
         if !self.settings.open {
             return;
         }
-        egui::Window::new("settings")
+        let win = egui::Window::new("settings")
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .collapsible(false)
             .resizable(false)
             .fixed_size(Vec2::new(WIN_W, WIN_H))
             .show(ctx, |ui| self.settings_body(ui));
+
+        // A click anywhere else closes it, like the terminal cards' own
+        // click-away — and commits a pending edit rather than dropping it.
+        // The click is NOT consumed: clicking a node closes the window and
+        // selects the node in one gesture, which is what the same gesture
+        // does when it releases a focused card.
+        let rect = win.map(|w| w.response.rect).unwrap_or(egui::Rect::NOTHING);
+        let away = ctx.input(|i| {
+            i.pointer.any_click()
+                && i.pointer.interact_pos().is_some_and(|p| {
+                    // the gear is the toggle, not "elsewhere"; and a
+                    // combo-box popup lives on its own layer OUTSIDE the
+                    // window rect — picking an agent must not close it
+                    !rect.contains(p) && !badge.contains(p)
+                })
+        }) && !ctx.any_popup_open();
+        if away {
+            self.close_settings();
+        }
     }
 
     fn settings_body(&mut self, ui: &mut egui::Ui) {
