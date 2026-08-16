@@ -1225,13 +1225,16 @@ impl Viewer {
         let mut focus = None;
         // A matched LINE is the only thing the navigator's rendered
         // preview can't show you, so that is exactly when the raw view
-        // takes over. Markdown always reads better than source otherwise.
         let textual =
             kind == NodeKind::File || (kind == NodeKind::Asset && filetype::is_text(&path));
-        // Source view when a LINE is what matters — a content hit has to
-        // be shown where it lives — or when the reader asked for it (`r`).
-        // Otherwise a note reads better rendered.
-        let raw = textual && (hit.is_some() || self.cfg.preview_raw);
+        // The source view — numbered lines, syntax-coloured — is the
+        // DEFAULT for code and config: there is nothing to "render" in a
+        // .py, and markdown rendering of it just strips the structure a
+        // reader is looking for. Notes render as markdown instead, unless
+        // a line is what matters (a content hit has to be shown where it
+        // lives) or the reader asked for source with `r`.
+        let code = textual && kind != NodeKind::File;
+        let raw = textual && (code || hit.is_some() || self.cfg.preview_raw);
         let body = if !raw {
             PreviewBody::Node(id)
         } else {

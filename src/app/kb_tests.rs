@@ -1490,8 +1490,11 @@ fn the_source_view_is_syntax_coloured_and_keeps_its_match_marks() {
     h.step();
     let id = h.state().g.by_path("code.rs").expect("the code file");
     h.state_mut().selected = Some(id);
-    h.state_mut().cfg.preview_raw = true; // r: read it as source
     h.step();
+    // no `r`, no search hit: code previews as source BECAUSE it is code —
+    // there is nothing to render in a .rs, and markdown rendering of it
+    // strips exactly the structure a reader is looking for
+    assert!(!h.state().cfg.preview_raw, "the default settings");
 
     let lines = match h.state().pane_preview.as_ref().map(|p| &p.body) {
         Some(super::picker::PreviewBody::Text(lines)) => lines.clone(),
