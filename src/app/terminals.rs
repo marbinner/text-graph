@@ -478,6 +478,30 @@ fn update_discovery_error(slot: &Mutex<Option<String>>, next: Option<String>) ->
     }
 }
 
+/// Remove dead or no-longer-discovered mirror clients. A client that exited
+/// while its session is still advertised must enter the same cooldown as an
+/// attach failure, or the UI loop will respawn tmux clients at frame rate.
+fn prune_mirrors<T>(
+    mirrors: &mut HashMap<String, T>,
+    attach_backoff: &mut HashMap<String, Instant>,
+    sessions: &HashSet<String>,
+    now: Instant,
+    mut exited: impl FnMut(&T) -> bool,
+) {
+    let dead: Vec<String> = mirrors
+        .iter()
+        .filter(|(_, mirror)| exited(mirror))
+        .map(|(session, _)| session.clone())
+        .collect();
+    for session in dead {
+        mirrors.remove(&session);
+        if sessions.contains(&session) {
+            attach_backoff.entry(session).or_insert(now);
+        }
+    }
+    mirrors.retain(|session, _| sessions.contains(session));
+}
+
 impl Viewer {
     /// The node a card tethers to: an explicit `@tg_anchor` binding (edit
     /// sessions pin to their FILE) when it resolves in the current graph,
@@ -639,6 +663,13 @@ impl Viewer {
 
         let sessions: HashSet<String> =
             self.terms.panes.iter().map(|a| a.session.clone()).collect();
+        prune_mirrors(
+            &mut self.terms.mirrors,
+            &mut self.terms.attach_backoff,
+            &sessions,
+            Instant::now(),
+            |mirror| mirror.exited,
+        );
         for s in &sessions {
             if !self.terms.mirrors.contains_key(s) {
                 // failed attaches back off — retrying at frame rate would
@@ -668,9 +699,6 @@ impl Viewer {
         self.terms
             .attach_backoff
             .retain(|s, _| sessions.contains(s));
-        self.terms
-            .mirrors
-            .retain(|s, m| !m.exited && sessions.contains(s));
         self.terms.cache.retain(|(s, _), _| sessions.contains(s));
         self.terms.mirror_gen.retain(|s, _| sessions.contains(s));
         // Arrangements are never dropped, only parked by session name and
@@ -1326,6 +1354,28 @@ impl Viewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exited_mirrors_enter_backoff_before_reattach() {
+        let now = Instant::now();
+        let sessions = HashSet::from(["dead-live".to_string(), "healthy".to_string()]);
+        let mut mirrors = HashMap::from([
+            ("dead-live".to_string(), true),
+            ("dead-gone".to_string(), true),
+            ("healthy".to_string(), false),
+            ("stale".to_string(), false),
+        ]);
+        let mut backoff = HashMap::new();
+
+        prune_mirrors(&mut mirrors, &mut backoff, &sessions, now, |exited| *exited);
+
+        assert_eq!(mirrors, HashMap::from([("healthy".to_string(), false)]));
+        assert_eq!(backoff.get("dead-live"), Some(&now));
+        assert!(
+            !backoff.contains_key("dead-gone"),
+            "a vanished session has nothing to retry"
+        );
+    }
 
     #[test]
     fn discovery_error_updates_wake_only_on_visible_changes() {
