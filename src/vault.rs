@@ -5,6 +5,7 @@
 //! No global state — every file is parsed independently. Resolution of the
 //! extracted targets happens in [`crate::resolve`].
 
+use std::io::Read as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -95,6 +96,14 @@ pub(crate) fn is_skipped_dir_name(name: &str) -> bool {
 /// viewer has no vector rasterizer.
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 
+/// Markdown is parsed rather than retained, but an unbounded `fs::read`
+/// still lets one planted/sparse file allocate the process away. Large notes
+/// remain nodes; links and metadata are taken from this bounded prefix.
+const MAX_MARKDOWN_SCAN_BYTES: usize = 8 * 1024 * 1024;
+/// Rendered Markdown can be substantially more expensive than its source.
+/// The source-mode preview already has its own smaller cap in the app.
+const MAX_MARKDOWN_PREVIEW_BYTES: usize = 1024 * 1024;
+
 fn image_ext(ext: &str) -> bool {
     IMAGE_EXTS.iter().any(|x| ext.eq_ignore_ascii_case(x))
 }
@@ -179,8 +188,8 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
 
     let mut files = Vec::with_capacity(paths.len());
     for (rel, path) in paths {
-        match std::fs::read(&path) {
-            Ok(bytes) => files.push(parse_file(rel, &bytes)),
+        match read_prefix(&path, MAX_MARKDOWN_SCAN_BYTES) {
+            Ok((bytes, truncated)) => files.push(parse_file(rel, &bytes, truncated)),
             Err(e) => errors.push(ScanError {
                 rel_path: rel,
                 message: e.to_string(),
@@ -218,12 +227,22 @@ fn in_skipped_dir(root: &Path, path: &Path) -> bool {
         })
 }
 
-fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
+fn parse_file(rel_path: String, bytes: &[u8], truncated: bool) -> RawFile {
     let cow = String::from_utf8_lossy(bytes);
     // A UTF-8 BOM must not confuse frontmatter detection or the first link.
     let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
 
-    let (fm, body, warning) = split_frontmatter(text);
+    let (fm, body, mut warning) = split_frontmatter(text);
+    if truncated {
+        let truncation = format!(
+            "file exceeds {}; scanned only the prefix",
+            limit_label(MAX_MARKDOWN_SCAN_BYTES)
+        );
+        warning = Some(match warning {
+            Some(existing) => format!("{existing}; {truncation}"),
+            None => truncation,
+        });
+    }
     let links = extract_links(body);
     let externals = extract_externals(body);
     RawFile {
@@ -237,14 +256,48 @@ fn parse_file(rel_path: String, bytes: &[u8]) -> RawFile {
 }
 
 /// Read one file and return its body with BOM and frontmatter stripped — the
-/// same rules the scanner applies. Used by the viewer's detail pane, which
-/// reads bodies on demand rather than holding them in memory.
+/// same rules the scanner applies. Rendered previews are bounded: a note is a
+/// glance here, and Markdown expansion makes huge inputs particularly costly.
 pub fn read_body(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    read_body_limited(path, MAX_MARKDOWN_PREVIEW_BYTES)
+}
+
+fn read_body_limited(path: &Path, max_bytes: usize) -> Result<String> {
+    let (bytes, truncated) = read_prefix(path, max_bytes)?;
     let cow = String::from_utf8_lossy(&bytes);
     let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
     let (_, body, _) = split_frontmatter(text);
-    Ok(body.to_string())
+    let mut body = body.to_string();
+    if truncated {
+        body.push_str(&format!(
+            "\n\n> **Preview truncated after {}.**\n",
+            limit_label(max_bytes)
+        ));
+    }
+    Ok(body)
+}
+
+/// Read at most `max_bytes + 1`, using the extra byte only to detect
+/// truncation. The returned buffer never exceeds the requested bound.
+fn read_prefix(path: &Path, max_bytes: usize) -> Result<(Vec<u8>, bool)> {
+    let file =
+        std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+    let truncated = bytes.len() > max_bytes;
+    bytes.truncate(max_bytes);
+    Ok((bytes, truncated))
+}
+
+fn limit_label(bytes: usize) -> String {
+    const MIB: usize = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 /// Should a filesystem event at `p` trigger a vault reload? Hidden
@@ -269,7 +322,6 @@ pub fn watch_relevant(root: &Path, p: &Path) -> bool {
 /// Asset files, which have no frontmatter semantics and can be huge (logs)
 /// or binary. A truncated read ends mid-line; callers show it as-is.
 pub fn read_head(path: &Path, max_bytes: u64) -> Result<String> {
-    use std::io::Read as _;
     let f = std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
     let mut bytes = Vec::new();
     f.take(max_bytes)
@@ -478,6 +530,49 @@ pub fn extract_links(body: &str) -> Vec<RawLink> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_reads_are_bounded_and_report_truncation() {
+        let d = std::env::temp_dir().join(format!("tg-md-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("large.md");
+        std::fs::write(&path, b"[[front]] and content beyond the cap").unwrap();
+
+        let (prefix, truncated) = read_prefix(&path, 12).unwrap();
+        assert_eq!(prefix, b"[[front]] an");
+        assert!(truncated);
+        let parsed = parse_file("large.md".into(), &prefix, truncated);
+        assert!(
+            parsed
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("scanned only the prefix"))
+        );
+
+        let body = read_body_limited(&path, 12).unwrap();
+        assert!(body.starts_with("[[front]] an"));
+        assert!(body.contains("Preview truncated after 12 bytes"));
+        assert!(
+            body.len() < 128,
+            "the truncation notice must not hide an unbounded read"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn exact_limit_markdown_is_not_reported_as_truncated() {
+        let d = std::env::temp_dir().join(format!("tg-md-exact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("exact.md");
+        std::fs::write(&path, b"12345678").unwrap();
+        let (bytes, truncated) = read_prefix(&path, 8).unwrap();
+        assert_eq!(bytes, b"12345678");
+        assert!(!truncated);
+        assert_eq!(read_body_limited(&path, 8).unwrap(), "12345678");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     /// The walker must PRUNE skipped dirs, not filter their files after
     /// the fact — proven by an unreadable child inside target/: descent
