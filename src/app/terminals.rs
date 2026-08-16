@@ -897,6 +897,9 @@ impl Viewer {
             if m.pump() {
                 self.terms.activity.insert(s.clone(), Instant::now());
             }
+            if m.has_pending_events() {
+                ctx.request_repaint();
+            }
             let mgen = m.generation();
             if self.terms.mirror_gen.get(s).copied() != Some(mgen) {
                 terminal_content_changed = true;

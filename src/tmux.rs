@@ -8,11 +8,18 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 
 /// tmux pane identifier as the protocol spells it, e.g. `%3`.
 pub type PaneId = String;
+
+/// Backpressure keeps a noisy pane from growing an unbounded heap queue.
+const EVENT_QUEUE_CAPACITY: usize = 256;
+
+fn event_channel() -> (SyncSender<TmuxEvent>, Receiver<TmuxEvent>) {
+    sync_channel(EVENT_QUEUE_CAPACITY)
+}
 
 #[derive(Debug, PartialEq)]
 pub enum TmuxEvent {
@@ -54,7 +61,7 @@ impl TmuxClient {
         let mut child = cmd.spawn()?;
         let stdout = child.stdout.take().expect("stdout piped");
         let stdin = Arc::new(Mutex::new(child.stdin.take().expect("stdin piped")));
-        let (tx, rx) = channel();
+        let (tx, rx) = event_channel();
         std::thread::spawn(move || reader_loop(stdout, tx, wake));
         Ok((TmuxClient { child, stdin }, rx))
     }
@@ -84,7 +91,7 @@ struct ReaderState {
     reply: Option<(String, Vec<String>)>,
 }
 
-fn reader_loop(stdout: ChildStdout, tx: Sender<TmuxEvent>, wake: impl Fn()) {
+fn reader_loop(stdout: ChildStdout, tx: SyncSender<TmuxEvent>, wake: impl Fn()) {
     let mut reader = BufReader::new(stdout);
     let mut state = ReaderState::default();
     let mut buf = Vec::new();
@@ -221,6 +228,18 @@ pub fn unescape_octal(b: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_queue_applies_backpressure_at_its_capacity() {
+        let (tx, _rx) = event_channel();
+        for _ in 0..EVENT_QUEUE_CAPACITY {
+            tx.try_send(TmuxEvent::Changed).unwrap();
+        }
+        assert!(matches!(
+            tx.try_send(TmuxEvent::Changed),
+            Err(std::sync::mpsc::TrySendError::Full(TmuxEvent::Changed))
+        ));
+    }
 
     #[test]
     fn unescape() {

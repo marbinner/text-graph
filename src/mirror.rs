@@ -10,6 +10,9 @@ use std::sync::mpsc::Receiver;
 
 use crate::tmux::{PaneId, TmuxClient, TmuxEvent};
 
+/// Keep one mirror from monopolizing a frame even when its producer stays hot.
+const MAX_EVENTS_PER_PUMP: usize = 128;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TermCell {
     pub ch: char,
@@ -75,6 +78,8 @@ impl Transport {
 pub struct SessionMirror {
     client: Transport,
     rx: Receiver<TmuxEvent>,
+    /// One-event lookahead used to report that another frame is needed.
+    next_event: Option<TmuxEvent>,
     panes: HashMap<PaneId, vt100::Parser>,
     /// FIFO tags correlating our sent commands with incoming Reply blocks.
     pending: VecDeque<Pending>,
@@ -99,6 +104,7 @@ impl SessionMirror {
         let mut m = SessionMirror {
             client: Transport::Tmux(client),
             rx,
+            next_event: None,
             panes: HashMap::new(),
             pending: VecDeque::new(),
             saw_banner: false,
@@ -132,11 +138,21 @@ impl SessionMirror {
         );
     }
 
-    /// Drain pending tmux events. Returns true if any screen changed (the
-    /// generation was bumped) — callers cache grid conversions on it.
+    /// Process one bounded batch of pending tmux events. Returns true if any
+    /// screen changed (the generation was bumped) — callers cache grid
+    /// conversions on it and use [`Self::has_pending_events`] to continue.
     pub fn pump(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(ev) = self.rx.try_recv() {
+        let mut processed = 0;
+        while processed < MAX_EVENTS_PER_PUMP {
+            let ev = match self.next_event.take() {
+                Some(event) => event,
+                None => match self.rx.try_recv() {
+                    Ok(event) => event,
+                    Err(_) => break,
+                },
+            };
+            processed += 1;
             match ev {
                 TmuxEvent::Output { pane, bytes } => {
                     if let Some(p) = self.panes.get_mut(&pane) {
@@ -241,10 +257,19 @@ impl SessionMirror {
                 }
             }
         }
+        if processed == MAX_EVENTS_PER_PUMP {
+            self.next_event = self.rx.try_recv().ok();
+        }
         if changed {
             self.generation += 1;
         }
         changed
+    }
+
+    /// True when `pump` stopped at its per-frame budget and retained the
+    /// next event. UI callers should schedule another frame while this holds.
+    pub fn has_pending_events(&self) -> bool {
+        self.next_event.is_some()
     }
 
     pub fn generation(&self) -> u64 {
@@ -397,6 +422,7 @@ mod tests {
         let mut m = SessionMirror {
             client: Transport::Recorded(Vec::new()),
             rx,
+            next_event: None,
             panes: HashMap::new(),
             pending: VecDeque::new(),
             saw_banner: false,
@@ -420,6 +446,22 @@ mod tests {
             error,
         })
         .unwrap();
+    }
+
+    #[test]
+    fn pump_limits_each_batch_and_reports_backlog() {
+        let (mut mirror, tx) = test_mirror();
+        for _ in 0..=MAX_EVENTS_PER_PUMP {
+            tx.send(TmuxEvent::Exit).unwrap();
+        }
+
+        assert!(mirror.pump());
+        assert!(
+            mirror.has_pending_events(),
+            "one pump must retain work beyond its event budget"
+        );
+        assert!(mirror.pump());
+        assert!(!mirror.has_pending_events());
     }
 
     #[test]
