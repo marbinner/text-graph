@@ -19,7 +19,7 @@
 //! Everything here is deterministic: same vault + same query = same rows,
 //! in the same order.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
@@ -272,6 +272,14 @@ fn snippet(line_no: usize, line: &str, m: LineMatch) -> LineHit {
     }
 }
 
+/// One search candidate: a collision-free result key paired with the
+/// lossless vault-relative path used to read it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanFile {
+    pub key: String,
+    pub path: PathBuf,
+}
+
 /// Stream `files` from disk, matching each against `query`, emitting hits
 /// in batches as they are found (the picker's list fills progressively).
 ///
@@ -282,7 +290,7 @@ fn snippet(line_no: usize, line: &str, m: LineMatch) -> LineHit {
 pub fn scan_files(
     root: &Path,
     query: &Query,
-    files: &[String],
+    files: &[ScanFile],
     max_bytes: u64,
     cancelled: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(Vec<FileHits>),
@@ -299,7 +307,7 @@ pub fn scan_files(
             out.cancelled = true;
             return out;
         }
-        let path = root.join(f);
+        let path = root.join(&f.path);
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
@@ -310,7 +318,7 @@ pub fn scan_files(
             continue;
         };
         out.files_read += 1;
-        if let Some(hits) = file_hits(f, &text, query, &mut buf) {
+        if let Some(hits) = file_hits(&f.key, &text, query, &mut buf) {
             batch.push(hits);
             with_hits += 1;
             if with_hits >= MAX_FILES_WITH_HITS {
@@ -589,10 +597,17 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault")
     }
 
-    fn fixture_files() -> Vec<String> {
+    fn fixture_files() -> Vec<ScanFile> {
         let scan = vault::scan(&fixture_root()).expect("fixture scans");
-        let mut files: Vec<String> = scan.files.iter().map(|f| f.rel_path.clone()).collect();
-        files.sort();
+        let mut files: Vec<ScanFile> = scan
+            .files
+            .into_iter()
+            .map(|file| ScanFile {
+                key: vault::path_key(&file.os_path),
+                path: file.os_path,
+            })
+            .collect();
+        files.sort_by(|a, b| a.key.cmp(&b.key));
         files
     }
 
@@ -723,5 +738,49 @@ mod tests {
         rank(&mut rows);
         let keys: Vec<&str> = rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys, ["n-low", "p", "a-high", "c-high"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn content_scan_reads_non_utf8_paths_and_emits_their_distinct_keys() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let root = std::env::temp_dir().join(format!(
+            "tg-search-raw-paths-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let first = PathBuf::from(std::ffi::OsString::from_vec(b"note-\x80.md".to_vec()));
+        let second = PathBuf::from(std::ffi::OsString::from_vec(b"note-\x81.md".to_vec()));
+        std::fs::write(root.join(&first), "only first").unwrap();
+        std::fs::write(root.join(&second), "only second").unwrap();
+
+        let files = vec![
+            ScanFile {
+                key: vault::path_key(&first),
+                path: first,
+            },
+            ScanFile {
+                key: vault::path_key(&second),
+                path: second.clone(),
+            },
+        ];
+        let mut hits = Vec::new();
+        let outcome = scan_files(
+            &root,
+            &q("second"),
+            &files,
+            MAX_FILE_BYTES,
+            &|| false,
+            &mut |batch| hits.extend(batch),
+        );
+        assert_eq!(outcome.files_read, 2);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel, vault::path_key(&second));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

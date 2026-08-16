@@ -122,14 +122,14 @@ impl Viewer {
                         if !self.g.warnings.is_empty() {
                             ui.separator();
                             ui.label(RichText::new("parse warnings").strong());
-                            for (path, msg) in &self.g.warnings {
+                            for (path, key, message) in &self.g.warnings {
                                 if ui
                                     .link(RichText::new(path).color(self.theme.select))
                                     .clicked()
                                 {
-                                    jump = self.g.by_path(path);
+                                    jump = self.g.by_path(key);
                                 }
-                                ui.label(RichText::new(msg).small().color(self.theme.text));
+                                ui.label(RichText::new(message).small().color(self.theme.text));
                             }
                         }
                         if !self.g.ambiguities.is_empty() {

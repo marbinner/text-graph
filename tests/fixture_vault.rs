@@ -134,7 +134,11 @@ fn crlf_and_bom_files_extract_links() {
 fn garbage_frontmatter_warns_but_body_links_survive() {
     let g = build_fixture();
     assert!(has_link(&g, "notes/scratch.md", "index.md"));
-    assert!(g.warnings.iter().any(|(p, _)| p == "notes/scratch.md"));
+    assert!(
+        g.warnings
+            .iter()
+            .any(|(path, _, _)| path == "notes/scratch.md")
+    );
 }
 
 #[test]

@@ -120,10 +120,10 @@ pub(super) struct Preview {
     pub(super) focus: Option<usize>,
     /// Scroll the hit into view on the next frame.
     pub(super) scroll: bool,
-    /// (vault-relative path, stamp) the raw lines were read from — a
+    /// (absolute path, stamp) the raw lines were read from — a
     /// reload re-reads only when THIS file changed, so an agent saving
     /// something else can't blink the preview.
-    pub(super) source: Option<(String, Option<super::images::Stamp>)>,
+    pub(super) source: Option<(PathBuf, Option<super::images::Stamp>)>,
 }
 
 /// Where the list comes from. The overlay is ONE surface — browsing is
@@ -135,8 +135,8 @@ pub(super) enum Source {
     /// Fuzzy over names, aliases, paths, file contents and live panes.
     Find,
     /// The entries of one folder, in tree order, filtered by the query.
-    /// Held as a vault-relative PATH: reloads renumber the arena, and an
-    /// open overlay must survive an agent's save.
+    /// Held as a collision-free path key: reloads renumber the arena, and
+    /// an open overlay must survive an agent's save.
     Browse(String),
 }
 
@@ -527,14 +527,14 @@ impl Viewer {
     /// folder, or the vault root.
     pub(super) fn browse_start(&self) -> String {
         match self.selected {
-            Some(id) if self.g.node(id).kind == NodeKind::Dir => self.g.node(id).path.clone(),
+            Some(id) if self.g.node(id).kind == NodeKind::Dir => self.g.node(id).path_key(),
             Some(id) => self
                 .g
                 .node(id)
                 .parent
-                .map(|p| self.g.node(p).path.clone())
+                .map(|parent| self.g.node(parent).path_key())
                 .unwrap_or_default(),
-            None => self.g.node(self.g.root).path.clone(),
+            None => self.g.node(self.g.root).path_key(),
         }
     }
 
@@ -680,19 +680,27 @@ impl Viewer {
             .as_ref()
             .filter(|(prev, _)| q.narrows(prev))
             .map(|(_, files)| files);
-        let mut files: Vec<String> = self
+        let mut files: Vec<search::ScanFile> = self
             .g
             .nodes
             .iter()
-            .filter(|n| match n.kind {
+            .filter(|node| match node.kind {
                 NodeKind::File => true,
-                NodeKind::Asset => filetype::is_text(&n.path),
+                NodeKind::Asset => filetype::is_text(&node.path),
                 _ => false,
             })
-            .filter(|n| narrow.is_none_or(|set| set.contains(&n.path)))
-            .map(|n| n.path.clone())
+            .filter_map(|node| {
+                let key = node.path_key();
+                if narrow.is_some_and(|set| !set.contains(&key)) {
+                    return None;
+                }
+                Some(search::ScanFile {
+                    key,
+                    path: node.os_path.clone()?,
+                })
+            })
             .collect();
-        files.sort();
+        files.sort_by(|a, b| a.key.cmp(&b.key));
         self.picker.set_scanning(true);
         // wake once when the hint would become due — a long scan with no
         // hits produces no other repaint to ride on
@@ -791,8 +799,10 @@ impl Viewer {
                     matches!(n.kind, NodeKind::File | NodeKind::Asset | NodeKind::Image)
                 })
                 .filter_map(|(i, n)| {
-                    std::fs::metadata(self.root.join(&n.path))
-                        .and_then(|m| m.modified())
+                    n.absolute_path(&self.root)
+                        .ok_or_else(|| std::io::Error::other("virtual node"))
+                        .and_then(std::fs::metadata)
+                        .and_then(|metadata| metadata.modified())
                         .ok()
                         .map(|t| (i as u32, t))
                 })
@@ -912,8 +922,7 @@ impl Viewer {
     /// Walk into a folder (Enter on a directory row) — the list becomes
     /// its entries and the filter starts over.
     fn browse_into(&mut self, id: NodeId) {
-        let path = self.g.node(id).path.clone();
-        self.picker.browse(path);
+        self.picker.browse(self.g.node(id).path_key());
     }
 
     /// Up to the parent folder, landing the cursor on the folder we came
@@ -929,7 +938,7 @@ impl Viewer {
             return; // already at the vault root
         };
         let came_from = self.g.node(id).ident();
-        self.picker.browse(self.g.node(parent).path.clone());
+        self.picker.browse(self.g.node(parent).path_key());
         self.picker.cursor_key = Some(came_from);
     }
 
@@ -1190,7 +1199,7 @@ impl Viewer {
             .as_ref()
             .and_then(|p| p.source.as_ref())
             .is_some_and(|(rel, stamp)| {
-                stamp.is_some() && super::images::file_stamp(&self.root.join(rel)) != *stamp
+                stamp.is_some() && super::images::file_stamp(rel) != *stamp
             });
         if same && !live_screen && !file_changed {
             return;
@@ -1255,9 +1264,12 @@ impl Viewer {
     ) -> Preview {
         let node = self.g.node(id);
         let (kind, path) = (node.kind, node.path.clone());
+        let abs_path = node.absolute_path(&self.root);
         let mut meta = String::new();
-        if let Ok(m) = std::fs::metadata(self.root.join(&path)) {
-            meta = super::previews::size_and_age(&m);
+        if let Some(abs_path) = abs_path.as_deref()
+            && let Ok(metadata) = std::fs::metadata(abs_path)
+        {
+            meta = super::previews::size_and_age(&metadata);
         }
         let mut focus = None;
         // A matched LINE is the only thing the navigator's rendered
@@ -1275,7 +1287,11 @@ impl Viewer {
         let body = if !raw {
             PreviewBody::Node(id)
         } else {
-            match vault::read_head(&self.root.join(&path), PREVIEW_BYTES) {
+            match abs_path
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing filesystem path"))
+                .and_then(|path| vault::read_head(path, PREVIEW_BYTES))
+            {
                 Ok(text) => {
                     // the scan works on the RAW file, so line numbers here
                     // are the ones an editor's +N expects
@@ -1331,10 +1347,10 @@ impl Viewer {
             body,
             focus,
             scroll,
-            source: Some((
-                path.clone(),
-                super::images::file_stamp(&self.root.join(&path)),
-            )),
+            source: abs_path.map(|path| {
+                let stamp = super::images::file_stamp(&path);
+                (path, stamp)
+            }),
         }
     }
 
@@ -1343,7 +1359,9 @@ impl Viewer {
     fn open_at_line(&self, id: NodeId, line: Option<usize>) {
         match line {
             Some(l) if self.editable(id) => {
-                let path = self.root.join(&self.g.node(id).path);
+                let Some(path) = self.g.node(id).absolute_path(&self.root) else {
+                    return;
+                };
                 if let Err(e) = super::actions::spawn_editor_at(&self.cfg, &path, Some(l)) {
                     eprintln!("failed to open {}: {e}", path.display());
                 }
@@ -1397,14 +1415,21 @@ impl Viewer {
                     let browsing = self.picker.browsing().map(str::to_string);
                     ui.horizontal(|ui| {
                         let (tag, hint) = match &browsing {
-                            Some(dir) => (
-                                if dir.is_empty() {
-                                    "/".to_string()
-                                } else {
-                                    format!("{dir}/")
-                                },
-                                "filter this folder",
-                            ),
+                            Some(key) => {
+                                let display = self
+                                    .g
+                                    .by_path(key)
+                                    .map(|id| self.g.node(id).path.as_str())
+                                    .unwrap_or(key);
+                                (
+                                    if display.is_empty() {
+                                        "/".to_string()
+                                    } else {
+                                        format!("{display}/")
+                                    },
+                                    "filter this folder",
+                                )
+                            }
                             None => ("find".to_string(), "name, path, or words in the text"),
                         };
                         ui.label(egui::RichText::new(tag).color(if browsing.is_some() {

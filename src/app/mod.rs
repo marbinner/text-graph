@@ -640,7 +640,7 @@ impl Viewer {
         let mut dir_by_path = HashMap::new();
         for (i, n) in g.nodes.iter().enumerate() {
             if n.kind == NodeKind::Dir {
-                dir_by_path.insert(n.path.clone(), NodeId(i as u32));
+                dir_by_path.insert(n.path_key(), NodeId(i as u32));
             }
         }
         Derived {
@@ -761,16 +761,16 @@ impl Viewer {
 
     /// Nearest Dir node at or above `cwd`.
     fn anchor_for(&self, cwd: &Path) -> NodeId {
-        let rel = cwd.strip_prefix(&self.root).unwrap_or(Path::new(""));
-        let mut key = rel.to_string_lossy().replace('\\', "/");
+        let mut rel = cwd
+            .strip_prefix(&self.root)
+            .unwrap_or(Path::new(""))
+            .to_path_buf();
         loop {
-            if let Some(&id) = self.dir_by_path.get(&key) {
+            if let Some(&id) = self.dir_by_path.get(&vault::path_key(&rel)) {
                 return id;
             }
-            match key.rfind('/') {
-                Some(i) => key.truncate(i),
-                None if !key.is_empty() => key.clear(),
-                None => return self.g.root,
+            if !rel.pop() {
+                return self.g.root;
             }
         }
     }
@@ -1226,7 +1226,7 @@ impl Viewer {
     fn image_box(&self, id: NodeId, s: Pos2, r: f32) -> Rect {
         let aspect = self
             .thumbs
-            .aspect(&self.g.node(id).path)
+            .aspect(&self.g.node(id).path_key())
             .unwrap_or(4.0 / 3.0);
         let half_h = (1.5 * r / aspect).min(r);
         Rect::from_center_size(s, Vec2::new(aspect * half_h, half_h) * 2.0)
@@ -1841,8 +1841,9 @@ impl Viewer {
                     let want = self.cfg.canvas_previews
                         && (ur >= Self::PREVIEW_MIN_R || open_here)
                         && self.previewable(id);
+                    let key = node.path_key();
                     let presence = ui.ctx().animate_value_with_time(
-                        egui::Id::new(("preview", &node.path)),
+                        egui::Id::new(("preview", &key)),
                         if want { 1.0 } else { 0.0 },
                         0.12,
                     );
@@ -1866,7 +1867,7 @@ impl Viewer {
                         // dim fades like image tint — a big card snapping
                         // between bright and near-black reads as flicker
                         let dim_a = ui.ctx().animate_value_with_time(
-                            egui::Id::new(("preview-dim", &node.path)),
+                            egui::Id::new(("preview-dim", &key)),
                             if on { 1.0 } else { fade },
                             0.15,
                         );
@@ -1887,9 +1888,12 @@ impl Viewer {
                         } else {
                             FontId::monospace(fs * 0.92)
                         };
+                        let Some(path) = node.absolute_path(&self.root) else {
+                            continue;
+                        };
                         let text = self
                             .previews
-                            .get_or_load(&self.root, &node.path)
+                            .get_or_load(&key, &path, node.kind == NodeKind::File)
                             .to_string();
                         let galley = painter.layout(
                             text,
@@ -1911,8 +1915,11 @@ impl Viewer {
                     } else {
                         // decode on demand, draw the thumbnail once it lands;
                         // a framed placeholder with the photo glyph meanwhile
-                        self.thumbs
-                            .request(ui.ctx(), &node.path, self.root.join(&node.path));
+                        let key = node.path_key();
+                        let Some(path) = node.absolute_path(&self.root) else {
+                            continue;
+                        };
+                        self.thumbs.request(ui.ctx(), &key, path);
                         let bx = self.image_box(
                             id,
                             s,
@@ -1927,12 +1934,12 @@ impl Viewer {
                         // on every hover change read as flicker
                         let target = if on { 1.0 } else { fade };
                         let t = ui.ctx().animate_value_with_time(
-                            egui::Id::new(("img-tint", &node.path)),
+                            egui::Id::new(("img-tint", &key)),
                             target,
                             0.15,
                         );
                         let tint = Color32::WHITE.gamma_multiply(t);
-                        match self.thumbs.cache.get(&node.path) {
+                        match self.thumbs.cache.get(&key) {
                             Some(images::ThumbState::Ready { tex, .. }) => {
                                 painter.image(
                                     tex.id(),

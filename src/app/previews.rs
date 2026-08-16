@@ -13,7 +13,7 @@
 //! folder's listing + subtree stats, a ghost's referencers.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use text_graph::vault;
@@ -28,6 +28,7 @@ const MAX_BYTES: usize = 1200;
 
 pub(super) struct Preview {
     pub(super) excerpt: String,
+    path: PathBuf,
     stamp: Option<Stamp>,
 }
 
@@ -40,32 +41,36 @@ impl Previews {
     /// The excerpt for `key` (vault-relative path), reading the file on
     /// first sight. Reads are synchronous — an excerpt is a few KB of one
     /// markdown file, nothing like the image decodes that get a worker.
-    pub(super) fn get_or_load(&mut self, root: &Path, key: &str) -> &str {
+    pub(super) fn get_or_load(&mut self, key: &str, path: &Path, markdown: bool) -> &str {
         if !self.cache.contains_key(key) {
-            let path = root.join(key);
-            let stamp = file_stamp(&path);
+            let stamp = file_stamp(path);
             // markdown gets frontmatter/BOM stripping; any other text file
             // is read raw (a YAML file opening with `---` is not frontmatter)
-            let is_md = filetype::ext_of(key).is_some_and(|e| e.eq_ignore_ascii_case("md"));
-            let body = if is_md {
-                vault::read_body(&path)
+            let body = if markdown {
+                vault::read_body(path)
             } else {
-                vault::read_head(&path, 8 * 1024)
+                vault::read_head(path, 8 * 1024)
             };
             let excerpt = match body {
                 Ok(body) => excerpt(&body),
                 Err(_) => "(unreadable)".to_string(),
             };
-            self.cache
-                .insert(key.to_string(), Preview { excerpt, stamp });
+            self.cache.insert(
+                key.to_string(),
+                Preview {
+                    excerpt,
+                    path: path.to_path_buf(),
+                    stamp,
+                },
+            );
         }
         &self.cache[key].excerpt
     }
 
     /// Vault reload: evict only entries whose file changed or vanished.
-    pub(super) fn retain_fresh(&mut self, root: &Path) {
+    pub(super) fn retain_fresh(&mut self) {
         self.cache
-            .retain(|key, p| fresh(&p.stamp, file_stamp(&root.join(key))));
+            .retain(|_, preview| fresh(&preview.stamp, file_stamp(&preview.path)));
     }
 }
 
@@ -141,7 +146,10 @@ impl Viewer {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_max_width(POPUP_W);
                     let node = self.g.node(id);
-                    let (name, path) = (node.display_name().to_string(), node.path.clone());
+                    let name = node.display_name().to_string();
+                    let path = node.path.clone();
+                    let path_key = node.path_key();
+                    let abs_path = node.absolute_path(&self.root);
                     let externals: Vec<String> = self
                         .g
                         .outlinks(id)
@@ -152,7 +160,8 @@ impl Viewer {
                     ui.label(egui::RichText::new(&path).small().color(self.theme.text));
                     // ---- metadata: times, size, reference counts ----
                     if matches!(kind, NodeKind::File | NodeKind::Asset | NodeKind::Image)
-                        && let Ok(meta) = std::fs::metadata(self.root.join(&path))
+                        && let Some(abs_path) = abs_path.as_deref()
+                        && let Ok(meta) = std::fs::metadata(abs_path)
                     {
                         ui.label(
                             egui::RichText::new(size_and_age(&meta))
@@ -208,8 +217,10 @@ impl Viewer {
                         NodeKind::File | NodeKind::Asset => {
                             let text_asset = kind == NodeKind::Asset && filetype::is_text(&path);
                             if kind == NodeKind::Asset && !text_asset {
-                                let size = std::fs::metadata(self.root.join(&path))
-                                    .map(|m| m.len())
+                                let size = abs_path
+                                    .as_deref()
+                                    .and_then(|path| std::fs::metadata(path).ok())
+                                    .map(|metadata| metadata.len())
                                     .unwrap_or(0);
                                 ui.label(
                                     egui::RichText::new(format!("binary file · {size} bytes"))
@@ -218,13 +229,19 @@ impl Viewer {
                                 return;
                             }
                             if self.hover_body.as_ref().map(|(i, _)| *i) != Some(id) {
-                                let body = if text_asset {
-                                    vault::read_head(&self.root.join(&path), ASSET_POPUP_CAP)
-                                        .unwrap_or_else(|e| format!("error reading file: {e}"))
+                                let body = if let Some(abs_path) = abs_path.as_deref() {
+                                    if text_asset {
+                                        vault::read_head(abs_path, ASSET_POPUP_CAP)
+                                            .unwrap_or_else(|e| format!("error reading file: {e}"))
+                                    } else {
+                                        vault::read_body(abs_path)
+                                            .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
+                                            .unwrap_or_else(|e| {
+                                                format!("*error reading file:* {e}")
+                                            })
+                                    }
                                 } else {
-                                    vault::read_body(&self.root.join(&path))
-                                        .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
-                                        .unwrap_or_else(|e| format!("*error reading file:* {e}"))
+                                    "*error reading file:* missing filesystem path".to_string()
                                 };
                                 self.hover_body = Some((id, body));
                             }
@@ -266,8 +283,10 @@ impl Viewer {
                         }
                         NodeKind::Image => {
                             let ctx = ui.ctx().clone();
-                            self.thumbs.request(&ctx, &path, self.root.join(&path));
-                            match self.thumbs.cache.get(&path) {
+                            if let Some(abs_path) = abs_path.clone() {
+                                self.thumbs.request(&ctx, &path_key, abs_path);
+                            }
+                            match self.thumbs.cache.get(&path_key) {
                                 Some(images::ThumbState::Ready { tex, .. }) => {
                                     let size = tex.size_vec2();
                                     let w = (POPUP_W - 12.0).min(size.x.max(128.0));

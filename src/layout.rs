@@ -88,6 +88,7 @@ mod tests {
         g.nodes.push(Node {
             kind: NodeKind::Dir,
             path: String::new(),
+            os_path: Some(std::path::PathBuf::new()),
             name: "r".into(),
             title: None,
             aliases: Vec::new(),
@@ -98,6 +99,7 @@ mod tests {
             g.nodes.push(Node {
                 kind: NodeKind::File,
                 path: format!("{n}.md"),
+                os_path: Some(std::path::PathBuf::from(format!("{n}.md"))),
                 name: (*n).into(),
                 title: None,
                 aliases: Vec::new(),

@@ -16,8 +16,10 @@ use pulldown_cmark::{Event, Parser, Tag};
 /// One markdown file, parsed but with link targets still unresolved.
 #[derive(Debug)]
 pub struct RawFile {
-    /// Path relative to the vault root, forward-slash separated, with extension.
+    /// Human-readable path relative to the vault root, with forward slashes.
     pub rel_path: String,
+    /// Lossless OS path relative to the vault root.
+    pub os_path: PathBuf,
     /// `title:` from frontmatter, if present.
     pub title: Option<String>,
     /// `aliases:` (or singular `alias:`) from frontmatter — alternate link names.
@@ -52,6 +54,32 @@ pub struct RawExternal {
 }
 
 #[derive(Debug)]
+pub struct RawPath {
+    /// Human-readable, potentially lossy representation for labels/search.
+    pub rel_path: String,
+    /// Lossless path used for identity and every filesystem operation.
+    pub os_path: PathBuf,
+}
+
+impl From<&str> for RawPath {
+    fn from(path: &str) -> Self {
+        Self {
+            rel_path: path.to_string(),
+            os_path: PathBuf::from(path),
+        }
+    }
+}
+
+impl From<String> for RawPath {
+    fn from(path: String) -> Self {
+        Self {
+            os_path: PathBuf::from(&path),
+            rel_path: path,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ScanError {
     pub rel_path: String,
     pub message: String,
@@ -66,10 +94,10 @@ pub struct VaultScan {
     pub files: Vec<RawFile>,
     /// Image files (rel paths, sorted). Not parsed — they become Image
     /// nodes with no links of their own.
-    pub images: Vec<String>,
+    pub images: Vec<RawPath>,
     /// Every other visible file (rel paths, sorted) — code, config, data,
     /// binaries. Not parsed; they become Asset nodes.
-    pub assets: Vec<String>,
+    pub assets: Vec<RawPath>,
     /// Files that could not be read; the scan continues past them.
     pub errors: Vec<ScanError>,
 }
@@ -121,9 +149,9 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     // leaf paths. Hidden files/dirs are skipped (.obsidian, .trash, .git);
     // git-ignore semantics are deliberately disabled — the viewer should
     // show what's on disk, not what git tracks.
-    let mut paths: Vec<(String, PathBuf)> = Vec::new();
-    let mut images: Vec<String> = Vec::new();
-    let mut assets: Vec<String> = Vec::new();
+    let mut paths: Vec<(RawPath, PathBuf)> = Vec::new();
+    let mut images: Vec<RawPath> = Vec::new();
+    let mut assets: Vec<RawPath> = Vec::new();
     let mut errors = Vec::new();
     let walker = ignore::WalkBuilder::new(&root)
         .hidden(true)
@@ -165,13 +193,17 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         if in_skipped_dir(&root, &path) {
             continue;
         }
+        let os_path = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+        let raw = RawPath {
+            rel_path: display_rel_path(&os_path),
+            os_path,
+        };
         if ext.is_some_and(|e| e.eq_ignore_ascii_case("md")) {
-            let rel = rel_str(&root, &path);
-            paths.push((rel, path));
+            paths.push((raw, path));
         } else if ext.is_some_and(image_ext) {
-            images.push(rel_str(&root, &path));
+            images.push(raw);
         } else {
-            assets.push(rel_str(&root, &path));
+            assets.push(raw);
         }
     }
 
@@ -179,9 +211,14 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     // deterministic and the byte order that "first in sorted path order"
     // means everywhere else (docs, ambiguity resolution). PathBuf's
     // component-wise order differs around '/' vs '.'/'-' in dirnames.
-    paths.sort();
-    images.sort();
-    assets.sort();
+    let path_order = |a: &RawPath, b: &RawPath| {
+        a.rel_path
+            .cmp(&b.rel_path)
+            .then_with(|| path_key(&a.os_path).cmp(&path_key(&b.os_path)))
+    };
+    paths.sort_by(|(a, _), (b, _)| path_order(a, b));
+    images.sort_by(&path_order);
+    assets.sort_by(&path_order);
     // walk errors too: the walker yields them in raw readdir order, and
     // g.errors flows verbatim into stats output and the diag window (read
     // errors, appended below, already follow sorted path order)
@@ -192,7 +229,7 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
         match read_prefix(&path, MAX_MARKDOWN_SCAN_BYTES) {
             Ok((bytes, truncated)) => files.push(parse_file(rel, &bytes, truncated)),
             Err(e) => errors.push(ScanError {
-                rel_path: rel,
+                rel_path: rel.rel_path,
                 message: e.to_string(),
             }),
         }
@@ -207,14 +244,58 @@ pub fn scan(root: &Path) -> Result<VaultScan> {
     })
 }
 
-fn rel_str(root: &Path, path: &Path) -> String {
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    let s = rel.to_string_lossy();
-    if std::path::MAIN_SEPARATOR == '/' {
-        s.into_owned()
-    } else {
-        s.replace(std::path::MAIN_SEPARATOR, "/")
+const PATH_KEY_PREFIX: &str = "~text-graph-raw~";
+
+/// Human-readable relative path used in labels and fuzzy matching. Invalid
+/// Unicode is replaced for display only; [`path_key`] carries identity.
+pub fn display_rel_path(path: &Path) -> String {
+    path.iter()
+        .map(|component| component.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Stable, collision-free string identity for an OS-relative path. Ordinary
+/// UTF-8 components stay unchanged for state-file compatibility. Components
+/// with invalid Unicode, plus literal names beginning with the reserved
+/// prefix, are represented by that prefix followed by their exact OS units.
+pub fn path_key(path: &Path) -> String {
+    path.iter()
+        .map(|component| {
+            if let Some(text) = component.to_str()
+                && !text.starts_with(PATH_KEY_PREFIX)
+            {
+                return text.to_string();
+            }
+            encoded_component_key(component)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn encoded_component_key(component: &std::ffi::OsStr) -> String {
+    use std::fmt::Write as _;
+
+    let mut key = String::from(PATH_KEY_PREFIX);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        for byte in component.as_bytes() {
+            write!(&mut key, "{byte:02x}").expect("writing to a String cannot fail");
+        }
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        for unit in component.encode_wide() {
+            write!(&mut key, "{unit:04x}").expect("writing to a String cannot fail");
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    for byte in component.as_encoded_bytes() {
+        write!(&mut key, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    key
 }
 
 fn in_skipped_dir(root: &Path, path: &Path) -> bool {
@@ -228,7 +309,7 @@ fn in_skipped_dir(root: &Path, path: &Path) -> bool {
         })
 }
 
-fn parse_file(rel_path: String, bytes: &[u8], truncated: bool) -> RawFile {
+fn parse_file(path: RawPath, bytes: &[u8], truncated: bool) -> RawFile {
     let cow = String::from_utf8_lossy(bytes);
     // A UTF-8 BOM must not confuse frontmatter detection or the first link.
     let text: &str = cow.strip_prefix('\u{feff}').unwrap_or(&cow);
@@ -247,7 +328,8 @@ fn parse_file(rel_path: String, bytes: &[u8], truncated: bool) -> RawFile {
     let links = extract_links(body);
     let externals = extract_externals(body);
     RawFile {
-        rel_path,
+        rel_path: path.rel_path,
+        os_path: path.os_path,
         title: fm.title,
         aliases: fm.aliases,
         links,
@@ -628,7 +710,14 @@ mod tests {
         std::fs::write(d.join("target-dir/target/hidden.md"), "# hidden").unwrap();
 
         let scanned = scan(&d).unwrap();
-        assert_eq!(scanned.assets, ["target"]);
+        assert_eq!(
+            scanned
+                .assets
+                .iter()
+                .map(|path| path.rel_path.as_str())
+                .collect::<Vec<_>>(),
+            ["target"]
+        );
         assert!(scanned.files.is_empty());
         assert!(watch_relevant(&d, &d.join("target")));
 
@@ -823,5 +912,53 @@ mod tests {
         let (fm, body, w) = split_frontmatter("---\ntitle: Hi\nno close");
         assert!(fm.title.is_none() && w.is_none());
         assert!(body.starts_with("---"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_path_keys_are_collision_free_and_do_not_claim_reserved_names() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let invalid = PathBuf::from(std::ffi::OsString::from_vec(vec![0x80]));
+        let reserved = PathBuf::from("~text-graph-raw~80");
+        assert_eq!(path_key(&invalid), "~text-graph-raw~80");
+        assert_ne!(
+            path_key(&invalid),
+            path_key(&reserved),
+            "a literal reserved-prefix name must be escaped too"
+        );
+        assert_eq!(path_key(Path::new("docs/note.md")), "docs/note.md");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_keeps_lossy_equal_unix_names_as_distinct_paths() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let root = std::env::temp_dir().join(format!(
+            "tg-vault-raw-paths-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        for (name, body) in [
+            (b"note-\x80.md".to_vec(), "first"),
+            (b"note-\x81.md".to_vec(), "second"),
+        ] {
+            let name = std::ffi::OsString::from_vec(name);
+            std::fs::write(root.join(name), body).unwrap();
+        }
+
+        let scan = scan(&root).unwrap();
+        assert_eq!(scan.files.len(), 2);
+        assert_eq!(scan.files[0].rel_path, scan.files[1].rel_path);
+        assert_ne!(
+            path_key(&scan.files[0].os_path),
+            path_key(&scan.files[1].os_path)
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

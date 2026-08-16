@@ -2,6 +2,7 @@
 //! filesystem — a real tree by construction) plus typed overlay links.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::resolve;
 use crate::vault::{self, RawLink, VaultScan};
@@ -30,9 +31,12 @@ pub enum NodeKind {
 #[derive(Debug)]
 pub struct Node {
     pub kind: NodeKind,
-    /// Files/dirs: path relative to the vault root ("" for the root itself).
-    /// Ghosts: the normalized target text as written.
+    /// Files/dirs: human-readable, potentially lossy path relative to the
+    /// vault root ("" for the root itself). Ghosts: normalized target text.
     pub path: String,
+    /// Lossless vault-relative path for real filesystem nodes; virtual nodes
+    /// have no OS path. Never reconstruct filesystem paths from `path`.
+    pub os_path: Option<PathBuf>,
     /// Display name: file stem, dir name, or ghost target.
     pub name: String,
     /// `title:` from frontmatter, files only.
@@ -65,8 +69,22 @@ impl Node {
         match self.kind {
             NodeKind::Ghost => format!("\0ghost\0{}", self.path),
             NodeKind::Web => format!("\0web\0{}", self.path),
-            _ => self.path.clone(),
+            _ => self.path_key(),
         }
+    }
+
+    /// Collision-free reload/cache key for a real path. UTF-8 paths retain
+    /// their historical key; invalid OS strings use [`vault::path_key`].
+    pub fn path_key(&self) -> String {
+        self.os_path
+            .as_deref()
+            .map(vault::path_key)
+            .unwrap_or_else(|| self.path.clone())
+    }
+
+    /// Absolute filesystem path for a real node.
+    pub fn absolute_path(&self, root: &Path) -> Option<PathBuf> {
+        self.os_path.as_ref().map(|path| root.join(path))
     }
 }
 
@@ -119,8 +137,8 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     pub links: Vec<Link>,
     pub root: NodeId,
-    /// (rel_path, message) — non-fatal per-file problems.
-    pub warnings: Vec<(String, String)>,
+    /// (display path, path key, message) — non-fatal per-file problems.
+    pub warnings: Vec<(String, String, String)>,
     /// (rel_path, message) — unreadable files.
     pub errors: Vec<(String, String)>,
     pub ambiguities: Vec<Ambiguity>,
@@ -195,8 +213,8 @@ impl Graph {
             .map(|i| &self.links[*i as usize])
     }
 
-    /// Look a node up by vault-relative path (files/dirs; "" = root).
-    /// Reload-stable where NodeIds are not.
+    /// Look a real node up by its collision-free path key (ordinary UTF-8
+    /// paths are unchanged; "" is the root). Reload-stable where NodeIds are not.
     pub fn by_path(&self, path: &str) -> Option<NodeId> {
         // ghost idents are namespaced "[[...]]", so plain paths only ever
         // hit real nodes here
@@ -282,6 +300,7 @@ pub fn build(scan: VaultScan) -> Graph {
     g.push_node(Node {
         kind: NodeKind::Dir,
         path: String::new(),
+        os_path: Some(PathBuf::new()),
         name: root_name,
         title: None,
         aliases: Vec::new(),
@@ -291,7 +310,7 @@ pub fn build(scan: VaultScan) -> Graph {
 
     // Dir nodes are created only as ancestors of markdown/image files, so
     // directories with no such descendants are pruned for free.
-    let mut dir_ids: HashMap<String, NodeId> = HashMap::from([(String::new(), g.root)]);
+    let mut dir_ids: HashMap<PathBuf, NodeId> = HashMap::from([(PathBuf::new(), g.root)]);
     let mut file_links: Vec<(NodeId, Vec<RawLink>)> = Vec::new();
     let mut file_externals: Vec<(NodeId, Vec<vault::RawExternal>)> = Vec::new();
 
@@ -304,29 +323,42 @@ pub fn build(scan: VaultScan) -> Graph {
         Image,
         Asset,
     }
-    let mut leaves: Vec<(String, Leaf)> = scan
+    let mut leaves: Vec<(String, PathBuf, Leaf)> = scan
         .files
         .into_iter()
-        .map(|f| (f.rel_path.clone(), Leaf::File(f)))
-        .chain(scan.images.into_iter().map(|p| (p, Leaf::Image)))
-        .chain(scan.assets.into_iter().map(|p| (p, Leaf::Asset)))
+        .map(|f| (f.rel_path.clone(), f.os_path.clone(), Leaf::File(f)))
+        .chain(
+            scan.images
+                .into_iter()
+                .map(|p| (p.rel_path, p.os_path, Leaf::Image)),
+        )
+        .chain(
+            scan.assets
+                .into_iter()
+                .map(|p| (p.rel_path, p.os_path, Leaf::Asset)),
+        )
         .collect();
-    leaves.sort_by(|a, b| a.0.cmp(&b.0));
-    for (rel, leaf) in leaves {
-        let parent = ensure_dirs(&mut g, &mut dir_ids, &rel);
+    leaves.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| vault::path_key(&a.1).cmp(&vault::path_key(&b.1)))
+    });
+    for (rel, os_path, leaf) in leaves {
+        let parent = ensure_dirs(&mut g, &mut dir_ids, &os_path);
         let id = match leaf {
             Leaf::File(file) => {
                 let id = g.push_node(Node {
                     kind: NodeKind::File,
                     path: rel.clone(),
+                    os_path: Some(os_path),
                     name: file_stem(&rel),
                     title: file.title,
                     aliases: file.aliases,
                     parent: Some(parent),
                     children: Vec::new(),
                 });
-                if let Some(w) = file.warning {
-                    g.warnings.push((rel, w));
+                if let Some(warning) = file.warning {
+                    let key = g.node(id).path_key();
+                    g.warnings.push((rel, key, warning));
                 }
                 file_links.push((id, file.links));
                 file_externals.push((id, file.externals));
@@ -339,12 +371,13 @@ pub fn build(scan: VaultScan) -> Graph {
                     NodeKind::Asset
                 };
                 let name = rel
-                    .rsplit_once('/')
+                    .rsplit_once("/")
                     .map_or(rel.as_str(), |(_, f)| f)
                     .to_string();
                 g.push_node(Node {
                     kind,
                     path: rel,
+                    os_path: Some(os_path),
                     name,
                     title: None,
                     aliases: Vec::new(),
@@ -365,24 +398,22 @@ pub fn build(scan: VaultScan) -> Graph {
 
 /// Get-or-create the Dir node chain for a file's parent directories; returns
 /// the immediate parent.
-fn ensure_dirs(g: &mut Graph, dir_ids: &mut HashMap<String, NodeId>, rel_path: &str) -> NodeId {
-    let Some((dir_path, _file)) = rel_path.rsplit_once('/') else {
+fn ensure_dirs(g: &mut Graph, dir_ids: &mut HashMap<PathBuf, NodeId>, rel_path: &Path) -> NodeId {
+    let Some(dir_path) = rel_path.parent() else {
         return g.root;
     };
     let mut parent = g.root;
-    let mut acc = String::new();
-    for comp in dir_path.split('/') {
-        if !acc.is_empty() {
-            acc.push('/');
-        }
-        acc.push_str(comp);
+    let mut acc = PathBuf::new();
+    for comp in dir_path.iter() {
+        acc.push(comp);
         parent = match dir_ids.get(&acc).copied() {
             Some(id) => id,
             None => {
                 let id = g.push_node(Node {
                     kind: NodeKind::Dir,
-                    path: acc.clone(),
-                    name: comp.to_string(),
+                    path: vault::display_rel_path(&acc),
+                    os_path: Some(acc.clone()),
+                    name: comp.to_string_lossy().into_owned(),
                     title: None,
                     aliases: Vec::new(),
                     parent: Some(parent),
@@ -409,10 +440,16 @@ fn file_stem(rel_path: &str) -> String {
 /// Deterministic child ordering: dirs first, then by name — regardless of
 /// walk or creation order.
 fn sort_children(g: &mut Graph) {
-    let keys: Vec<(u8, String)> = g
+    let keys: Vec<(u8, String, String)> = g
         .nodes
         .iter()
-        .map(|n| (!matches!(n.kind, NodeKind::Dir) as u8, n.name.clone()))
+        .map(|n| {
+            (
+                !matches!(n.kind, NodeKind::Dir) as u8,
+                n.name.clone(),
+                n.ident(),
+            )
+        })
         .collect();
     for node in &mut g.nodes {
         node.children
@@ -428,6 +465,8 @@ mod tests {
         Node {
             kind,
             path: path.to_string(),
+            os_path: (!matches!(kind, NodeKind::Ghost | NodeKind::Web))
+                .then(|| PathBuf::from(path)),
             name: path.to_string(),
             title: None,
             aliases: Vec::new(),
@@ -479,5 +518,59 @@ mod tests {
         assert_ne!(ghost.ident(), real.ident());
         assert_ne!(web.ident(), real.ident());
         assert_ne!(ghost.ident(), web.ident());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_keeps_lossy_equal_directories_and_files_distinct() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let root = std::env::temp_dir().join(format!(
+            "tg-graph-raw-paths-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        for (byte, body) in [(0x80, "first"), (0x81, "second")] {
+            let dir = std::ffi::OsString::from_vec(vec![b'd', b'i', b'r', b'-', byte]);
+            let rel = PathBuf::from(dir).join("note.md");
+            std::fs::create_dir_all(root.join(rel.parent().unwrap())).unwrap();
+            std::fs::write(root.join(&rel), body).unwrap();
+        }
+
+        let graph = build(vault::scan(&root).unwrap());
+        let dirs: Vec<&Node> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::Dir && node.parent == Some(graph.root))
+            .collect();
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(dirs[0].path, dirs[1].path);
+        assert_ne!(dirs[0].ident(), dirs[1].ident());
+
+        let files: Vec<&Node> = graph
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::File)
+            .collect();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, files[1].path);
+        assert_ne!(files[0].ident(), files[1].ident());
+
+        let mut bodies = Vec::new();
+        for node in files {
+            let key = node.ident();
+            let id = graph
+                .by_path(&key)
+                .expect("each raw path has its own index entry");
+            assert_eq!(graph.node(id).ident(), key);
+            bodies.push(std::fs::read_to_string(node.absolute_path(&root).unwrap()).unwrap());
+        }
+        bodies.sort();
+        assert_eq!(bodies, ["first", "second"]);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

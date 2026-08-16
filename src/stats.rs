@@ -233,8 +233,8 @@ pub fn render(g: &Graph, s: &Stats) -> String {
     }
     if !g.warnings.is_empty() {
         let _ = writeln!(w, "warnings ({}):", g.warnings.len());
-        for (path, msg) in &g.warnings {
-            let _ = writeln!(w, "  {path}: {msg}");
+        for (path, _, message) in &g.warnings {
+            let _ = writeln!(w, "  {path}: {message}");
         }
     }
     if !g.errors.is_empty() {

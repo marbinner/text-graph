@@ -260,6 +260,8 @@ mod tests {
         let mk = |kind, path: &str, name: &str, parent, children: Vec<NodeId>| Node {
             kind,
             path: path.into(),
+            os_path: (!matches!(kind, NodeKind::Ghost | NodeKind::Web))
+                .then(|| std::path::PathBuf::from(path)),
             name: name.into(),
             title: None,
             aliases: Vec::new(),

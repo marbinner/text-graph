@@ -201,8 +201,8 @@ impl Viewer {
         // evict only thumbnails/excerpts whose file actually changed —
         // reloads are frequent (agents writing notes) and a full clear made
         // every image flicker through its placeholder
-        self.thumbs.retain_fresh(&self.root);
-        self.previews.retain_fresh(&self.root);
+        self.thumbs.retain_fresh();
+        self.previews.retain_fresh();
         self.g = g;
         if let Some(sim) = sim {
             self.sim = sim;
@@ -214,7 +214,7 @@ impl Viewer {
                 .g
                 .nodes
                 .iter()
-                .position(|n| n.kind != NodeKind::Ghost && n.path == p)
+                .position(|n| n.kind != NodeKind::Ghost && n.ident() == p)
         {
             self.pending_select = None;
             self.selected = Some(NodeId(i as u32));

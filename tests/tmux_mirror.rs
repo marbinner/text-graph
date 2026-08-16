@@ -174,7 +174,14 @@ fn launch_creates_uniquely_named_tg_sessions() {
     // edit sessions carry their node binding IN tmux (@tg_anchor), and the
     // scan format must read it back — verified against a real server, per
     // the format-change house rule
-    let edit = agents::launch_edit(Some(&socket), &dir, "cat", "notes/x.md").expect("edit launch");
+    let edit = agents::launch_edit(
+        Some(&socket),
+        &dir,
+        "tail -f",
+        std::path::Path::new("/dev/null"),
+        "notes/x.md",
+    )
+    .expect("edit launch");
     assert_eq!(edit, "tg_edit");
     let out = Command::new("tmux")
         .args([
@@ -348,6 +355,51 @@ fn launch_survives_hash_in_directory_names() {
         dir.to_string_lossy(),
         "pane must start in the literal '#'-containing directory"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_survives_non_utf8_directory_names() {
+    use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+    let have_tmux = Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false);
+    if !have_tmux {
+        eprintln!("tmux not installed — skipping");
+        return;
+    }
+
+    let socket = format!("tg-test-raw-cwd-{}", std::process::id());
+    let _guard = ServerGuard(socket.clone());
+    let base = std::env::temp_dir().join(format!("tg-raw-cwd-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let raw_name = std::ffi::OsString::from_vec(b"notes-\x80".to_vec());
+    let dir = base.join(raw_name);
+    std::fs::create_dir_all(&dir).expect("create raw-name dir");
+
+    let name = agents::launch_shell(Some(&socket), &dir).expect("launch into raw-name dir");
+    let output = Command::new("tmux")
+        .args([
+            "-L",
+            &socket,
+            "display-message",
+            "-p",
+            "-t",
+            &name,
+            "#{pane_current_path}",
+        ])
+        .output()
+        .expect("display-message");
+    let cwd = output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout);
+    assert_eq!(
+        text_graph::tmux::unescape_octal(cwd),
+        dir.as_os_str().as_bytes()
+    );
+
+    std::fs::remove_dir_all(base).unwrap();
 }
 
 /// Input path end to end: keystrokes sent through the same `keys::` commands

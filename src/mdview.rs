@@ -10,7 +10,7 @@
 //! byte-for-byte untouched. Pure string work — egui-free, headless-tested.
 
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pulldown_cmark::{Event, Parser, Tag};
 
@@ -56,10 +56,33 @@ fn display_text(inner: &str) -> &str {
     inner.rsplit_once('|').map_or(inner, |(_, a)| a.trim())
 }
 
-/// A `file://` URI for a vault-relative path, angle-bracketed so markdown
+/// A `file://` URI for a filesystem path, angle-bracketed so markdown
 /// tolerates spaces in the path.
 fn file_url(path: &Path) -> String {
-    format!("<file://{}>", path.display())
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt as _;
+
+    #[cfg(unix)]
+    let bytes = path.as_os_str().as_bytes();
+    #[cfg(not(unix))]
+    let display = path.to_string_lossy().replace('\\', "/");
+    #[cfg(not(unix))]
+    let bytes = display.as_bytes();
+
+    let mut url = String::from("<file://");
+    for &byte in bytes {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~')
+            || (cfg!(windows) && byte == b':')
+        {
+            url.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut url, "%{byte:02X}").expect("writing to a String cannot fail");
+        }
+    }
+    url.push('>');
+    url
 }
 
 /// Resolve an image path at PREVIEW time and return a URL only when the final
@@ -82,21 +105,21 @@ fn safe_image_url(root: &Path, path: &Path) -> Option<String> {
 /// resolves relative to the FILE, not the collection root. None for
 /// absolute paths and anything that escapes the vault: a rewrite there
 /// could mint `file://` URLs outside it.
-fn resolve_relative(source_dir: &str, dest: &str) -> Option<String> {
+fn resolve_relative_path(source_dir: &Path, dest: &str) -> Option<PathBuf> {
     if dest.starts_with('/') {
         return None;
     }
-    let mut parts: Vec<&str> = source_dir.split('/').filter(|s| !s.is_empty()).collect();
-    for c in dest.split('/') {
-        match c {
+    let mut path = source_dir.to_path_buf();
+    for component in dest.split('/') {
+        match component {
             "" | "." => {}
             ".." => {
-                parts.pop()?; // pop of an empty stack = escape above root
+                path.pop().then_some(())?;
             }
-            seg => parts.push(seg),
+            segment => path.push(segment),
         }
     }
-    (!parts.is_empty()).then(|| parts.join("/"))
+    (!path.as_os_str().is_empty()).then_some(path)
 }
 
 /// Rewrite `body` (the source node's `read_body` output) for display.
@@ -141,7 +164,9 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
                 .or_else(|| resolve::resolve_existing(g, target));
             match resolved {
                 Some(id) if matches!(g.node(id).kind, NodeKind::Image) => {
-                    if let Some(url) = safe_image_url(root, &root.join(&g.node(id).path)) {
+                    if let Some(path) = g.node(id).absolute_path(root)
+                        && let Some(url) = safe_image_url(root, &path)
+                    {
                         reps.push((span_start..inner_end + 2, format!("![]({url})")));
                     }
                 }
@@ -213,7 +238,12 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
     // Resolved against the SOURCE note's directory (regression:
     // docs/source.md linking setup.md used to look up the vault root's
     // setup.md instead of docs/setup.md).
-    let source_dir = g.node(source).path.rsplit_once('/').map_or("", |(d, _)| d);
+    let source_dir = g
+        .node(source)
+        .os_path
+        .as_deref()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new(""));
     for (event, range) in Parser::new(body).into_offset_iter() {
         let (dest, image) = match &event {
             Event::Start(Tag::Link { dest_url, .. }) => (dest_url.to_string(), false),
@@ -235,7 +265,7 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         // resolve ignoring any #fragment (the rewrite replaces the whole
         // dest span — a tg:// jump has no use for the fragment)
         let path_part = dest.split_once('#').map_or(dest.as_str(), |(p, _)| p);
-        let Some(resolved) = resolve_relative(source_dir, path_part) else {
+        let Some(resolved) = resolve_relative_path(source_dir, path_part) else {
             if image {
                 reps.push((range, BLOCKED_IMAGE.to_string()));
             }
@@ -244,7 +274,7 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         let new = if image {
             safe_image_url(root, &root.join(&resolved))
         } else {
-            g.by_path(&resolved).map(node_url)
+            g.by_path(&vault::path_key(&resolved)).map(node_url)
         };
         let Some(new) = new else {
             if image {
@@ -746,5 +776,44 @@ mod tests {
         let out = prepare(&g, &d, src, "![pic.png](pic.png)");
         assert_eq!(out, format!("![pic.png]({})", file_url(&d.join("pic.png"))));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relative_links_and_images_keep_a_non_utf8_source_directory() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let root = std::env::temp_dir().join(format!(
+            "tg-mdview-raw-paths-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let raw_dir = PathBuf::from(std::ffi::OsString::from_vec(b"docs-\x80".to_vec()));
+        std::fs::create_dir_all(root.join(&raw_dir)).unwrap();
+
+        let source_path = raw_dir.join("source.md");
+        let target_path = raw_dir.join("target.md");
+        let image_path = raw_dir.join("pic.png");
+        std::fs::write(root.join(&source_path), "source").unwrap();
+        std::fs::write(root.join(&target_path), "target").unwrap();
+        std::fs::write(root.join(&image_path), "small image placeholder").unwrap();
+
+        let graph = crate::graph::build(vault::scan(&root).unwrap());
+        let source = graph.by_path(&vault::path_key(&source_path)).unwrap();
+        let target = graph.by_path(&vault::path_key(&target_path)).unwrap();
+        let image_url = file_url(&root.join(&image_path));
+        assert!(
+            image_url.contains("%80"),
+            "invalid path bytes must be percent encoded in file URLs"
+        );
+
+        let output = prepare(&graph, &root, source, "[target](target.md) ![pic](pic.png)");
+        assert_eq!(
+            output,
+            format!("[target]({}) ![pic]({image_url})", node_url(target))
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

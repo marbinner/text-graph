@@ -7,6 +7,7 @@
 //! agent runs a tool.
 
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -120,7 +121,7 @@ pub fn launch(socket: Option<&str>, dir: &Path, agent: &str) -> std::io::Result<
     } else {
         slug
     };
-    launch_named(socket, dir, &slug, Some(agent), None)
+    launch_named(socket, dir, &slug, Some(OsStr::new(agent)), None)
 }
 
 /// Launch a plain interactive terminal (tmux's default-shell) in a
@@ -129,16 +130,18 @@ pub fn launch_shell(socket: Option<&str>, dir: &Path) -> std::io::Result<String>
     launch_named(socket, dir, "term", None, None)
 }
 
-/// Launch `cmd` (an editor on a file) in a `tg_edit` session cwd'd at
-/// `dir`, with its card pinned to `anchor` (a vault-relative path) via the
-/// session's `@tg_anchor` user option. The session dies with the editor.
+/// Launch an editor on a file in a tg_edit session cwd'd at the supplied
+/// directory, with its card pinned to the collision-free anchor key. The
+/// session dies with the editor.
 pub fn launch_edit(
     socket: Option<&str>,
     dir: &Path,
-    cmd: &str,
+    editor: &str,
+    file: &Path,
     anchor: &str,
 ) -> std::io::Result<String> {
-    launch_named(socket, dir, "edit", Some(cmd), Some(anchor))
+    let command = edit_command(editor, file);
+    launch_named(socket, dir, "edit", Some(&command), Some(anchor))
 }
 
 /// The PATH a launched agent should resolve against: the server's global
@@ -218,10 +221,61 @@ fn merge_paths<'a>(parts: impl Iterator<Item = &'a str>) -> String {
 /// known-good PATH is available (single-quoted, quote-safe), the raw
 /// command otherwise. tmux runs a string command via `/bin/sh -c`, so this
 /// stays free of shell rc files and interactivity.
-fn path_cmd(path: Option<&str>, cmd: &str) -> String {
-    match path {
-        Some(p) => format!("PATH='{}' exec {cmd}", p.replace('\'', r"'\''")),
-        None => cmd.to_string(),
+fn path_cmd(path: Option<&str>, cmd: &OsStr) -> OsString {
+    let mut command = OsString::new();
+    if let Some(path) = path {
+        command.push(format!("PATH='{}' exec ", path.replace('\'', r"'\''")));
+    }
+    command.push(cmd);
+    command
+}
+
+fn edit_command(editor: &str, file: &Path) -> OsString {
+    let mut command = OsString::from("env COLORFGBG='15;0' ");
+    command.push(editor);
+    command.push(" ");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+        let mut quoted = Vec::with_capacity(file.as_os_str().as_bytes().len() + 2);
+        quoted.push(b'\'');
+        for &byte in file.as_os_str().as_bytes() {
+            if byte == b'\'' {
+                quoted.extend_from_slice(br"'\''");
+            } else {
+                quoted.push(byte);
+            }
+        }
+        quoted.push(b'\'');
+        command.push(OsString::from_vec(quoted));
+    }
+    #[cfg(not(unix))]
+    command.push(format!(
+        "'{}'",
+        file.to_string_lossy().replace('\'', r"'\''")
+    ));
+
+    command
+}
+
+fn tmux_start_directory(dir: &Path) -> OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+        let bytes = dir.as_os_str().as_bytes();
+        let mut escaped = Vec::with_capacity(bytes.len());
+        for &byte in bytes {
+            escaped.push(byte);
+            if byte == b'#' {
+                escaped.push(byte);
+            }
+        }
+        OsString::from_vec(escaped)
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(dir.to_string_lossy().replace('#', "##"))
     }
 }
 
@@ -229,7 +283,7 @@ fn launch_named(
     socket: Option<&str>,
     dir: &Path,
     slug: &str,
-    cmd: Option<&str>,
+    cmd: Option<&OsStr>,
     anchor: Option<&str>,
 ) -> std::io::Result<String> {
     let tmux = |args: &[&str]| {
@@ -272,7 +326,7 @@ fn launch_named(
         // the `-c "#{pane_current_path}"` idiom — verified against a real
         // server), so a literal `#` must be doubled or `#H`-style aliases
         // mangle the cwd and `#(cmd)` even runs a format job.
-        c.arg(dir.to_string_lossy().replace('#', "##"));
+        c.arg(tmux_start_directory(dir));
         if let Some(cmd) = cmd {
             c.arg(path_cmd(good_path.as_deref(), cmd));
         }
@@ -371,7 +425,7 @@ pub fn scan(vault: &Path) -> Result<Vec<PaneInfo>, String> {
         // tearing down every card and mirror over one bad poll
         return Err(err.trim().to_string());
     }
-    Ok(parse_scan(&String::from_utf8_lossy(&out.stdout), vault))
+    Ok(parse_scan_bytes(&out.stdout, vault))
 }
 
 /// A non-zero `list-panes` exit that just means "no server on this
@@ -381,9 +435,14 @@ fn no_server(stderr: &str) -> bool {
 }
 
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
-    text.lines()
-        .filter_map(|l| {
-            let mut f = l.splitn(7, '\t');
+    parse_scan_bytes(text.as_bytes(), vault)
+}
+
+fn parse_scan_bytes(text: &[u8], vault: &Path) -> Vec<PaneInfo> {
+    text.split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let mut fields = line.splitn(7, |byte| *byte == b'\t');
             let (
                 Some(session),
                 Some(pane),
@@ -393,32 +452,45 @@ pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
                 Some(anchor),
                 Some(cwd),
             ) = (
-                f.next(),
-                f.next(),
-                f.next(),
-                f.next(),
-                f.next(),
-                f.next(),
-                f.next(),
+                fields.next(),
+                fields.next(),
+                fields.next(),
+                fields.next(),
+                fields.next(),
+                fields.next(),
+                fields.next(),
             )
             else {
                 return None;
             };
-            let cwd = PathBuf::from(cwd);
+            let cwd = path_from_bytes(cwd);
             if !cwd.starts_with(vault) {
                 return None;
             }
             Some(PaneInfo {
-                session: session.to_string(),
-                pane: pane.to_string(),
-                pid: pid.parse().ok()?,
+                session: String::from_utf8_lossy(session).into_owned(),
+                pane: String::from_utf8_lossy(pane).into_owned(),
+                pid: std::str::from_utf8(pid).ok()?.parse().ok()?,
                 cwd,
-                command: command.to_string(),
-                owned: owner == OWNER_VALUE,
-                anchor: (!anchor.is_empty()).then(|| anchor.to_string()),
+                command: String::from_utf8_lossy(command).into_owned(),
+                owned: owner == OWNER_VALUE.as_bytes(),
+                anchor: (!anchor.is_empty()).then(|| String::from_utf8_lossy(anchor).into_owned()),
             })
         })
         .collect()
+}
+
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    let bytes = crate::tmux::unescape_octal(bytes);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        PathBuf::from(OsString::from_vec(bytes))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
 }
 
 /// Stateful filter applying the owner-marker/allowlist rule with grace.
@@ -626,15 +698,15 @@ mod tests {
 
     #[test]
     fn path_cmd_wraps_only_with_a_known_path_and_escapes_quotes() {
-        assert_eq!(path_cmd(None, "claude"), "claude");
+        assert_eq!(path_cmd(None, OsStr::new("claude")), "claude");
         assert_eq!(
-            path_cmd(Some("/a/bin:/b/bin"), "claude"),
+            path_cmd(Some("/a/bin:/b/bin"), OsStr::new("claude")),
             "PATH='/a/bin:/b/bin' exec claude"
         );
         // a single quote in a PATH component must not break out of the
         // quoting (pathological, but this runs through `sh -c`)
         assert_eq!(
-            path_cmd(Some("/we'ird"), "sh"),
+            path_cmd(Some("/we'ird"), OsStr::new("sh")),
             r"PATH='/we'\''ird' exec sh"
         );
     }
@@ -654,5 +726,30 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].agent, "codex");
         assert!(active[0].ours);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tmux_helpers_preserve_non_utf8_unix_paths() {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        let file = PathBuf::from(OsString::from_vec(b"/v/raw#-\x80'file.md".to_vec()));
+        assert_eq!(
+            tmux_start_directory(&file).as_bytes(),
+            b"/v/raw##-\x80'file.md"
+        );
+        assert_eq!(
+            edit_command("nvim --clean", &file).as_bytes(),
+            b"env COLORFGBG='15;0' nvim --clean '/v/raw#-\x80'\\''file.md'"
+        );
+
+        let cwd = PathBuf::from(OsString::from_vec(b"/v/notes-\x81".to_vec()));
+        let mut output = b"work\t%1\t100\tclaude\t\t\t".to_vec();
+        output.extend_from_slice(cwd.as_os_str().as_bytes());
+        output.push(b'\n');
+        let panes = parse_scan_bytes(&output, Path::new("/v"));
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].cwd, cwd);
+        assert_eq!(path_from_bytes(b"/v/notes-\\201"), cwd);
     }
 }

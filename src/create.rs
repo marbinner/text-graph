@@ -92,17 +92,41 @@ fn reject_skipped_components(rel: &str, leaf_is_dir: bool) -> Result<()> {
     Ok(())
 }
 
+/// Revalidate a lossless relative path before creating through it. Existing
+/// non-UTF-8 components are allowed; absolute, hidden, parent, and skipped
+/// components remain forbidden.
+fn reject_path_components(rel: &Path, leaf_is_dir: bool) -> Result<()> {
+    let parts: Vec<_> = rel.components().collect();
+    if parts.is_empty() {
+        bail!("path is empty");
+    }
+    for (index, component) in parts.iter().enumerate() {
+        let std::path::Component::Normal(part) = component else {
+            bail!("path must stay relative to the vault");
+        };
+        if let Some(part) = part.to_str() {
+            if part.starts_with(".") {
+                bail!("hidden names (leading dot) would be invisible to the graph");
+            }
+            if (leaf_is_dir || index + 1 < parts.len()) && crate::vault::is_skipped_dir_name(part) {
+                bail!("{part} is excluded from the graph");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Refuse to create through a symlinked path component: a linked dir (or
 /// leaf) inside the vault could redirect the write outside it. The walker
-/// doesn't follow links, so nothing behind one is part of the graph anyway.
-fn reject_symlink_components(root: &Path, rel: &str) -> Result<()> {
+/// does not follow links, so nothing behind one is part of the graph anyway.
+fn reject_symlink_components(root: &Path, rel: &Path) -> Result<()> {
     let mut cur = root.to_path_buf();
-    for part in rel.split('/') {
+    for part in rel.iter() {
         cur.push(part);
         if let Ok(m) = std::fs::symlink_metadata(&cur)
             && m.file_type().is_symlink()
         {
-            bail!("{rel}: refusing to create through a symlink");
+            bail!("{}: refusing to create through a symlink", rel.display());
         }
     }
     Ok(())
@@ -111,7 +135,12 @@ fn reject_symlink_components(root: &Path, rel: &str) -> Result<()> {
 /// Create an empty note at `rel` (creating parent folders), refusing to
 /// overwrite anything. Returns the absolute path.
 pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
-    reject_skipped_components(rel, false)?;
+    write_note_path(root, Path::new(rel))
+}
+
+/// PathBuf-preserving form used when the containing directory is not UTF-8.
+pub fn write_note_path(root: &Path, rel: &Path) -> Result<PathBuf> {
+    reject_path_components(rel, false)?;
     reject_symlink_components(root, rel)?;
     let abs = root.join(rel);
     if let Some(parent) = abs.parent() {
@@ -127,7 +156,7 @@ pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
     {
         Ok(_) => Ok(abs),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            bail!("{rel} already exists")
+            bail!("{} already exists", rel.display())
         }
         Err(e) => Err(e.into()),
     }
@@ -135,11 +164,16 @@ pub fn write_note(root: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Create a folder at `rel` (and parents). Idempotent.
 pub fn make_folder(root: &Path, rel: &str) -> Result<PathBuf> {
-    reject_skipped_components(rel, true)?;
+    make_folder_path(root, Path::new(rel))
+}
+
+/// PathBuf-preserving form used when the containing directory is not UTF-8.
+pub fn make_folder_path(root: &Path, rel: &Path) -> Result<PathBuf> {
+    reject_path_components(rel, true)?;
     reject_symlink_components(root, rel)?;
     let abs = root.join(rel);
     if abs.is_file() {
-        bail!("{rel} exists and is a file");
+        bail!("{} exists and is a file", rel.display());
     }
     std::fs::create_dir_all(&abs)?;
     Ok(abs)
@@ -278,5 +312,27 @@ mod tests {
         assert!(!elsewhere.join("x.md").exists());
         assert!(make_folder(&root, "sub/deeper").is_err());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creation_inside_a_non_utf8_directory_preserves_the_parent_path() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let root = scratch();
+        let raw_dir = PathBuf::from(std::ffi::OsString::from_vec(b"notes-\x80".to_vec()));
+        std::fs::create_dir_all(root.join(&raw_dir)).unwrap();
+
+        let note = raw_dir.join("new.md");
+        let folder = raw_dir.join("more");
+        assert_eq!(write_note_path(&root, &note).unwrap(), root.join(&note));
+        assert_eq!(
+            make_folder_path(&root, &folder).unwrap(),
+            root.join(&folder)
+        );
+        assert!(root.join(note).is_file());
+        assert!(root.join(folder).is_dir());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -54,6 +54,9 @@ pub(super) struct Thumbs {
     jobs: Option<Sender<Job>>,
     results: Option<Receiver<JobResult>>,
     next_job: JobId,
+    /// Actual paths are stored separately because cache keys are lossless node
+    /// identities, not necessarily filesystem strings.
+    paths: HashMap<String, PathBuf>,
     pub(super) cache: HashMap<String, ThumbState>,
 }
 
@@ -63,6 +66,7 @@ impl Thumbs {
             jobs: None,
             results: None,
             next_job: 1,
+            paths: HashMap::new(),
             cache: HashMap::new(),
         }
     }
@@ -135,6 +139,7 @@ impl Thumbs {
             .next_job
             .checked_add(1)
             .expect("thumbnail job generation overflow");
+        self.paths.insert(key.to_string(), abs.clone());
         self.cache.insert(key.to_string(), ThumbState::Pending(job));
         if let Some(tx) = &self.jobs {
             let _ = tx.send((key.to_string(), job, abs));
@@ -155,11 +160,15 @@ impl Thumbs {
     /// Vault reload: evict only entries whose file changed (or vanished);
     /// unchanged images keep their textures so nothing flickers. Pending
     /// and Failed entries drop too — the retry is lazy and cheap.
-    pub(super) fn retain_fresh(&mut self, root: &Path) {
+    pub(super) fn retain_fresh(&mut self) {
+        let paths = &self.paths;
         self.cache.retain(|key, state| match state {
-            ThumbState::Ready { stamp, .. } => fresh(stamp, file_stamp(&root.join(key))),
+            ThumbState::Ready { stamp, .. } => {
+                fresh(stamp, paths.get(key).and_then(|path| file_stamp(path)))
+            }
             _ => false,
         });
+        self.paths.retain(|key, _| self.cache.contains_key(key));
     }
 }
 

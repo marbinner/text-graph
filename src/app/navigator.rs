@@ -132,12 +132,15 @@ impl Viewer {
 
     pub(super) fn load_body(&self, id: NodeId) -> String {
         let node = self.g.node(id);
+        let Some(path) = node.absolute_path(&self.root) else {
+            return String::new();
+        };
         match node.kind {
-            NodeKind::File => vault::read_body(&self.root.join(&node.path))
+            NodeKind::File => vault::read_body(&path)
                 .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
                 .unwrap_or_else(|e| format!("*error reading file:* {e}")),
             NodeKind::Asset if filetype::is_text(&node.path) => {
-                vault::read_head(&self.root.join(&node.path), Self::ASSET_DETAIL_CAP)
+                vault::read_head(&path, Self::ASSET_DETAIL_CAP)
                     .unwrap_or_else(|e| format!("error reading file: {e}"))
             }
             _ => String::new(),
@@ -157,21 +160,21 @@ impl Viewer {
         acting: bool,
     ) -> Option<NodeId> {
         let mut jump: Option<NodeId> = None;
-        let (kind, path) = {
-            let n = self.g.node(id);
-            let p = if n.path.is_empty() {
-                n.name.clone()
+        let (kind, path, abs_path) = {
+            let node = self.g.node(id);
+            let display = if node.path.is_empty() {
+                node.name.clone()
             } else {
-                n.path.clone()
+                node.path.clone()
             };
-            (n.kind, p)
+            (node.kind, display, node.absolute_path(&self.root))
         };
         // Re-read only when the node changed or ITS file did. Reloads
         // land every few seconds under working agents, and re-reading (and
         // re-parsing markdown) on each made the preview flicker and lose
         // its scroll. Kinds with no body stamp as None on both sides, so
         // they never look stale.
-        let stamp = super::images::file_stamp(&self.root.join(&path));
+        let stamp = abs_path.as_deref().and_then(super::images::file_stamp);
         if self.detail.as_ref().map(|(i, _)| *i) != Some(id) || self.detail_stamp != stamp {
             self.detail = Some((id, self.load_body(id)));
             self.detail_stamp = stamp;
@@ -241,9 +244,12 @@ impl Viewer {
                     }
                     ui.add_space(4.0);
                 }
-                let key = self.g.node(id).path.clone();
+                let node = self.g.node(id);
+                let key = node.path_key();
                 let ctx = ui.ctx().clone();
-                self.thumbs.request(&ctx, &key, self.root.join(&key));
+                if let Some(abs) = node.absolute_path(&self.root) {
+                    self.thumbs.request(&ctx, &key, abs);
+                }
                 match self.thumbs.cache.get(&key) {
                     Some(images::ThumbState::Ready { tex, .. }) => {
                         let size = tex.size_vec2();
@@ -291,8 +297,10 @@ impl Viewer {
                     }
                     self.detail = detail;
                 } else {
-                    let size = std::fs::metadata(self.root.join(&path))
-                        .map(|m| m.len())
+                    let size = abs_path
+                        .as_deref()
+                        .and_then(|path| std::fs::metadata(path).ok())
+                        .map(|metadata| metadata.len())
                         .unwrap_or(0);
                     ui.label(
                         egui::RichText::new(format!(

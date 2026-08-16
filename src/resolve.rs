@@ -153,6 +153,7 @@ pub fn resolve(g: &mut Graph, file_links: &[(NodeId, Vec<RawLink>)]) {
                         g.push_node(Node {
                             kind: NodeKind::Ghost,
                             path: target.clone(),
+                            os_path: None,
                             name: target.clone(),
                             title: None,
                             aliases: Vec::new(),
@@ -212,6 +213,7 @@ pub fn resolve_externals(g: &mut Graph, file_externals: &[(NodeId, Vec<vault::Ra
                     name: crate::weburl::host(&key).to_string(),
                     title: crate::weburl::slug_title(&key),
                     path: key,
+                    os_path: None,
                     aliases: Vec::new(),
                     parent: None,
                     children: Vec::new(),
@@ -318,6 +320,7 @@ mod tests {
         let node = |kind, path: &str, name: &str, parent| Node {
             kind,
             path: path.into(),
+            os_path: Some(path.into()),
             name: name.into(),
             title: None,
             aliases: Vec::new(),
@@ -364,6 +367,7 @@ mod tests {
         let node = |kind, path: &str, name: &str, aliases: Vec<String>, parent| Node {
             kind,
             path: path.into(),
+            os_path: Some(path.into()),
             name: name.into(),
             title: None,
             aliases,

@@ -1417,18 +1417,18 @@ impl Viewer {
 
     /// The folder a node-scoped launch targets (vault-relative, "" =
     /// root): a dir itself, anything else its parent dir.
-    pub(super) fn node_dir(&self, id: NodeId) -> String {
+    pub(super) fn node_dir(&self, id: NodeId) -> PathBuf {
         let n = self.g.node(id);
         match n.kind {
-            NodeKind::Dir => n.path.clone(),
+            NodeKind::Dir => n.os_path.clone().unwrap_or_default(),
             _ => n
                 .parent
-                .map(|p| self.g.node(p).path.clone())
+                .and_then(|p| self.g.node(p).os_path.clone())
                 .unwrap_or_default(),
         }
     }
 
-    pub(super) fn launch_agent(&mut self, ctx: &egui::Context, dir: &str, agent: &str) {
+    pub(super) fn launch_agent(&mut self, ctx: &egui::Context, dir: &Path, agent: &str) {
         let path = self.ctx_path(dir);
         let agent = agent.to_string();
         let kind = LaunchKind::Agent {
@@ -1440,7 +1440,7 @@ impl Viewer {
     }
 
     /// A plain shell card at `dir`, focused as soon as it appears.
-    pub(super) fn new_terminal(&mut self, ctx: &egui::Context, dir: &str) {
+    pub(super) fn new_terminal(&mut self, ctx: &egui::Context, dir: &Path) {
         let path = self.ctx_path(dir);
         self.launch_in_background(
             ctx,
@@ -1468,7 +1468,10 @@ impl Viewer {
     pub(super) fn edit_in_graph_terminal(&mut self, ctx: &egui::Context, id: NodeId) {
         let node = self.g.node(id);
         let rel = node.path.clone();
-        let abs = self.root.join(&rel);
+        let Some(abs) = node.absolute_path(&self.root) else {
+            self.set_flash("can't edit a virtual node".into());
+            return;
+        };
         // a folder opens as the editor's picker, cwd'd inside itself
         let dir = if node.kind == NodeKind::Dir {
             abs.clone()
@@ -1478,17 +1481,10 @@ impl Viewer {
                 .unwrap_or_else(|| self.root.clone())
         };
         let editor = super::actions::terminal_editor(&self.cfg);
-        // COLORFGBG tells the editor the pane is DARK: clientless tmux
-        // answers no background-color query, and vim's fallback guesses
-        // background=light — painting white blocks all over the dark card
-        // (verified against a real server). `env` (a binary) survives the
-        // `exec` in the launch wrapper, where a plain VAR=x prefix would
-        // not.
-        let cmd = format!(
-            "env COLORFGBG='15;0' {editor} '{}'",
-            abs.display().to_string().replace('\'', r"'\''")
-        );
-        let anchor = rel.clone();
+        // The launch helper carries the file as raw OS bytes and sets
+        // COLORFGBG so clientless tmux editors choose a dark background.
+        let launch_editor = editor.clone();
+        let anchor = node.path_key();
         let kind = LaunchKind::Edit {
             rel: rel.clone(),
             editor,
@@ -1497,7 +1493,7 @@ impl Viewer {
             ctx,
             kind,
             format!("opening editor for {rel}…"),
-            move || agents::launch_edit(None, &dir, &cmd, &anchor),
+            move || agents::launch_edit(None, &dir, &launch_editor, &abs, &anchor),
         );
     }
 }

@@ -6,8 +6,8 @@ use super::*;
 /// State of the "New note / New folder" dialog (opened via right-click).
 pub(super) struct CreateDialog {
     folder: bool,
-    /// Vault-relative target directory ("" = root) and its display label.
-    dir: String,
+    /// Lossless vault-relative target directory and its display label.
+    dir: PathBuf,
     label: String,
     buf: String,
     /// Focus the text field on the next frame (open / after an error).
@@ -197,28 +197,25 @@ pub(super) fn detached(cmd: &mut std::process::Command) -> std::io::Result<()> {
 impl Viewer {
     /// The directory the context menu's actions apply to (vault-relative,
     /// "" = root) and a human label for it.
-    pub(super) fn ctx_dir(&self) -> (String, String) {
-        let dir = self
-            .ctx_node
-            .map(|id| {
-                let n = self.g.node(id);
-                match n.kind {
-                    NodeKind::Dir => n.path.clone(),
-                    _ => n
-                        .parent
-                        .map(|p| self.g.node(p).path.clone())
-                        .unwrap_or_default(),
-                }
-            })
-            .unwrap_or_default();
-        let label = if dir.is_empty() {
+    pub(super) fn ctx_dir(&self) -> (PathBuf, String) {
+        let dir_id = self.ctx_node.map_or(self.g.root, |id| {
+            let node = self.g.node(id);
+            if node.kind == NodeKind::Dir {
+                id
+            } else {
+                node.parent.unwrap_or(self.g.root)
+            }
+        });
+        let node = self.g.node(dir_id);
+        let dir = node.os_path.clone().unwrap_or_default();
+        let label = if dir.as_os_str().is_empty() {
             self.root
                 .file_name()
-                .and_then(|s| s.to_str())
+                .and_then(|name| name.to_str())
                 .unwrap_or("vault")
                 .to_string()
         } else {
-            dir.clone()
+            node.path.clone()
         };
         (dir, label)
     }
@@ -311,15 +308,11 @@ impl Viewer {
     }
 
     /// Absolute path for a vault-relative dir ("" = root).
-    pub(super) fn ctx_path(&self, dir: &str) -> PathBuf {
-        if dir.is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(dir)
-        }
+    pub(super) fn ctx_path(&self, dir: &Path) -> PathBuf {
+        self.root.join(dir)
     }
 
-    pub(super) fn open_create(&mut self, folder: bool, dir: String, label: String) {
+    pub(super) fn open_create(&mut self, folder: bool, dir: PathBuf, label: String) {
         self.terms.focused = None; // the dialog owns the keyboard now
         self.picker.close();
         self.create = Some(CreateDialog {
@@ -372,22 +365,27 @@ impl Viewer {
             });
         if submit {
             let res = if dlg.folder {
-                create::folder_rel_path(&dlg.dir, &dlg.buf)
-                    .and_then(|rel| create::make_folder(&self.root, &rel).map(|_| rel))
+                create::folder_rel_path("", &dlg.buf).and_then(|name| {
+                    let rel = dlg.dir.join(name);
+                    create::make_folder_path(&self.root, &rel).map(|_| rel)
+                })
             } else {
-                create::note_rel_path(&dlg.dir, &dlg.buf)
-                    .and_then(|rel| create::write_note(&self.root, &rel).map(|_| rel))
+                create::note_rel_path("", &dlg.buf).and_then(|name| {
+                    let rel = dlg.dir.join(name);
+                    create::write_note_path(&self.root, &rel).map(|_| rel)
+                })
             };
             match res {
                 Ok(rel) if dlg.folder => {
                     // empty dirs are pruned from the graph, deliberately
                     self.set_flash(format!(
-                        "created {rel}/ — appears once it holds a note (\"sub/name\" in New note also creates folders)"
+                        "created {}/ — appears once it holds a note (\"sub/name\" in New note also creates folders)",
+                        rel.display()
                     ));
                 }
                 Ok(rel) => {
-                    self.pending_select = Some(rel.clone());
-                    self.set_flash(format!("created {rel}"));
+                    self.pending_select = Some(vault::path_key(&rel));
+                    self.set_flash(format!("created {}", rel.display()));
                     *self.reload_at.lock().unwrap() = Some(Instant::now());
                 }
                 Err(e) => {
@@ -409,27 +407,34 @@ impl Viewer {
     /// nothing to open.
     pub(super) fn open_in_editor(&self, id: NodeId) {
         let node = self.g.node(id);
-        let path = self.root.join(&node.path);
+        let path = node.absolute_path(&self.root);
         let result = match node.kind {
-            NodeKind::File => spawn_editor(&self.cfg, &path),
-            NodeKind::Asset if filetype::is_text(&node.path) => spawn_editor(&self.cfg, &path),
+            NodeKind::File => spawn_editor(&self.cfg, path.as_deref().expect("real node path")),
+            NodeKind::Asset if filetype::is_text(&node.path) => {
+                spawn_editor(&self.cfg, path.as_deref().expect("real node path"))
+            }
             NodeKind::Dir => {
                 let cmd = file_manager(&self.cfg);
                 detached(
                     std::process::Command::new(&cmd[0])
                         .args(&cmd[1..])
-                        .arg(&path),
+                        .arg(path.as_deref().expect("real node path")),
                 )
             }
-            NodeKind::Image | NodeKind::Asset => {
-                detached(std::process::Command::new("xdg-open").arg(&path))
-            }
-            // a web node's path IS its URL — the browser is its editor
+            NodeKind::Image | NodeKind::Asset => detached(
+                std::process::Command::new("xdg-open")
+                    .arg(path.as_deref().expect("real node path")),
+            ),
+            // A web node path is its URL — the browser is its editor.
             NodeKind::Web => detached(std::process::Command::new("xdg-open").arg(&node.path)),
             NodeKind::Ghost => return,
         };
         if let Err(e) = result {
-            eprintln!("failed to open {}: {e}", path.display());
+            let target = path
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| node.path.clone());
+            eprintln!("failed to open {target}: {e}");
         }
     }
 }
