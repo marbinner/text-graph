@@ -397,7 +397,10 @@ impl Viewer {
                 {
                     self.terms.cursor = Some(key.clone());
                     self.terms.focused = Some(key.clone());
-                    self.fly_to_card(key);
+                    // focused cards expand to a readable size at ANY zoom,
+                    // so the finder only recenters — keeping the zoom keeps
+                    // the overview of what is around it
+                    self.fly_to_card_at(key, false);
                 }
             }
             Target::Node(_) => {} // renumbered away by a reload

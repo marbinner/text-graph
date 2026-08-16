@@ -1030,6 +1030,15 @@ impl Viewer {
     /// Jump the view into a card: readable zoom now, exact centering on the
     /// next paint (which knows the card's rect at the new zoom).
     pub(super) fn fly_to_card(&mut self, t: (String, String)) {
+        self.fly_to_card_at(t, true);
+    }
+
+    /// Bring a card into view. `zoom_in` snaps to [`CARD_ZOOM`] — that is
+    /// the double-click gesture, "take me INTO this terminal". Coming from
+    /// the finder it stays false: a focused card is readable at any zoom
+    /// anyway, and jumping the zoom would throw away the overview you were
+    /// searching from, which is the whole reason to search in the graph.
+    pub(super) fn fly_to_card_at(&mut self, t: (String, String), zoom_in: bool) {
         if let Some(id) = self
             .terms
             .panes
@@ -1039,7 +1048,9 @@ impl Viewer {
         {
             self.center = self.world_pos(id.0 as usize);
         }
-        self.zoom = CARD_ZOOM;
+        if zoom_in {
+            self.zoom = CARD_ZOOM;
+        }
         self.terms.fly_to = Some(t);
     }
 

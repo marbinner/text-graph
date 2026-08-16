@@ -685,3 +685,24 @@ fn tg_links_are_claimed_in_the_search_preview_too() {
     });
     assert!(!leaked, "and the command was claimed, not passed to the OS");
 }
+
+/// Taking a TERMINAL result must not change the zoom: a focused card
+/// expands to a readable size at any zoom, and snapping to CARD_ZOOM (what
+/// a double-click does, deliberately) would throw away the overview the
+/// search was launched from. Only the double-click gesture zooms.
+#[test]
+fn the_finder_recenters_on_a_card_without_zooming() {
+    let mut h = harness();
+    h.state_mut().zoom = 0.4;
+    let key = ("tg_claude".to_string(), "%3".to_string());
+    h.state_mut().fly_to_card_at(key.clone(), false);
+    assert_eq!(h.state().zoom, 0.4, "the finder keeps your zoom");
+    assert_eq!(h.state().terms.fly_to, Some(key.clone()), "but recenters");
+
+    h.state_mut().fly_to_card(key);
+    assert_eq!(
+        h.state().zoom,
+        super::terminals::CARD_ZOOM,
+        "double-click still flies in"
+    );
+}
