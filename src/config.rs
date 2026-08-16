@@ -66,7 +66,7 @@ impl Default for Config {
             label_density: 1.0,
             node_scale: 1.0,
             focus_fade: 0.18,
-            finder_y: 0.45,
+            finder_y: 0.55,
             thumbnails: true,
             canvas_previews: true,
             spread: 1.0,
