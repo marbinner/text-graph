@@ -1,7 +1,7 @@
 //! Discovery of agent terminals: which tmux panes should be mirrored.
 //!
-//! `tg_*` sessions are ours (launched from the graph, milestone E4) and
-//! always count. Foreign panes count while their cwd is inside the vault and
+//! Sessions carrying text-graph's explicit tmux owner marker always count.
+//! Foreign panes count while their cwd is inside the vault and
 //! their foreground command matches the agent allowlist — with a grace
 //! period, because `pane_current_command` flips to bash/python while an
 //! agent runs a tool.
@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 /// [`Tracker::update`].
 pub const GRACE: Duration = Duration::from_secs(10);
 
+/// Session-scoped tmux option proving the graph created a session. Names are
+/// only human-readable conventions and must never grant resize privileges.
+const OWNER_OPTION: &str = "@tg_owner";
+const OWNER_VALUE: &str = "text-graph";
+
 /// A raw tmux pane whose cwd is inside the vault (pre-filtering).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaneInfo {
@@ -24,6 +29,8 @@ pub struct PaneInfo {
     pub pid: u32,
     pub cwd: PathBuf,
     pub command: String,
+    /// True only when the session carries our exact ownership marker.
+    pub owned: bool,
     /// The session's `@tg_anchor` user option — a vault-relative path the
     /// card tethers to (edit sessions pin to their file). Stored IN tmux,
     /// so it survives viewer restarts and dies with the session.
@@ -37,9 +44,9 @@ pub struct AgentPane {
     pub pane: String,
     pub pid: u32,
     pub cwd: PathBuf,
-    /// Harness display name: the allowlist token, or the `tg_` session's tag.
+    /// Harness display name: the allowlist token, or an owned session's tag.
     pub agent: String,
-    /// True for `tg_*` sessions launched from the graph.
+    /// True only for sessions carrying text-graph's ownership marker.
     pub ours: bool,
     /// See [`PaneInfo::anchor`].
     pub anchor: Option<String>,
@@ -220,6 +227,9 @@ fn launch_named(
         let mut c = tmux(&[
             "new-session",
             "-d",
+            "-P",
+            "-F",
+            "#{session_id}",
             "-s",
             &name,
             "-x",
@@ -236,13 +246,30 @@ fn launch_named(
         if let Some(cmd) = cmd {
             c.arg(path_cmd(good_path.as_deref(), cmd));
         }
-        if c.status()?.success() {
+        let created = c.output()?;
+        if created.status.success() {
+            // Target the immutable session id, not its reusable name: a
+            // command that exits instantly can make the name available
+            // before this call, and we must never mark a replacement owned.
+            let session_id = String::from_utf8_lossy(&created.stdout).trim().to_string();
+            if !session_id.starts_with('$') {
+                return Err(std::io::Error::other(format!(
+                    "tmux did not return a session id for {name}"
+                )));
+            }
+            let marked = tmux(&["set-option", "-t", &session_id, OWNER_OPTION, OWNER_VALUE])
+                .status()?
+                .success();
+            if !marked {
+                return Err(std::io::Error::other(format!(
+                    "could not mark tmux session {name} as owned"
+                )));
+            }
             if let Some(a) = anchor {
                 // best-effort: a failed set-option just means the card
-                // falls back to its cwd's dir node. NOTE: set-option
-                // rejects the `=` exact-match prefix (has-session takes
-                // it) — plain name, which we just created, so it's exact.
-                let _ = tmux(&["set-option", "-t", &name, "@tg_anchor", a]).status();
+                // falls back to its cwd's dir node. The immutable session
+                // id also prevents attaching the anchor to a reused name.
+                let _ = tmux(&["set-option", "-t", &session_id, "@tg_anchor", a]).status();
             }
             return Ok(name);
         }
@@ -279,7 +306,7 @@ pub fn scan(vault: &Path) -> Result<Vec<PaneInfo>, String> {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_anchor}\t#{pane_current_path}",
+            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_owner}\t#{@tg_anchor}\t#{pane_current_path}",
         ])
         .output();
     let Ok(out) = out else {
@@ -307,9 +334,24 @@ fn no_server(stderr: &str) -> bool {
 pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
     text.lines()
         .filter_map(|l| {
-            let mut f = l.splitn(6, '\t');
-            let (Some(session), Some(pane), Some(pid), Some(command), Some(anchor), Some(cwd)) =
-                (f.next(), f.next(), f.next(), f.next(), f.next(), f.next())
+            let mut f = l.splitn(7, '\t');
+            let (
+                Some(session),
+                Some(pane),
+                Some(pid),
+                Some(command),
+                Some(owner),
+                Some(anchor),
+                Some(cwd),
+            ) = (
+                f.next(),
+                f.next(),
+                f.next(),
+                f.next(),
+                f.next(),
+                f.next(),
+                f.next(),
+            )
             else {
                 return None;
             };
@@ -323,13 +365,14 @@ pub fn parse_scan(text: &str, vault: &Path) -> Vec<PaneInfo> {
                 pid: pid.parse().ok()?,
                 cwd,
                 command: command.to_string(),
+                owned: owner == OWNER_VALUE,
                 anchor: (!anchor.is_empty()).then(|| anchor.to_string()),
             })
         })
         .collect()
 }
 
-/// Stateful filter applying the tg_/allowlist rule with the grace period.
+/// Stateful filter applying the owner-marker/allowlist rule with grace.
 #[derive(Default)]
 pub struct Tracker {
     /// (session, pane) → (last seen, agent name, pane root pid). The pid
@@ -352,7 +395,7 @@ impl Tracker {
     ) -> Vec<AgentPane> {
         let mut out = Vec::new();
         for p in panes {
-            let ours = p.session.starts_with("tg_");
+            let ours = p.owned;
             let cmd_base = Path::new(&p.command)
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -411,31 +454,33 @@ mod tests {
 
     #[test]
     fn parse_filters_to_vault() {
-        let text = "work\t%1\t100\tclaude\t\t/v/notes\n\
-                    other\t%2\t200\tclaude\t\t/elsewhere\n\
-                    tg_pi_1\t%3\t300\tpi\t\t/v/notes/topics\n\
-                    tg_edit\t%4\t400\thx\tnotes/a.md\t/v/notes\n\
+        let text = "work\t%1\t100\tclaude\t\t\t/v/notes\n\
+                    other\t%2\t200\tclaude\t\t\t/elsewhere\n\
+                    tg_pi_1\t%3\t300\tpi\ttext-graph\t\t/v/notes/topics\n\
+                    tg_edit\t%4\t400\thx\ttext-graph\tnotes/a.md\t/v/notes\n\
                     bad-line\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 3);
         assert_eq!(panes[0].session, "work");
         assert_eq!(panes[0].anchor, None, "unset @tg_anchor reads empty");
+        assert!(!panes[0].owned);
         assert_eq!(panes[1].pane, "%3");
+        assert!(panes[1].owned);
         assert_eq!(panes[2].anchor.as_deref(), Some("notes/a.md"));
     }
 
     #[test]
     fn parse_survives_tabs_in_paths_and_drops_tabbed_names_safely() {
         // path is the last field, so an embedded tab stays part of the path
-        let text = "work\t%1\t100\tclaude\t\t/v/notes/weird\tdir\n";
+        let text = "work\t%1\t100\tclaude\t\t\t/v/notes/weird\tdir\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].cwd, PathBuf::from("/v/notes/weird\tdir"));
         assert_eq!(panes[0].command, "claude");
         // a tab inside a session name shifts the pid field; the numeric
         // parse fails and the record is DROPPED — never mis-assigned
-        let sheared = "we\tird\t%1\t100\tclaude\t\t/v/notes\n\
-                       work\t%2\t200\tclaude\t\t/v/notes\n";
+        let sheared = "we\tird\t%1\t100\tclaude\t\t\t/v/notes\n\
+                       work\t%2\t200\tclaude\t\t\t/v/notes\n";
         let panes = parse_scan(sheared, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].session, "work");
@@ -452,6 +497,7 @@ mod tests {
             pid,
             cwd: PathBuf::from("/v"),
             command: command.into(),
+            owned: false,
             anchor: None,
         }
     }
@@ -535,9 +581,17 @@ mod tests {
     }
 
     #[test]
-    fn tg_sessions_always_count_and_carry_their_tag() {
+    fn only_marked_sessions_get_owned_behavior() {
+        let mut lookalike = pane("tg_codex_2", "bash");
         let mut tr = Tracker::new();
-        let active = tr.update(&[pane("tg_codex_2", "bash")], &[], Instant::now());
+        assert!(
+            tr.update(&[lookalike.clone()], &[], Instant::now())
+                .is_empty(),
+            "a user-chosen tg_ name is not proof of ownership"
+        );
+
+        lookalike.owned = true;
+        let active = tr.update(&[lookalike], &[], Instant::now());
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].agent, "codex");
         assert!(active[0].ours);

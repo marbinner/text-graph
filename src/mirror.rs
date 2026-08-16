@@ -86,7 +86,8 @@ pub struct SessionMirror {
 
 impl SessionMirror {
     /// `set_size`: declare a client size, which lets tmux resize the window
-    /// to us. Only pass Some for sessions we own (`tg_*`) — sizing a session
+    /// to us. Only pass Some for explicitly marked sessions we own —
+    /// sizing a session
     /// the user is viewing in a real terminal would reflow it under them.
     pub fn attach(
         session: &str,

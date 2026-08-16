@@ -141,7 +141,7 @@
 - Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
   never send size hints (`set_size`) or `resize-window` to sessions we
   didn't create (it would reflow the user's real terminal view). The corner
-  resize grip exists only on `ours` (tg_) cards for exactly this reason. Special keys go as tmux key NAMES
+  resize grip exists only on `ours` (`@tg_owner=text-graph`) cards for exactly this reason. Special keys go as tmux key NAMES
   (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
   (quoting-proof); PASTES go through tmux's buffer machinery
   (`keys::paste_cmds`: octal-escaped `set-buffer` + `paste-buffer -p`) so

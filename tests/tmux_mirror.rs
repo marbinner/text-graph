@@ -180,19 +180,26 @@ fn launch_creates_uniquely_named_tg_sessions() {
             "list-panes",
             "-a",
             "-F",
-            "#{session_name}\t#{@tg_anchor}",
+            "#{session_name}\t#{@tg_owner}\t#{@tg_anchor}",
         ])
         .output()
         .expect("list-panes");
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(
-        text.lines().any(|l| l == "tg_edit\tnotes/x.md"),
-        "@tg_anchor must round-trip through the format: {text:?}"
+        text.lines().any(|l| l == "tg_edit\ttext-graph\tnotes/x.md"),
+        "ownership and @tg_anchor must round-trip through the format: {text:?}"
     );
     assert!(
-        text.lines().any(|l| l == "tg_term\t"),
-        "sessions without an anchor read as empty: {text:?}"
+        text.lines().any(|l| l == "tg_term\ttext-graph\t"),
+        "owned sessions without an anchor read as empty: {text:?}"
     );
+    for name in [&first, &second, &shell, &edit] {
+        assert!(
+            text.lines()
+                .any(|line| line.starts_with(&format!("{name}\ttext-graph\t"))),
+            "{name} is missing the explicit ownership marker: {text:?}"
+        );
+    }
 
     // all sessions exist, cwd'd where we asked
     let out = Command::new("tmux")

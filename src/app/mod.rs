@@ -1369,7 +1369,7 @@ impl Viewer {
         });
         if response.drag_started() {
             if let Some(t) = over_card.clone() {
-                // corner grip on our own (tg_) sessions = native resize; the
+                // corner grip on explicitly owned sessions = native resize; the
                 // rest of the card moves it. Foreign sessions never get
                 // resized from here — that would reflow someone's real
                 // terminal view.

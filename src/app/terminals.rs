@@ -33,7 +33,7 @@ pub(super) struct Terminals {
     pub(super) parked: HashMap<String, Vec<(String, Vec2)>>,
     /// Card currently being dragged.
     pub(super) drag_card: Option<(String, String)>,
-    /// Corner-grip resize in progress (tg_ sessions only — native resize).
+    /// Corner-grip resize in progress (explicitly owned sessions only).
     pub(super) resize: Option<ResizeDrag>,
     /// Set on double-click / t: next paint recenters the view on this card.
     pub(super) fly_to: Option<(String, String)>,

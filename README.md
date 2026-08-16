@@ -341,7 +341,8 @@ suspend; `Ctrl+Q` or clicking empty space gives you the graph back.
 where the terminal is full-size and readable, centered on that card — pan
 or zoom back out whenever you like. A card stays up for the pane's whole
 lifetime, including while the agent runs long tool calls. Graph-launched
-(`tg_`) cards have a grip in the corner: dragging it resizes the **actual
+(`@tg_owner=text-graph`) cards have a grip in the corner: dragging it
+resizes the **actual
 tmux session** (`resize-window`), the TUI reflows natively, and the card
 follows — the same thing that happens if you resize it from an attached
 terminal. Foreign sessions deliberately have no grip: resizing them would
@@ -358,8 +359,9 @@ How it works, and why it's safe:
   approach). tmux stays the real terminal: sessions persist when the viewer
   closes, `tmux attach` from any terminal keeps working, and tmux answers all
   the TUI's terminal queries — the viewer only renders display streams.
-- Sessions named `tg_*` (launched from the graph) always show while their
-  cwd is in the vault; other tmux panes additionally need their foreground
+- Sessions carrying `@tg_owner=text-graph` (set on graph launches) always
+  show while their cwd is in the vault; other tmux panes additionally need
+  their foreground
   command to match the agent list. Once recognized, a pane's identity is
   **sticky for its lifetime** (pinned to the pane's root process), so
   tool calls that put `bash` in the foreground for minutes don't drop the
@@ -410,7 +412,7 @@ src/
   thumb.rs    image file → downscaled RGBA pixels (headless decode)
   tmux.rs     tmux control-mode client (protocol parse, %output unescape)
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
-  agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
+  agents.rs   which tmux panes count as agents (allowlist, owner marker, grace) + launch
   keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
   highlight.rs syntect colouring for the source view, as plain RGB spans
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
