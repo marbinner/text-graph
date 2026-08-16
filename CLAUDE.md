@@ -238,6 +238,15 @@
   compensates (`frame_target` lifts a followed node by `FRAME_LIFT_FRAC`
   of the canvas height) — without it, following a result parks it behind
   the overlay, the one place you can't see.
+- The side pane's WIDTH belongs to the user: a quarter of the window the
+  first time, then whatever they drag it to (`pane_width`, persisted per
+  vault). Never size it from the inside — `ui.set_min_width` in the mode
+  bodies is what used to resize it on every ranger↔search switch and snap
+  it back when dragged narrower; content columns take a SHARE of the pane
+  instead. The only automatic change is a window too narrow to hold it,
+  where the 60% ceiling outranks the 300pt floor, and the drag is
+  recorded only while the pointer is down — otherwise that clamp gets
+  saved as the user's choice.
 - ONE side pane, two modes (`navigator::side_pane`): the highlighted
   result's preview while a search is live, else the ranger (with nothing
   selected it falls back to the vault root, so `f` never opens onto a

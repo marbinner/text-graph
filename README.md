@@ -122,6 +122,10 @@ the agent until `Ctrl+Q`.
 Click any node — or press `f` — and the right-hand pane opens. It has two
 modes:
 
+The pane opens at a quarter of the window and then keeps whatever width
+you drag it to (per vault, across restarts) — switching between its two
+modes never resizes it.
+
 **Browsing** (the ranger): breadcrumb, sibling column with the cursor,
 preview (rendered markdown for notes, raw text for code/config assets,
 the picture for images, the listing for folders), and the color-coded
