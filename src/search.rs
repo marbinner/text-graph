@@ -235,16 +235,34 @@ pub fn file_hits(rel: &str, text: &str, query: &Query, buf: &mut String) -> Opti
     })
 }
 
-/// Trim and cap a matched line for display, moving its ranges with it.
+/// Trim and cap a matched line for display, centering the window on the
+/// earliest match and moving every visible range with it.
 fn snippet(line_no: usize, line: &str, m: LineMatch) -> LineHit {
-    let lead = line.len() - line.trim_start().len();
-    let end = floor_boundary(line.trim_start(), SNIPPET_MAX);
-    let text = &line.trim_start()[..end];
+    let trimmed = line.trim_start();
+    let lead = line.len() - trimmed.len();
+    let anchor = m
+        .ranges
+        .first()
+        .map(|&(start, end)| {
+            let start = start.saturating_sub(lead);
+            let end = end.saturating_sub(lead);
+            start + (end - start) / 2
+        })
+        .unwrap_or(0);
+    let latest_start = trimmed.len().saturating_sub(SNIPPET_MAX);
+    let mut start = anchor.saturating_sub(SNIPPET_MAX / 2).min(latest_start);
+    while !trimmed.is_char_boundary(start) {
+        start -= 1;
+    }
+    let end = start + floor_boundary(&trimmed[start..], SNIPPET_MAX);
+    let text = &trimmed[start..end];
+    let original_start = lead + start;
+    let original_end = lead + end;
     let ranges = m
         .ranges
         .iter()
-        .filter(|&&(s, e)| s >= lead && e <= lead + end)
-        .map(|&(s, e)| (s - lead, e - lead))
+        .filter(|&&(s, e)| s >= original_start && e <= original_end)
+        .map(|&(s, e)| (s - original_start, e - original_start))
         .collect();
     LineHit {
         line: line_no,
@@ -542,6 +560,29 @@ mod tests {
         assert_eq!(h.best.text, "deeply indented tmux line");
         let (s, e) = h.best.ranges[0];
         assert_eq!(&h.best.text[s..e], "tmux");
+    }
+
+    #[test]
+    fn long_line_snippets_center_and_highlight_the_match() {
+        let mut buf = String::new();
+        let line = format!("{} needle {}", "é".repeat(180), "tail".repeat(100));
+        let hits = file_hits("long.md", &line, &q("needle"), &mut buf).expect("matches");
+
+        assert!(hits.best.text.len() <= SNIPPET_MAX);
+        assert!(hits.best.text.is_char_boundary(hits.best.text.len()));
+        assert!(
+            hits.best.text.contains("needle"),
+            "the matching text must be inside the displayed window: {:?}",
+            hits.best.text
+        );
+        let (start, end) = hits.best.ranges[0];
+        assert_eq!(&hits.best.text[start..end], "needle");
+        let old_end = floor_boundary(&line, SNIPPET_MAX);
+        assert_ne!(
+            hits.best.text,
+            line[..old_end],
+            "the window should move away from the unrelated first 320 bytes"
+        );
     }
 
     fn fixture_root() -> std::path::PathBuf {
