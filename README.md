@@ -196,8 +196,8 @@ instead of snapping, and never changes your zoom.
 | `]` / `[` | walk a highlight through the **connections strip** (children `▸`, outgoing `→`, incoming `←`); `Enter` follows it |
 | `Enter` / double-click | open the file in `$VISUAL`/`$EDITOR` (terminal editors get a **new terminal window**; set `$TERMINAL` to choose which); dirs open in the file manager |
 | `e` | **edit in the graph**: the file — or folder, as the editor's picker — opens in your terminal editor inside a live `tg_edit` card, tethered to the node itself (also on right-click); the card dies when the editor exits |
-| `t` | new **terminal** card at this node's folder, focused and ready to type |
-| `a` | launch the **default agent** (`,` settings) at this node's folder, focused when it appears |
+| `t` | new **terminal** card at this node's folder — focused, ready to type, and placed where you are looking |
+| `a` | launch the **default agent** (`,` settings) at this node's folder; its card appears focused and in view |
 | `Esc` | dismiss whatever is transient first — the finder, then the settings window, then the link or card cursor — then deselect, back to camera mode |
 
 ### Terminal cards
@@ -282,7 +282,11 @@ you clicked:
 - **Launch agent** — one click on **Launch <default>** starts your default
   agent (pi out of the box; change it in ⚙ settings), or pick claude /
   codex / … from the submenu (the same list that drives discovery). It
-  starts in a detached `tg_*` tmux session cwd'd at that folder; its live card fades in within a couple of seconds. The session is
+  starts in a detached `tg_*` tmux session cwd'd at that folder; its live
+  card fades in within a couple of seconds, on screen where you are
+  looking — it takes the keyboard the moment it appears, so it never opens
+  off the edge of the view. From then on it's an ordinary card: drag it
+  where you want it and it stays, across restarts. The session is
   plain tmux and outlives the viewer — `tmux attach -t tg_claude` works from
   any terminal. Launches resolve the agent against the tmux server's PATH
   (not just the viewer's — IDE-launched viewers carry stripped ones), and

@@ -40,6 +40,10 @@ pub(super) struct Terminals {
     /// A just-launched session to focus the moment discovery shows it
     /// (with a takeover deadline — a dead launch must not steal keys later).
     pub(super) focus_pending: Option<(String, Instant)>,
+    /// A just-launched card that must land where the user is LOOKING.
+    /// Settled at paint time, where the card's rect at this zoom is finally
+    /// known — see `offscreen_shift`.
+    pub(super) place_pending: Option<(String, String)>,
     /// The card the terminal cursor is on: expanded, Enter focuses it.
     /// Tab / Shift+Tab step it through `cards_in_order`.
     pub(super) cursor: Option<(String, String)>,
@@ -85,6 +89,7 @@ impl Terminals {
             resize: None,
             fly_to: None,
             focus_pending: None,
+            place_pending: None,
             cursor: None,
             hover_since: None,
             pinned: HashMap::new(),
@@ -356,6 +361,23 @@ pub(super) fn hash_angle(session: &str, pane: &str, index: usize) -> f32 {
     }
     h = h.wrapping_add(index as u32 * 97);
     (h % 628) as f32 / 100.0
+}
+
+/// How far a card must move to be worth showing, or `None` when it is
+/// already as visible as it can get. Used once, on a card we just
+/// launched: its anchor node can sit anywhere in the graph, and a focused
+/// card off the edge of the canvas is a keyboard trap — you are typing
+/// into something you cannot see.
+///
+/// The yardstick is how much of the card COULD be shown, not how much of
+/// it fits: an expanded terminal is often larger than the canvas, and
+/// judging that by containment would drag every card to the middle
+/// forever.
+pub(super) fn offscreen_shift(card: Rect, view: Rect) -> Option<Vec2> {
+    let vis = card.intersect(view);
+    let shown = vis.width().max(0.0) * vis.height().max(0.0);
+    let best = (card.width().min(view.width()) * card.height().min(view.height())).max(1.0);
+    (shown / best < 0.9).then(|| view.center() - card.center())
 }
 
 pub(super) fn map_key(key: Key) -> Option<Special> {
@@ -662,6 +684,17 @@ impl Viewer {
         }) {
             self.terms.cursor = None;
         }
+        // A pane that never painted (session died during launch) must not
+        // leave a placement waiting forever.
+        if self.terms.place_pending.as_ref().is_some_and(|(s, p)| {
+            !self
+                .terms
+                .panes
+                .iter()
+                .any(|a| &a.session == s && &a.pane == p)
+        }) {
+            self.terms.place_pending = None;
+        }
         // A just-launched session focuses the moment discovery shows it —
         // you launched it to type into it. Deadline-guarded so a slow or
         // dead launch can't steal the keyboard minutes later.
@@ -669,7 +702,9 @@ impl Viewer {
             if let Some(a) = self.terms.panes.iter().find(|a| a.session == name) {
                 let key = (a.session.clone(), a.pane.clone());
                 self.terms.cursor = Some(key.clone());
-                self.terms.focused = Some(key);
+                self.terms.focused = Some(key.clone());
+                // ...and lands in view, for the same reason it takes focus
+                self.terms.place_pending = Some(key);
                 self.terms.focus_pending = None;
             } else if t0.elapsed() > Duration::from_secs(10) {
                 self.terms.focus_pending = None;
@@ -813,7 +848,7 @@ impl Viewer {
             // out), past the node's radius in screen space — the tether
             // points inward and the card never sits on top of the cluster
             // it's attached to.
-            let (card, tether_to) = if let Some(off) = self.terms.offsets.get(&key) {
+            let (mut card, mut tether_to) = if let Some(off) = self.terms.offsets.get(&key) {
                 let card = Rect::from_center_size(anchor_s + *off * self.zoom, size);
                 (card, card.center())
             } else {
@@ -833,6 +868,24 @@ impl Viewer {
                 let center = Rect::from_min_size(min, base_size).center();
                 (Rect::from_center_size(center, size), p)
             };
+            // A card we just opened lands where the user is looking. Its
+            // anchor is wherever the launch pointed — the vault root, a note
+            // three screens away — so the natural spot is often off the
+            // canvas entirely, and this card takes the keyboard the moment
+            // it appears. Moving the CARD rather than the camera keeps the
+            // view the user built; the placement then becomes an ordinary
+            // arrangement offset (draggable, persisted, parked by session)
+            // rather than a special case that has to be re-decided later.
+            if self.terms.place_pending.as_ref() == Some(&key) {
+                self.terms.place_pending = None;
+                if let Some(shift) = offscreen_shift(card, rect) {
+                    self.terms
+                        .offsets
+                        .insert(key.clone(), (card.center() + shift - anchor_s) / self.zoom);
+                    card = card.translate(shift);
+                    tether_to = card.center();
+                }
+            }
             // Double-click fly-in: the zoom jump already happened in the
             // input pass; now that the card's rect is known at the new zoom,
             // shift the view so the card sits centered.
@@ -1265,6 +1318,43 @@ mod tests {
             !t.pinned.contains_key(&key),
             "the unpin must stick — no leftover may re-pin the pane"
         );
+    }
+
+    /// A launched card takes the keyboard, so it has to be somewhere the
+    /// user can see; a card already in view must not be yanked to the
+    /// middle just because it was launched.
+    #[test]
+    fn a_launched_card_is_moved_only_when_it_cannot_be_seen() {
+        let canvas = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(1000.0, 800.0));
+        let inside = Rect::from_center_size(Pos2::new(300.0, 200.0), Vec2::new(260.0, 82.0));
+        assert_eq!(offscreen_shift(inside, canvas), None, "already visible");
+
+        // off the right edge entirely: centered on the canvas
+        let away = Rect::from_center_size(Pos2::new(2400.0, 200.0), Vec2::new(260.0, 82.0));
+        let shift = offscreen_shift(away, canvas).expect("off-canvas cards come back");
+        assert_eq!(away.translate(shift).center(), canvas.center());
+
+        // half over the edge counts as not visible — reading a terminal
+        // needs the whole card, not most of it
+        let straddling = Rect::from_center_size(Pos2::new(1000.0, 400.0), Vec2::new(260.0, 82.0));
+        assert!(offscreen_shift(straddling, canvas).is_some());
+    }
+
+    /// An expanded terminal is routinely taller than the canvas. Judging
+    /// visibility by containment would find it "off-screen" every time it
+    /// was launched, so the test is how much of it COULD be shown.
+    #[test]
+    fn a_card_larger_than_the_canvas_is_left_where_it_is_once_centered() {
+        let canvas = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(600.0, 400.0));
+        let giant = Rect::from_center_size(canvas.center(), Vec2::new(900.0, 700.0));
+        assert_eq!(
+            offscreen_shift(giant, canvas),
+            None,
+            "as visible as it gets"
+        );
+        let shoved = giant.translate(Vec2::new(700.0, 0.0));
+        let shift = offscreen_shift(shoved, canvas).expect("but not when shoved aside");
+        assert_eq!(shoved.translate(shift).center(), canvas.center());
     }
 
     #[test]

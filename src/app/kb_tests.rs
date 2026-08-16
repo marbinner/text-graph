@@ -1824,3 +1824,106 @@ fn shift_g_zooms_to_the_selections_neighbourhood() {
     );
     assert!(tight <= 6.0, "but never rockets in: {tight}");
 }
+
+/// A launched card lands where the user is LOOKING. Its anchor node can
+/// be anywhere in the graph — and the card takes the keyboard the moment
+/// it appears, so one off the edge of the canvas is a keyboard trap.
+///
+/// This drives the real paint path (never `sync_terminals`, which would
+/// attach mirrors against the user's tmux server): the placement can only
+/// be decided where the card's rect at this zoom is known.
+#[test]
+fn a_launched_card_is_placed_inside_the_view() {
+    use eframe::egui;
+    use text_graph::agents::AgentPane;
+    use text_graph::mirror::{TermCell, TermGrid};
+
+    const CANVAS: egui::Rect = egui::Rect {
+        min: egui::Pos2::new(0.0, 0.0),
+        max: egui::Pos2::new(900.0, 700.0),
+    };
+
+    let key = ("tg_claude".to_string(), "%1".to_string());
+    let launch = |away: bool| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+        let scan = vault::scan(&root).expect("fixture scans");
+        let mut viewer = Viewer::new(graph::build(scan), root.clone(), config::Config::default());
+        // an agent card tethered to a note, exactly as discovery reports it
+        viewer.terms.panes = vec![AgentPane {
+            session: key.0.clone(),
+            pane: key.1.clone(),
+            pid: 1,
+            cwd: root,
+            agent: "claude".into(),
+            ours: true,
+            anchor: Some("index.md".into()),
+        }];
+        let cell = TermCell {
+            ch: ' ',
+            fg: None,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            inverse: false,
+        };
+        let grid = TermGrid {
+            cols: 80,
+            rows: 24,
+            cells: vec![cell; 80 * 24],
+            cursor: None,
+        };
+        viewer
+            .terms
+            .cache
+            .insert(key.clone(), super::terminals::build_cached(&grid));
+        // just launched: focused, and waiting to be placed
+        viewer.terms.focused = Some(key.clone());
+        viewer.terms.cursor = Some(key.clone());
+        viewer.terms.place_pending = Some(key.clone());
+        let anchor = viewer.g.by_path("index.md").expect("index exists");
+        viewer.zoom = 1.0;
+        viewer.center = viewer.world_pos(anchor.0 as usize);
+        if away {
+            // the camera is three screens away from where the card tethers
+            viewer.center.x += 3000.0;
+        }
+        let mut h = Harness::new_ui_state(
+            |ui, v: &mut Viewer| {
+                let painter = ui.painter().clone();
+                let slot = painter.add(egui::Shape::Noop);
+                v.paint_terminals(&painter, CANVAS, CANVAS.expand(60.0), slot);
+            },
+            viewer,
+        );
+        h.step();
+        h
+    };
+
+    let h = launch(true);
+    let card = h
+        .state()
+        .terms
+        .rects
+        .iter()
+        .find(|(s, p, _)| (s.clone(), p.clone()) == key)
+        .map(|(_, _, r)| *r)
+        .expect("an off-canvas card is brought back, so it paints");
+    assert_eq!(
+        card.center(),
+        CANVAS.center(),
+        "a card launched out of view lands in the middle of it"
+    );
+    assert!(
+        h.state().terms.offsets.contains_key(&key),
+        "and keeps its spot as an ordinary arrangement — draggable, saved"
+    );
+
+    // the other half: a card whose anchor is right under the camera is
+    // already visible, and must not be yanked to the middle for it
+    let h = launch(false);
+    assert!(
+        h.state().terms.offsets.is_empty(),
+        "a card that opens in view is left where its node put it"
+    );
+}

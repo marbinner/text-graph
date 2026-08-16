@@ -218,7 +218,14 @@
   NOT reach the initial pane — tested). A 2.5s watchdog flashes when a
   launched session is already gone. Launched sessions auto-focus via
   `terms.focus_pending` (deadline-guarded) when discovery first shows
-  them.
+  them, and land IN VIEW: `terms.place_pending` carries the new card into
+  `paint_terminals` (the only place its rect at this zoom is known), where
+  `offscreen_shift` centers it on the canvas unless it is already visible.
+  A launched card takes the keyboard, so one parked off the edge — its
+  anchor can be anywhere in the graph — is a keyboard trap. The CARD
+  moves, never the camera (the view is the user's), and the move is
+  written as an ordinary `offsets` entry, so it drags, persists and parks
+  like any arrangement instead of being re-decided every frame.
 - Launch-style keybinds (e/t/a — and l's and Enter's editor open) must
   exclude key REPEAT (`pressed_fresh`): a held key would otherwise spawn
   a session/editor per repeat tick. Anything that ultimately spawns a
