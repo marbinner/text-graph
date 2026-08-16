@@ -25,27 +25,29 @@
 - make it so I can drag and drop files and paste shit into the gui.
 - when I pin a terminal/agent pane with ctrl+click it should stay at the exact same part of the screen regardless how I move. It's basically a stiky terminal I can take with me whereeve. 
 - syntax highlighting in the text previewer.
+- there should be a quick model ready to use for quickly editing files or doing something at a certain node.
+- whenever a node is highlighted, for example due to it being the most relevant node currently in the search, then it should be expanded in the graph view for the user. For example if it's a terminal pane. 
+
 
 
 # todo next
 - for opening an agent with 'a' or editor with 'e' or most other bindings like these, we should only have to hover over a node with the cursor, we shouldn't have to click on it first. So I shoudl be able to just hover over a node, press 'e' and then it opens up in the editor. Or I shoudl be able to do the same with 'a' and it opens up the default agent in the corresponding folder.
 - the side pane should have a more predictable witdth. The default hsould be 25% or so of the total window by default, and it should not resize automatically. It should stay the width it is set to by the user.
-- add a bunch of basic stuff to the settings so they're centralized and configuarable.
-    - size of various text and UI.
-    - how far we have to zoom in to see previews etc.
-    - graph physics
 - perfect the focus mechanics and focus history.
     - we want to be able to fluidly choose which node to focus on with minimal cognitive effort.
     - we want to track a history of which panels were focused so we can jump back and forth quickly.
     - when fuzzy searching we want to put higher priority on recently visited nodes.
     - the telescope like fuzzy search
+- in the normal graph view pressing tab and shift+tab should scroll me through the terminal/agent panes. It should change the zoom but it should take me around in a deterministic order and expandthe terminals. I can press enter to focus if I wanna type
 
 
+#
+- when doing fuzzy search and focusing on a terminal, it should change the zoom of the camera, it shoudl just open the pane where it is while centering the camera on it. otherwise we lose overview of other nearby things.
+ in progress
 
-# in progress
-- fuzzy search across the entire graph including contents of the text files. We should replace our existing search feature with a more highly powered nvim telescope like search. We want to be able to match file,names,content etc. and be able to easily preview and pick the node we want. quickly finding the exact node we want using keyboard and search should be one of the central features. If the fuzzy search gives many results I should be able to quickly use the arrow keys to select the one I ant from the menu, where I can quickly preview each search result as I scroll through them like in telescope. This is a very important freature to get just right.
 
 # done
+- fuzzy search across the entire graph including contents of the text files. We should replace our existing search feature with a more highly powered nvim telescope like search. We want to be able to match file,names,content etc. and be able to easily preview and pick the node we want. quickly finding the exact node we want using keyboard and search should be one of the central features. If the fuzzy search gives many results I should be able to quickly use the arrow keys to select the one I ant from the menu, where I can quickly preview each search result as I scroll through them like in telescope. This is a very important freature to get just right.
 - when I start a new terminal/agent it should be focused by default. also I wanna start adding more keybindngs. For example when I have a folder focused and I press 'a' then the default agent pane should open in that folder. When I press t a terminal pane should open. (remove the existing keybinding that says t shoudl jump between panes. we don't need that). when I press e it should open the node in my default editor, whether it is a text file or a folder.
 - have a menu for settings.
     - light mode vs. dark mode
