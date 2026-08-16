@@ -935,7 +935,10 @@ impl Viewer {
                     .font(FontId::proportional(15.0))
                     .desired_width(f32::INFINITY),
             );
-            if self.picker.focus_pending {
+            // the prompt owns the keyboard for as long as the picker is
+            // open: a click into the preview drops widget focus, and every
+            // keystroke after it would fall through to the graph keybinds
+            if self.picker.focus_pending || ui.memory(|m| m.focused().is_none()) {
                 resp.request_focus();
                 self.picker.focus_pending = false;
             }

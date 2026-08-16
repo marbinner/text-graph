@@ -961,8 +961,10 @@ impl Viewer {
         }
 
         // vim-style camera: hjkl pans (when no node is selected), d/u zooms
-        // — continuous while held
-        if widget_free {
+        // — continuous while held. Suppressed under the picker: its prompt
+        // can lose focus (a click into the preview), and a bare 'd' must
+        // not start zooming the canvas behind an open finder.
+        if widget_free && !self.picker.open {
             let (dt, h, j, k, l, d, u) = ui.input(|i| {
                 let m = i.modifiers.is_none() && !tree_nav;
                 (

@@ -504,7 +504,9 @@ fn picker_ui_renders_prompt_results_and_preview() {
     let mut h = Harness::new_ui_state(
         |ui, v: &mut Viewer| {
             v.pump_picker(ui.ctx());
-            v.picker_ui(ui);
+            if v.picker.open {
+                v.picker_ui(ui);
+            }
         },
         viewer,
     );
@@ -566,4 +568,37 @@ fn an_empty_prompt_lists_the_vault_without_moving_the_camera() {
     wait_for(&mut h, "the camera glide after a deliberate move", |v| {
         v.cam_anim.is_some()
     });
+}
+
+/// The keystroke that OPENS the picker must not land in its prompt: the
+/// text event for "/" is queued for the same frame in which the field
+/// takes focus.
+#[test]
+fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root);
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            v.pump_picker(ui.ctx());
+            // like the real ui(): the pane exists only while it is open,
+            // and its prompt holds the keyboard for exactly that long
+            if v.picker.open {
+                v.picker_ui(ui);
+            }
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    h.step();
+    // a real keyboard sends both a Text event and a Key event
+    h.input_mut()
+        .events
+        .push(eframe::egui::Event::Text("/".into()));
+    h.key_press(Key::Slash);
+    h.step();
+    h.step();
+    assert!(h.state().picker.open, "the picker opened");
+    assert_eq!(h.state().picker.query, "", "and its prompt is empty");
 }
