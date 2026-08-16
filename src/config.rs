@@ -714,8 +714,10 @@ mod tests {
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        let mut c = Config::default();
-        c.light = true;
+        let c = Config {
+            light: true,
+            ..Config::default()
+        };
         save_to(&link, &c).unwrap();
         assert!(
             std::fs::symlink_metadata(&link).unwrap().is_symlink(),
