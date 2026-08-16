@@ -543,7 +543,12 @@ pub fn save(c: &Config) -> std::io::Result<()> {
     let Some(p) = path() else {
         return Err(std::io::Error::other("no HOME or XDG_CONFIG_HOME"));
     };
-    let target = std::fs::canonicalize(&p).unwrap_or(p);
+    save_to(&p, c)
+}
+
+/// `save` with the destination spelled out — the testable half.
+pub fn save_to(p: &Path, c: &Config) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let dir = target
         .parent()
         .ok_or_else(|| std::io::Error::other("config path has no parent"))?;
@@ -692,6 +697,37 @@ mod tests {
         assert_eq!(c.agent(), "mycoder");
         c.extra_agents.clear();
         assert_eq!(c.agent(), "pi", "a stale choice must not reach sh -c");
+    }
+
+    #[test]
+    fn saving_creates_the_dir_and_keeps_a_symlinked_config_a_symlink() {
+        // Config files are commonly symlinks into a dotfiles repo; a plain
+        // tmp+rename would replace the link with a regular file and the
+        // repo would silently stop receiving changes.
+        let base = std::env::temp_dir().join(format!("tg-cfgsave-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dotfiles = base.join("dotfiles");
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        let real = dotfiles.join("tg-config");
+        std::fs::write(&real, "text-graph config v1\n").unwrap();
+        let link = base.join("config").join("text-graph").join("config");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let mut c = Config::default();
+        c.light = true;
+        save_to(&link, &c).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link).unwrap().is_symlink(),
+            "the symlink was replaced by a regular file"
+        );
+        assert_eq!(from_text(&std::fs::read_to_string(&real).unwrap()), c);
+
+        // and a plain path in a directory that doesn't exist yet
+        let fresh = base.join("fresh").join("config");
+        save_to(&fresh, &c).unwrap();
+        assert_eq!(from_text(&std::fs::read_to_string(&fresh).unwrap()), c);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

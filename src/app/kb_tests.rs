@@ -713,3 +713,84 @@ fn the_scanning_hint_stays_quiet_for_short_scans() {
         "…while the scan it stayed quiet about actually ran"
     );
 }
+
+/// `,` opens the ⚙ window and Esc closes it — and, like the picker, a
+/// pending text edit inside it is its own first stage of the dismiss
+/// chain (egui drops widget focus at frame START on Escape, so the
+/// `widget_free` guard can never see the field being escaped out of).
+#[test]
+fn comma_opens_settings_and_esc_backs_out_one_stage_at_a_time() {
+    let mut h = harness();
+    select(&mut h, "index.md");
+    press(&mut h, Key::Comma);
+    assert!(h.state().settings.open, "',' opens the settings window");
+
+    press(&mut h, Key::Comma);
+    assert!(!h.state().settings.open, "',' again closes it");
+
+    press(&mut h, Key::Comma);
+    h.state_mut().settings.editing = Some(("editor", "hx".into()));
+    press(&mut h, Key::Escape);
+    assert!(
+        h.state().settings.open,
+        "the first Esc abandons the half-typed value, not the window"
+    );
+    assert!(h.state().settings.editing.is_none(), "…and drops the edit");
+
+    press(&mut h, Key::Escape);
+    assert!(!h.state().settings.open, "the second Esc closes the window");
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("index.md"),
+        "backing out of settings must not also deselect"
+    );
+}
+
+/// The window renders itself from the registry: the section's rows, their
+/// help text, and a filter that reaches across sections.
+#[test]
+fn settings_render_the_registry_and_filter_across_sections() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
+    let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.settings_ui(ui.ctx()), viewer);
+    h.state_mut().settings.open = true;
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label_contains("light theme").is_some(),
+        "the appearance section's rows render"
+    );
+    assert!(
+        h.query_by_label_contains("terminal cards stay dark")
+            .is_some(),
+        "each row explains itself"
+    );
+    assert!(
+        h.query_by_label_contains("default agent").is_none(),
+        "another section's rows stay in their section"
+    );
+
+    h.state_mut().settings.filter = "agent".into();
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label_contains("default agent").is_some(),
+        "the filter reaches settings outside the open section"
+    );
+}
+
+/// A setting is only real once it survives a restart: the window writes
+/// through `Spec::apply`, so what the UI can set is exactly what the file
+/// can carry back.
+#[test]
+fn a_setting_changed_in_the_window_round_trips_through_the_config_file() {
+    use text_graph::config::{Value, spec};
+    let mut h = harness();
+    let s = spec("hover_delay").expect("declared");
+    s.apply(&mut h.state_mut().cfg, Value::Num(0.8));
+    let text = text_graph::config::to_text(&h.state().cfg);
+    let back = text_graph::config::from_text(&text);
+    assert_eq!(back.hover_delay, 0.8, "the value comes back as written");
+    assert_eq!(back, h.state().cfg, "and nothing else moved");
+}

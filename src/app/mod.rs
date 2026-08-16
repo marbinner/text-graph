@@ -456,7 +456,8 @@ struct Viewer {
     theme: Theme,
     /// egui visuals need (re)applying (startup, theme toggle).
     apply_visuals: bool,
-    settings_open: bool,
+    /// The ⚙ window's own state (open, section, filter, pending edit).
+    settings: settings::SettingsUi,
     /// User preferences (per user, not per vault) — see `config.rs`. The
     /// canvas reads it live, so every change shows on the next frame.
     cfg: config::Config,
@@ -654,7 +655,7 @@ impl Viewer {
             last_canvas_rect: None,
             theme,
             apply_visuals: true,
-            settings_open: false,
+            settings: settings::SettingsUi::default(),
             cfg,
             cam_anim: None,
             n_files,
@@ -736,6 +737,7 @@ impl Viewer {
             )
         });
         let no_mods = ui.input(|i| i.modifiers.is_none());
+        let settings_key = no_mods && pressed_fresh(ui, Key::Comma);
         let (term_key, web_key, edit_key, agent_key) = (
             no_mods && pressed_fresh(ui, Key::T),
             no_mods && pressed_fresh(ui, Key::W),
@@ -753,6 +755,15 @@ impl Viewer {
             self.picker_keys(ui);
         } else if open_key && widget_free {
             self.picker.open();
+        } else if settings_key && widget_free {
+            self.toggle_settings();
+        } else if esc && self.settings_escape() {
+            // the ⚙ window dismisses before the graph does: a pending text
+            // edit first, then the window. Unguarded by `widget_free` for
+            // the same reason as the picker — egui surrenders widget focus
+            // at frame START on Escape, so the guard can't see the field
+            // that is being escaped OUT of. (Side-effecting condition:
+            // settings_escape only acts when the window is open.)
         } else if esc && widget_free {
             // dismiss order: link cursor, terminal cursor, then selection.
             // (The search prompt is handled a branch above, while it still
