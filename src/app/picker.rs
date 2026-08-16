@@ -1327,7 +1327,7 @@ impl Viewer {
         egui::Area::new(egui::Id::new("tg-picker"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
-            .constrain_to(screen.shrink(8.0))
+            .constrain(false)
             .show(ctx, |ui| {
                 ui.set_width(w);
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -1398,10 +1398,17 @@ impl Viewer {
                     // empty prompt those are the recently edited files,
                     // which used to be built and then never shown.
                     ui.separator();
-                    // it runs from here to the bottom margin: a finder you
-                    // can only see three results in is a finder you have to
-                    // scroll to use
-                    let h = ui.available_height().max(ROW_H * 3.0);
+                    // The list runs from here to the bottom margin — but
+                    // measured against the SCREEN, never against
+                    // `ui.available_height()`. An Area sizes its Ui from
+                    // last frame's content (`state.size = min_size()`), so
+                    // asking it how much room is left feeds the list its
+                    // own previous height: one narrow result set shrank the
+                    // area, which capped the next list shorter, which
+                    // shrank it again. A latch that only ever ratchets
+                    // down. The cursor's top is content-independent (prompt
+                    // + status are fixed height), so this is stable.
+                    let h = (screen.bottom() - 8.0 - ui.cursor().top()).max(ROW_H * 3.0);
                     self.picker_list(ui, h);
                 });
             });
@@ -1423,10 +1430,18 @@ impl Viewer {
             return;
         }
         let cursor = self.picker.cursor;
+        // The list RESERVES its height instead of shrinking to its rows.
+        // An egui Area sizes its Ui from last frame's content, so a list
+        // that shrank to two results left the Ui too short to hold a
+        // bigger one next frame — the finder got smaller and stayed
+        // smaller. Reserving also stops the box resizing under the eye on
+        // every keystroke, which is what a telescope-style finder wants
+        // anyway.
         let mut area = egui::ScrollArea::vertical()
             .id_salt("tg-picker-list")
             .max_height(max_h)
-            .auto_shrink([false, true]);
+            .min_scrolled_height(max_h)
+            .auto_shrink([false, false]);
         if self.picker.scroll {
             self.picker.scroll = false;
             // keep the cursor row inside the viewport with the SMALLEST

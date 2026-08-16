@@ -1326,6 +1326,9 @@ fn the_finder_list_fills_the_window_and_shows_the_empty_prompt_rows() {
         viewer,
     );
     super::install_icon_font(&h.ctx);
+    // pin the prompt high so the assertion is about the list FILLING what
+    // is below it, not about where this build puts the prompt
+    h.state_mut().cfg.finder_y = 0.25;
     press(&mut h, Key::F);
     h.step();
     let win = h.ctx.content_rect().height();
@@ -1398,5 +1401,59 @@ fn the_pane_recovers_its_width_after_the_window_narrows() {
         h.state().pane_width,
         None,
         "and none of that counted as the user choosing a width"
+    );
+}
+
+/// The result list must grow back. An egui `Area` sizes its Ui from LAST
+/// frame's content, so measuring the list against `available_height()`
+/// fed it its own previous height: one search with two hits shrank the
+/// overlay, which capped the next list shorter, which shrank it again —
+/// a latch that only ratcheted down, and the finder never recovered its
+/// height until you closed it.
+#[test]
+fn a_narrow_result_set_does_not_shrink_the_finder_for_good() {
+    let d = std::env::temp_dir().join(format!("tg-shrink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    for i in 0..40 {
+        std::fs::write(d.join(format!("note{i:02}.md")), "x").unwrap();
+    }
+    std::fs::write(d.join("lonely.md"), "x").unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            v.pump_picker(ui.ctx());
+            v.picker_overlay_ui(ui.ctx());
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    press(&mut h, Key::F);
+
+    let query = |h: &mut Harness<'_, Viewer>, q: &str| {
+        h.state_mut().picker.query = q.into();
+        for _ in 0..3 {
+            h.step();
+        }
+        (h.state().picker.rows.len(), h.state().picker.list_h)
+    };
+    let (many, tall) = query(&mut h, "note");
+    let (few, short) = query(&mut h, "lonely");
+    let (_, back) = query(&mut h, "note");
+    let _ = std::fs::remove_dir_all(&d);
+
+    assert!(many > 10 && few <= 2, "{many} then {few} rows");
+    assert!(
+        tall > 5.0 * 34.0,
+        "the list has room for its results: {tall}"
+    );
+    assert_eq!(
+        (short, back),
+        (tall, tall),
+        "the finder holds its height: it must not shrink to a narrow \
+         result set (and then be stuck there), nor resize under the eye \
+         on every keystroke"
     );
 }
