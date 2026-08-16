@@ -762,6 +762,7 @@ mod tests {
         assert_eq!(c.agent(), "pi", "a stale choice must not reach sh -c");
     }
 
+    #[cfg(unix)]
     #[test]
     fn saving_creates_the_dir_and_keeps_a_symlinked_config_a_symlink() {
         // Config files are commonly symlinks into a dotfiles repo; a plain

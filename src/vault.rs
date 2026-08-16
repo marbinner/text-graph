@@ -590,6 +590,7 @@ mod tests {
     /// the fact — proven by an unreadable child inside target/: descent
     /// would surface a "(walk)" permission error, pruning surfaces
     /// nothing. (Skips quietly as root, where nothing is unreadable.)
+    #[cfg(unix)]
     #[test]
     fn skipped_dirs_are_never_descended() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -640,6 +641,7 @@ mod tests {
     /// Walk errors must come out sorted — readdir order is not stable
     /// across filesystems/runs, and errors print verbatim in stats and the
     /// diag window. (Skips quietly where permissions can't fail, e.g. root.)
+    #[cfg(unix)]
     #[test]
     fn walk_errors_are_sorted_not_readdir_ordered() {
         use std::os::unix::fs::PermissionsExt as _;

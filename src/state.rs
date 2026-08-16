@@ -499,6 +499,7 @@ mod tests {
     /// Saving must refuse to follow planted symlinks — it fires ~3s after
     /// opening a vault with no interaction, so a hostile vault could
     /// otherwise truncate an arbitrary user-writable file.
+    #[cfg(unix)]
     #[test]
     fn save_refuses_symlinked_state_dir_and_ignores_legacy_tmp() {
         use std::os::unix::fs::symlink;
