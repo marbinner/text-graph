@@ -22,6 +22,7 @@ pub const GRACE: Duration = Duration::from_secs(10);
 const OWNER_OPTION: &str = "@tg_owner";
 const OWNER_VALUE: &str = "text-graph";
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(5);
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Run one short tmux lifecycle command with a deadline. Tmux output is tiny,
 /// so polling before `wait_with_output` is safe; a wedged server is killed
@@ -404,16 +405,19 @@ pub fn kill_pane(pane: &str) -> std::io::Result<bool> {
 /// that line safely — the degradation is a missing card, never a
 /// mis-parsed one.
 pub fn scan(vault: &Path) -> Result<Vec<PaneInfo>, String> {
-    let out = Command::new("tmux")
-        .args([
-            "list-panes",
-            "-a",
-            "-F",
-            "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_owner}\t#{@tg_anchor}\t#{pane_current_path}",
-        ])
-        .output();
-    let Ok(out) = out else {
-        return Ok(Vec::new()); // no tmux binary — the feature is absent
+    let mut command = Command::new("tmux");
+    command.args([
+        "list-panes",
+        "-a",
+        "-F",
+        "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_owner}\t#{@tg_anchor}\t#{pane_current_path}",
+    ]);
+    let out = match lifecycle_output_with_timeout(&mut command, DISCOVERY_TIMEOUT) {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(error.to_string()),
     };
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);

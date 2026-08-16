@@ -37,6 +37,22 @@ fn spawn_lifecycle(
     });
 }
 
+struct DiscoveryWorker {
+    stop: std::sync::mpsc::Sender<()>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for DiscoveryWorker {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(handle) = self.handle.take()
+            && handle.thread().id() != std::thread::current().id()
+        {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// All terminal-card state, grouped: discovery, mirrors, screen caches,
 /// focus/cursor, arrangement, gestures, and search scores.
 pub(super) struct Terminals {
@@ -48,6 +64,7 @@ pub(super) struct Terminals {
     /// Commands eligible for foreign-pane discovery. Settings replace this
     /// shared snapshot while the long-lived scanner thread is running.
     pub(super) allowlist: Arc<Mutex<Vec<String>>>,
+    discovery_worker: Option<DiscoveryWorker>,
     pub(super) panes: Vec<AgentPane>,
     pub(super) mirrors: HashMap<String, SessionMirror>,
     /// Sessions whose last mirror attach failed, with the failure time —
@@ -122,6 +139,7 @@ impl Terminals {
             seen: Arc::new(Mutex::new(Vec::new())),
             discovery_error: Arc::new(Mutex::new(None)),
             allowlist: Arc::new(Mutex::new(allowlist)),
+            discovery_worker: None,
             panes: Vec::new(),
             mirrors: HashMap::new(),
             attach_backoff: HashMap::new(),
@@ -154,6 +172,10 @@ impl Terminals {
                 .map(|o| o.status.success())
                 .unwrap_or(false),
         }
+    }
+
+    pub(super) fn stop_agent_scan(&mut self) {
+        self.discovery_worker.take();
     }
 
     /// Cards that render their full screen at a readable size regardless of
@@ -666,19 +688,25 @@ impl Viewer {
 
     /// Poll tmux for agent panes anchored in this vault (default server),
     /// publish diffs, wake the UI.
-    pub(super) fn start_agent_scan(&self, ctx: egui::Context) {
+    pub(super) fn start_agent_scan(&mut self, ctx: egui::Context) {
+        self.terms.stop_agent_scan();
         let shared = self.terms.seen.clone();
         let discovery_error = self.terms.discovery_error.clone();
         let allowlist = self.terms.allowlist.clone();
         let root = self.root.clone();
-        std::thread::spawn(move || {
+        let (stop, stop_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
             let mut tracker = agents::Tracker::new();
             let mut failing_since: Option<Instant> = None;
             loop {
+                match stop_rx.try_recv() {
+                    Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
                 let publish = |active: Vec<agents::AgentPane>| {
-                    let mut s = shared.lock().unwrap();
-                    if *s != active {
-                        *s = active;
+                    let mut seen = shared.lock().unwrap();
+                    if *seen != active {
+                        *seen = active;
                         ctx.request_repaint();
                     }
                 };
@@ -710,8 +738,15 @@ impl Viewer {
                         }
                     }
                 }
-                std::thread::sleep(Duration::from_millis(1500));
+                match stop_rx.recv_timeout(Duration::from_millis(1500)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
             }
+        });
+        self.terms.discovery_worker = Some(DiscoveryWorker {
+            stop,
+            handle: Some(handle),
         });
     }
 
@@ -1671,5 +1706,28 @@ mod tests {
         t.cursor = None;
         t.focused = Some(key.clone());
         assert!(t.is_expanded(&key));
+    }
+
+    #[test]
+    fn discovery_worker_signals_and_joins_when_dropped() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let exited = Arc::new(AtomicBool::new(false));
+        let worker_exited = exited.clone();
+        let (stop, stop_rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _ = stop_rx.recv();
+            worker_exited.store(true, Ordering::SeqCst);
+        });
+        let worker = DiscoveryWorker {
+            stop,
+            handle: Some(handle),
+        };
+
+        drop(worker);
+        assert!(
+            exited.load(Ordering::SeqCst),
+            "drop must wait until the scanner has observed cancellation"
+        );
     }
 }

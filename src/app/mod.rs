@@ -2263,6 +2263,7 @@ impl eframe::App for Viewer {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.terms.stop_agent_scan();
         self.persist_state(true);
     }
 }
