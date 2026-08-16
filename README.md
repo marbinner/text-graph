@@ -112,6 +112,7 @@ focus a terminal and every key goes to the agent until `Ctrl+Q`.
 | drag a node | move it — pins to the cursor, the simulation responds live |
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
+| `Tab` / `Shift+Tab` | step through the terminal cards — each expands where it sits, `Enter` goes in |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
 | `,` or `⚙` (bottom-right) | **settings** — see below |
 | `?` | every keybinding, in the settings window |
@@ -154,7 +155,9 @@ source. A search rides out vault reloads: agents saving notes underneath
 you re-scan in the background without emptying the list, moving your
 cursor, or blinking the preview. On the canvas, matching nodes stay lit
 and the highlighted result **glides into view** as you arrow down — into
-the band above the prompt, so it never hides behind it.
+the band above the prompt, so it never hides behind it — and it **opens
+up** while you look at it: a terminal card expands, a note becomes its
+preview card, an image its picture, however far out you are standing.
 
 The pane opens at a quarter of the window and then keeps whatever width
 you drag it to (per vault, across restarts).

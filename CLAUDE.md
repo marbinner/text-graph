@@ -166,8 +166,19 @@
   vault-relative path — edit sessions pin to their FILE node; the binding
   lives in tmux so it survives viewer restarts) when it resolves, else the
   nearest dir at the pane's cwd.
-- Card interaction contract: click = focus (keyboard → pane, graph keybinds
-  suspend), Ctrl+click = toggle pin (📌 expanded at any zoom, several at
+- Card interaction contract: Tab / Shift+Tab step the terminal CURSOR
+  through `terms.cards_in_order()` (session, then pane NUMBER — `%10`
+  sorts before `%2` as a string, and discovery order isn't sorted),
+  centering without touching zoom; the cursor is what expands the card,
+  and Enter enters it. Tab is consumed (`input_mut::consume_key`) so
+  egui's focus navigation can't eat the next one — but never while the
+  overlay is open, where Tab swaps its source, and Shift+Tab must be
+  consumed FIRST because a bare-modifier match isn't exact. Anything the
+  finder highlights is drawn OPENED (`terms.best` for cards,
+  `highlighted_node()` for the rest, with an `OPENED_MIN_R` floor so it
+  is readable at any zoom); `node_box` uses the same rule, or rings and
+  clicks would follow a shape the reader can't see. Also: click = focus
+  (keyboard → pane, graph keybinds suspend), Ctrl+click = toggle pin (📌 expanded at any zoom, several at
   once, never touches focus; persisted and parked/claimed by session like
   arrangements), drag = arrange (world-space offset from anchor in
   `terms.offsets`; offsets reference the card CENTER, so expansion grows
