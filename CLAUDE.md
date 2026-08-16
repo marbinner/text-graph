@@ -248,7 +248,18 @@
   — with the prompt `cfg.finder_y` down it and the list filling
   everything from there to the bottom margin. Never cap the list at a
   fraction: prompt height and visible rows trade against each other, and
-  a cap turned a laptop screen into three visible results. The list is
+  a cap turned a laptop screen into three visible results. Three rules
+  there are load-bearing, and all three exist because egui REMEMBERS
+  sizes: the list height is measured against the SCREEN, never
+  `ui.available_height()` (an Area sizes its Ui from last frame's
+  content, so that feeds the list its own previous height); the Area is
+  `constrain(false)` (constraining lifts an overflowing overlay and drops
+  it back when it fits, and the lower position caps the next list, which
+  prevents the overflow that would lift it — a deadlock); and the list
+  RESERVES its height rather than shrinking to its rows (a shrunk Area Ui
+  is too short to hold a bigger list next frame). Together they are why
+  the finder can't ratchet down, guarded by
+  `a_narrow_result_set_does_not_shrink_the_finder_for_good`. The list is
   drawn whenever there are ROWS, not only while a query is live (an empty
   prompt has the recently-edited ones). Previews never live there: the side pane is the
   one place a file previews, searched-to or walked-to. Framing
