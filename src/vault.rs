@@ -5,6 +5,7 @@
 //! No global state — every file is parsed independently. Resolution of the
 //! extracted targets happens in [`crate::resolve`].
 
+use std::collections::HashMap;
 use std::io::Read as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -426,11 +427,15 @@ pub(crate) fn excluded_ranges(body: &str) -> Vec<Range<usize>> {
 /// are stripped from the returned target.
 /// Extract external http(s) URLs from a body — markdown link targets,
 /// autolinks, and bare URLs alike — skipping code (fenced and inline).
-/// Deduplicated by exact text (first occurrence's offset wins), document
-/// order.
+/// Deduplicated by exact text in document order: the first occurrence's
+/// offset wins, while the first authored label is retained even if it appears
+/// on a later duplicate.
 pub fn extract_externals(body: &str) -> Vec<RawExternal> {
     let excluded = excluded_ranges(body);
     let mut out: Vec<RawExternal> = Vec::new();
+    // Keys borrow from `body`, so deduplication stays linear without keeping
+    // a second owned copy of every URL.
+    let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut i = 0;
     while let Some(found) = body[i..].find("http") {
         let start = i + found;
@@ -464,12 +469,19 @@ pub fn extract_externals(body: &str) -> Vec<RawExternal> {
             let t = before[open + 1..].trim();
             (!t.is_empty() && !t.contains('\n') && t.len() <= 100).then(|| t.to_string())
         });
-        if url.len() > scheme_len && !out.iter().any(|u| u.url == url) {
-            out.push(RawExternal {
-                url: url.to_string(),
-                offset: start,
-                text,
-            });
+        if url.len() > scheme_len {
+            if let Some(&index) = seen.get(url) {
+                if out[index].text.is_none() {
+                    out[index].text = text;
+                }
+            } else {
+                seen.insert(url, out.len());
+                out.push(RawExternal {
+                    url: url.to_string(),
+                    offset: start,
+                    text,
+                });
+            }
         }
     }
     out
@@ -704,6 +716,20 @@ mod tests {
             extract_externals("https://").is_empty(),
             "a bare scheme is not a URL"
         );
+    }
+
+    #[test]
+    fn later_duplicate_url_contributes_its_first_authored_label() {
+        let body = concat!(
+            "bare https://example.com/page then ",
+            "[Great source](https://example.com/page) and ",
+            "[Later name](https://example.com/page)"
+        );
+        let externals = extract_externals(body);
+
+        assert_eq!(externals.len(), 1);
+        assert_eq!(externals[0].offset, body.find("https://").unwrap());
+        assert_eq!(externals[0].text.as_deref(), Some("Great source"));
     }
 
     #[test]
