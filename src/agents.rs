@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 /// How long a vanished pane's agent identity is remembered (covers scan
@@ -20,6 +20,37 @@ pub const GRACE: Duration = Duration::from_secs(10);
 /// only human-readable conventions and must never grant resize privileges.
 const OWNER_OPTION: &str = "@tg_owner";
 const OWNER_VALUE: &str = "text-graph";
+const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Run one short tmux lifecycle command with a deadline. Tmux output is tiny,
+/// so polling before `wait_with_output` is safe; a wedged server is killed
+/// rather than occupying a worker and its in-flight UI slot forever.
+fn lifecycle_output(cmd: &mut Command) -> std::io::Result<Output> {
+    lifecycle_output_with_timeout(cmd, LIFECYCLE_TIMEOUT)
+}
+
+fn lifecycle_output_with_timeout(cmd: &mut Command, timeout: Duration) -> std::io::Result<Output> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("tmux command timed out after {}s", timeout.as_secs_f32()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 /// A raw tmux pane whose cwd is inside the vault (pre-filtering).
 #[derive(Clone, Debug, PartialEq)]
@@ -128,7 +159,7 @@ fn launch_path(socket: Option<&str>) -> Option<String> {
             c.args(["-L", l]);
         }
         c.args(["show-environment", "-g", "PATH"]);
-        let out = c.output().ok()?;
+        let out = lifecycle_output(&mut c).ok()?;
         if !out.status.success() {
             return None;
         }
@@ -217,8 +248,7 @@ fn launch_named(
             format!("tg_{slug}_{n}")
         };
         // '=' prefix = exact session-name match, not prefix match
-        let taken = tmux(&["has-session", "-t", &format!("={name}")])
-            .output()?
+        let taken = lifecycle_output(&mut tmux(&["has-session", "-t", &format!("={name}")]))?
             .status
             .success();
         if taken {
@@ -246,7 +276,7 @@ fn launch_named(
         if let Some(cmd) = cmd {
             c.arg(path_cmd(good_path.as_deref(), cmd));
         }
-        let created = c.output()?;
+        let created = lifecycle_output(&mut c)?;
         if created.status.success() {
             // Target the immutable session id, not its reusable name: a
             // command that exits instantly can make the name available
@@ -257,9 +287,15 @@ fn launch_named(
                     "tmux did not return a session id for {name}"
                 )));
             }
-            let marked = tmux(&["set-option", "-t", &session_id, OWNER_OPTION, OWNER_VALUE])
-                .status()?
-                .success();
+            let marked = lifecycle_output(&mut tmux(&[
+                "set-option",
+                "-t",
+                &session_id,
+                OWNER_OPTION,
+                OWNER_VALUE,
+            ]))?
+            .status
+            .success();
             if !marked {
                 return Err(std::io::Error::other(format!(
                     "could not mark tmux session {name} as owned"
@@ -269,15 +305,20 @@ fn launch_named(
                 // best-effort: a failed set-option just means the card
                 // falls back to its cwd's dir node. The immutable session
                 // id also prevents attaching the anchor to a reused name.
-                let _ = tmux(&["set-option", "-t", &session_id, "@tg_anchor", a]).status();
+                let _ = lifecycle_output(&mut tmux(&[
+                    "set-option",
+                    "-t",
+                    &session_id,
+                    "@tg_anchor",
+                    a,
+                ]));
             }
             return Ok(name);
         }
         // probe→create isn't atomic: if the name was claimed in between
         // (another viewer instance), move on to the next; anything else is
         // a real failure
-        let lost_race = tmux(&["has-session", "-t", &format!("={name}")])
-            .output()?
+        let lost_race = lifecycle_output(&mut tmux(&["has-session", "-t", &format!("={name}")]))?
             .status
             .success();
         if !lost_race {
@@ -287,6 +328,14 @@ fn launch_named(
         }
     }
     Err(std::io::Error::other("all tg_ session names taken"))
+}
+
+/// Kill one pane on the default server with the same bounded lifecycle
+/// command behavior as launches.
+pub fn kill_pane(pane: &str) -> std::io::Result<bool> {
+    let mut command = Command::new("tmux");
+    command.args(["kill-pane", "-t", pane]);
+    Ok(lifecycle_output(&mut command)?.status.success())
 }
 
 /// One-shot scan of the default tmux server. Returns every pane whose cwd is
@@ -451,6 +500,16 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_commands_time_out() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec sleep 1"]);
+        let error = lifecycle_output_with_timeout(&mut command, Duration::from_millis(25))
+            .expect_err("the sleeping command should exceed its deadline");
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
 
     #[test]
     fn parse_filters_to_vault() {

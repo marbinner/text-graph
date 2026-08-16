@@ -1020,7 +1020,8 @@ impl Viewer {
         {
             // t = new terminal at the selected node's folder
             let dir = self.node_dir(sel);
-            self.new_terminal(&dir);
+            let ctx = ui.ctx().clone();
+            self.new_terminal(&ctx, &dir);
         } else if agent_key
             && widget_free
             && self.terms.tmux_ok

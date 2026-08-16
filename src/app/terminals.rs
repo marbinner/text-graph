@@ -6,6 +6,37 @@
 use super::actions::{detached, new_terminal_window};
 use super::*;
 
+enum LaunchKind {
+    Agent { agent: String },
+    Terminal,
+    Edit { rel: String, editor: String },
+}
+
+enum LifecycleEvent {
+    Launch {
+        kind: LaunchKind,
+        result: std::io::Result<String>,
+    },
+    Kill {
+        session: String,
+        pane: String,
+        result: std::io::Result<bool>,
+    },
+}
+
+fn spawn_lifecycle(
+    ctx: &egui::Context,
+    tx: std::sync::mpsc::Sender<LifecycleEvent>,
+    task: impl FnOnce() -> LifecycleEvent + Send + 'static,
+) {
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let event = task();
+        let _ = tx.send(event);
+        ctx.request_repaint();
+    });
+}
+
 /// All terminal-card state, grouped: discovery, mirrors, screen caches,
 /// focus/cursor, arrangement, gestures, and search scores.
 pub(super) struct Terminals {
@@ -66,6 +97,12 @@ pub(super) struct Terminals {
     /// Flash messages from background threads (launch watchdogs), drained
     /// into the status line each frame.
     pub(super) bg_flash: Arc<Mutex<Vec<String>>>,
+    /// Launch/kill subprocess completions. The commands themselves never run
+    /// on the egui thread.
+    lifecycle_tx: std::sync::mpsc::Sender<LifecycleEvent>,
+    lifecycle_rx: std::sync::mpsc::Receiver<LifecycleEvent>,
+    launch_pending: bool,
+    kill_pending: HashSet<(String, String)>,
     /// Fuzzy-search scores for panes (aligned with `panes`).
     pub(super) scores: Vec<Option<u32>>,
     /// Best terminal hit: index at scoring time plus its key.
@@ -80,6 +117,7 @@ impl Terminals {
         parked_pins: HashMap<String, Vec<(String, ())>>,
         allowlist: Vec<String>,
     ) -> Self {
+        let (lifecycle_tx, lifecycle_rx) = std::sync::mpsc::channel();
         Terminals {
             seen: Arc::new(Mutex::new(Vec::new())),
             discovery_error: Arc::new(Mutex::new(None)),
@@ -104,6 +142,10 @@ impl Terminals {
             pinned: HashMap::new(),
             parked_pins,
             bg_flash: Arc::new(Mutex::new(Vec::new())),
+            lifecycle_tx,
+            lifecycle_rx,
+            launch_pending: false,
+            kill_pending: HashSet::new(),
             scores: Vec::new(),
             best: None,
             tmux_ok: std::process::Command::new("tmux")
@@ -658,9 +700,74 @@ impl Viewer {
         });
     }
 
+    fn apply_lifecycle_events(&mut self, ctx: &egui::Context) {
+        let events: Vec<LifecycleEvent> = self.terms.lifecycle_rx.try_iter().collect();
+        for event in events {
+            match event {
+                LifecycleEvent::Launch { kind, result } => {
+                    self.terms.launch_pending = false;
+                    match (kind, result) {
+                        (LaunchKind::Agent { agent }, Ok(name)) => {
+                            self.set_flash(format!("launched {agent} — session {name}"));
+                            self.terms.focus_pending = Some((name.clone(), Instant::now()));
+                            self.watch_instant_death(ctx, name, agent);
+                        }
+                        (LaunchKind::Agent { .. }, Err(error)) => {
+                            self.set_flash(format!("launch failed: {error}"));
+                        }
+                        (LaunchKind::Terminal, Ok(name)) => {
+                            self.set_flash(format!("opened terminal — session {name}"));
+                            self.terms.focus_pending = Some((name, Instant::now()));
+                        }
+                        (LaunchKind::Terminal, Err(error)) => {
+                            self.set_flash(format!("terminal failed: {error}"));
+                        }
+                        (LaunchKind::Edit { rel, editor }, Ok(name)) => {
+                            self.set_flash(format!("editing {rel} — session {name}"));
+                            self.terms.focus_pending = Some((name.clone(), Instant::now()));
+                            self.watch_instant_death(ctx, name, editor);
+                        }
+                        (LaunchKind::Edit { .. }, Err(error)) => {
+                            self.set_flash(format!("edit launch failed: {error}"));
+                        }
+                    }
+                }
+                LifecycleEvent::Kill {
+                    session,
+                    pane,
+                    result,
+                } => {
+                    self.terms
+                        .kill_pending
+                        .remove(&(session.clone(), pane.clone()));
+                    match result {
+                        Ok(true) => {
+                            if self
+                                .terms
+                                .focused
+                                .as_ref()
+                                .is_some_and(|(fs, fp)| fs == &session && fp == &pane)
+                            {
+                                self.terms.focused = None;
+                            }
+                            self.set_flash(format!("killed {session} {pane}"));
+                        }
+                        Ok(false) => {
+                            self.set_flash(format!("kill failed for {session} {pane}"));
+                        }
+                        Err(error) => {
+                            self.set_flash(format!("kill failed for {session} {pane}: {error}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Snapshot discovery, keep mirrors in sync with it, pump events, and
     /// refresh converted screens per mirror generation.
     pub(super) fn sync_terminals(&mut self, ctx: &egui::Context) {
+        self.apply_lifecycle_events(ctx);
         let bg: Vec<String> = std::mem::take(&mut *self.terms.bg_flash.lock().unwrap());
         for msg in bg {
             self.set_flash(msg);
@@ -1227,25 +1334,44 @@ impl Viewer {
 
     /// Kill just this pane (pane ids are server-global). tmux ends the
     /// session with its last pane, which removes the card via discovery.
-    pub(super) fn kill_pane(&mut self, session: &str, pane: &str) {
-        let ok = std::process::Command::new("tmux")
-            .args(["kill-pane", "-t", pane])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
-            if self
-                .terms
-                .focused
-                .as_ref()
-                .is_some_and(|(fs, fp)| fs == session && fp == pane)
-            {
-                self.terms.focused = None;
-            }
-            self.set_flash(format!("killed {session} {pane}"));
-        } else {
-            self.set_flash(format!("kill failed for {session} {pane}"));
+    pub(super) fn kill_pane(&mut self, ctx: &egui::Context, session: &str, pane: &str) {
+        let key = (session.to_string(), pane.to_string());
+        if !self.terms.kill_pending.insert(key.clone()) {
+            self.set_flash(format!("already killing {session} {pane}"));
+            return;
         }
+        self.set_flash(format!("killing {session} {pane}…"));
+
+        let tx = self.terms.lifecycle_tx.clone();
+        let (session, pane) = key;
+        spawn_lifecycle(ctx, tx, move || {
+            let result = agents::kill_pane(&pane);
+            LifecycleEvent::Kill {
+                session,
+                pane,
+                result,
+            }
+        });
+    }
+
+    fn launch_in_background(
+        &mut self,
+        ctx: &egui::Context,
+        kind: LaunchKind,
+        starting: String,
+        task: impl FnOnce() -> std::io::Result<String> + Send + 'static,
+    ) {
+        if self.terms.launch_pending {
+            self.set_flash("another tmux launch is still pending".into());
+            return;
+        }
+        self.terms.launch_pending = true;
+        self.set_flash(starting);
+        let tx = self.terms.lifecycle_tx.clone();
+        spawn_lifecycle(ctx, tx, move || LifecycleEvent::Launch {
+            kind,
+            result: task(),
+        });
     }
 
     /// Instant-death watchdog: a command that exits immediately (binary
@@ -1286,26 +1412,24 @@ impl Viewer {
 
     pub(super) fn launch_agent(&mut self, ctx: &egui::Context, dir: &str, agent: &str) {
         let path = self.ctx_path(dir);
-        match agents::launch(None, &path, agent) {
-            Ok(name) => {
-                self.set_flash(format!("launched {agent} — session {name}"));
-                self.terms.focus_pending = Some((name.clone(), Instant::now()));
-                self.watch_instant_death(ctx, name, agent.to_string());
-            }
-            Err(e) => self.set_flash(format!("launch failed: {e}")),
-        }
+        let agent = agent.to_string();
+        let kind = LaunchKind::Agent {
+            agent: agent.clone(),
+        };
+        self.launch_in_background(ctx, kind, format!("launching {agent}…"), move || {
+            agents::launch(None, &path, &agent)
+        });
     }
 
     /// A plain shell card at `dir`, focused as soon as it appears.
-    pub(super) fn new_terminal(&mut self, dir: &str) {
+    pub(super) fn new_terminal(&mut self, ctx: &egui::Context, dir: &str) {
         let path = self.ctx_path(dir);
-        match agents::launch_shell(None, &path) {
-            Ok(name) => {
-                self.set_flash(format!("opened terminal — session {name}"));
-                self.terms.focus_pending = Some((name, Instant::now()));
-            }
-            Err(e) => self.set_flash(format!("terminal failed: {e}")),
-        }
+        self.launch_in_background(
+            ctx,
+            LaunchKind::Terminal,
+            "opening terminal…".into(),
+            move || agents::launch_shell(None, &path),
+        );
     }
 
     /// Is this a node "Edit here" applies to — markdown, a text asset,
@@ -1346,20 +1470,52 @@ impl Viewer {
             "env COLORFGBG='15;0' {editor} '{}'",
             abs.display().to_string().replace('\'', r"'\''")
         );
-        match agents::launch_edit(None, &dir, &cmd, &rel) {
-            Ok(name) => {
-                self.set_flash(format!("editing {rel} — session {name}"));
-                self.terms.focus_pending = Some((name.clone(), Instant::now()));
-                self.watch_instant_death(ctx, name, editor);
-            }
-            Err(e) => self.set_flash(format!("edit launch failed: {e}")),
-        }
+        let anchor = rel.clone();
+        let kind = LaunchKind::Edit {
+            rel: rel.clone(),
+            editor,
+        };
+        self.launch_in_background(
+            ctx,
+            kind,
+            format!("opening editor for {rel}…"),
+            move || agents::launch_edit(None, &dir, &cmd, &anchor),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_tasks_return_before_the_worker_is_released() {
+        let ctx = egui::Context::default();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        spawn_lifecycle(&ctx, event_tx, move || {
+            let released = release_rx.recv_timeout(Duration::from_millis(500)).is_ok();
+            LifecycleEvent::Kill {
+                session: "s".into(),
+                pane: "%1".into(),
+                result: Ok(released),
+            }
+        });
+
+        // This line is reachable before the task finishes only when the task
+        // runs on its worker rather than inline on the UI/caller thread.
+        release_tx.send(()).unwrap();
+        let event = event_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let LifecycleEvent::Kill {
+            result: Ok(released),
+            ..
+        } = event
+        else {
+            panic!("unexpected lifecycle result");
+        };
+        assert!(released, "the worker timed out before the caller returned");
+    }
 
     #[test]
     fn exited_mirrors_enter_backoff_before_reattach() {

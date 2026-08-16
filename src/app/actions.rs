@@ -241,7 +241,8 @@ impl Viewer {
                         .small(),
                 );
                 if ui.button(format!("Kill {s} {p}")).clicked() {
-                    self.kill_pane(&s, &p);
+                    let ctx = ui.ctx().clone();
+                    self.kill_pane(&ctx, &s, &p);
                 }
             });
             ui.separator();
@@ -288,7 +289,8 @@ impl Viewer {
         if self.terms.tmux_ok {
             ui.separator();
             if ui.button("New terminal").clicked() {
-                self.new_terminal(&dir);
+                let ctx = ui.ctx().clone();
+                self.new_terminal(&ctx, &dir);
             }
             // one click launches the DEFAULT agent (⚙ settings); the
             // submenu offers the full list
