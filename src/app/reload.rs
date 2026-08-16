@@ -222,6 +222,7 @@ impl Viewer {
             camera: Some((self.center.x, self.center.y, self.zoom)),
             cards,
             pins,
+            pane_width: self.pane_width,
             hide_web: !self.show_web,
             // theme and default agent live in the per-user config now;
             // these two are migration-only fields (see state.rs)

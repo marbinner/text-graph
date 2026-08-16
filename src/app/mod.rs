@@ -249,6 +249,25 @@ fn label_lod(kind: NodeKind, r: f32, density: f32) -> f32 {
     ((r - lo) / (hi - lo)).clamp(0.0, 1.0)
 }
 
+/// Side pane: the share of the window it opens at when the user has never
+/// resized it, and the floor it can be dragged to (below that the sibling
+/// column and the preview stop being usable side by side).
+const PANE_FRAC: f32 = 0.25;
+const PANE_MIN: f32 = 300.0;
+
+/// What the side pane should be this frame: the width the user last set,
+/// else its share of the window. Clamped so a window resize can never
+/// leave the pane wider than the canvas — the ONE case where it moves on
+/// its own.
+fn pane_width(win_w: f32, stored: Option<f32>) -> f32 {
+    // the 60% ceiling outranks the floor: on a window too small for both,
+    // the canvas keeps its share rather than the pane keeping its minimum
+    let max = (win_w * 0.6).max(1.0);
+    stored
+        .unwrap_or(win_w * PANE_FRAC)
+        .clamp(PANE_MIN.min(max), max)
+}
+
 /// Cursor flashlight: labels within this screen distance of the pointer are
 /// revealed even when the zoom LOD would hide them.
 const REVEAL_R: f32 = 130.0;
@@ -473,6 +492,10 @@ struct Viewer {
     n_webs: usize,
     /// Web nodes visible (the `w` toggle; persisted inverted as hide_web).
     show_web: bool,
+    /// Side-pane width the user dragged to, persisted per vault. `None`
+    /// until they touch it — then it is theirs and nothing but a window
+    /// too narrow to hold it may change it.
+    pane_width: Option<f32>,
     // ---- search ----
     matcher: Matcher,
     /// The picker: prompt, ranked results, preview, content-scan worker.
@@ -665,6 +688,7 @@ impl Viewer {
             n_assets,
             n_webs,
             show_web,
+            pane_width: vs.pane_width,
             matcher: Matcher::new(MatcherConfig::DEFAULT),
             picker: Picker::new(),
             root,
@@ -1972,9 +1996,23 @@ impl eframe::App for Viewer {
         // compensates the camera as the pane widens, so the highlighted
         // result glides into what stays visible.
         if self.selected.is_some() || self.picker.open {
-            egui::Panel::right("detail")
+            let win_w = ui.available_width();
+            let want = pane_width(win_w, self.pane_width);
+            let max = (win_w * 0.6).max(1.0);
+            let resp = egui::Panel::right("detail")
                 .resizable(true)
+                .size_range(PANE_MIN.min(max)..=max)
+                .default_size(want)
                 .show(ui, |ui| self.side_pane(ui));
+            // Record the width only while the pointer is down — that means
+            // a DRAG. Without the guard, a window briefly too narrow to
+            // hold the pane would clamp it and then save the clamp as the
+            // user's choice, quietly shrinking it for good.
+            let got = resp.response.rect.width();
+            let dragging = ui.input(|i| i.pointer.any_down());
+            if self.pane_width.is_none() || (dragging && (got - want).abs() > 0.5) {
+                self.pane_width = Some(got);
+            }
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(self.theme.bg))

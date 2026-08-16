@@ -244,7 +244,6 @@ impl Viewer {
     /// to the vault root, so `f` never opens onto a blank pane.
     pub(super) fn side_pane(&mut self, ui: &mut egui::Ui) {
         if self.picker.searching() {
-            ui.set_min_width(430.0);
             self.picker_preview_ui(ui);
         } else if let Some(sel) = self
             .selected
@@ -272,7 +271,6 @@ impl Viewer {
             (node.display_name().to_string(), sub, node.parent)
         };
 
-        ui.set_min_width(430.0);
         ui.add_space(6.0);
         let mut jump: Option<NodeId> = None;
 
@@ -328,7 +326,10 @@ impl Viewer {
         ui.allocate_ui(egui::vec2(ui.available_width(), col_h), |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
-                    ui.set_width(150.0);
+                    // the sibling column takes a SHARE of the pane, so
+                    // dragging the pane narrower shrinks it instead of
+                    // squeezing the preview out
+                    ui.set_width((ui.available_width() * 0.36).clamp(110.0, 200.0));
                     egui::ScrollArea::vertical()
                         .id_salt("nav-sibs")
                         .auto_shrink([false, false])

@@ -922,3 +922,48 @@ fn the_key_list_renders_and_a_filter_falls_back_to_settings() {
         "a filter reaches the settings even from the keys tab"
     );
 }
+
+/// The side pane opens at a quarter of the window and then belongs to the
+/// user: mode switches (ranger ↔ search preview) must not resize it, and
+/// only a window too narrow to hold it may.
+#[test]
+fn the_side_pane_defaults_to_a_quarter_and_then_stays_put() {
+    let quarter = super::pane_width(1600.0, None);
+    assert_eq!(quarter, 400.0, "a quarter of the window when never set");
+    assert_eq!(
+        super::pane_width(1600.0, Some(720.0)),
+        720.0,
+        "what the user dragged to is what they get"
+    );
+    assert_eq!(
+        super::pane_width(600.0, Some(720.0)),
+        360.0,
+        "…until the window can't hold it: never more than 60% of it"
+    );
+    assert!(
+        super::pane_width(800.0, Some(120.0)) >= 300.0,
+        "and never so narrow the columns stop working"
+    );
+    // on a window too small for both, the ceiling wins and the canvas
+    // keeps its share
+    assert!((super::pane_width(400.0, None) - 240.0).abs() < 0.1);
+}
+
+/// A dragged width outlives the session it was set in.
+#[test]
+fn the_pane_width_round_trips_through_the_view_file() {
+    use text_graph::state;
+    let s = state::ViewState {
+        pane_width: Some(512.0),
+        ..Default::default()
+    };
+    assert_eq!(
+        state::from_text(&state::to_text(&s)).pane_width,
+        Some(512.0)
+    );
+    let corrupt = state::from_text("text-graph view v1\npane\t99999\n");
+    assert!(
+        corrupt.pane_width.is_some_and(|w| w <= 4000.0),
+        "a hand-edited width is clamped, like the camera"
+    );
+}

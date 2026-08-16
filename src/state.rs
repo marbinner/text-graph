@@ -19,6 +19,9 @@ pub struct ViewState {
     pub cards: Vec<CardPos>,
     /// (session, pane) cards pinned open — expanded at any zoom.
     pub pins: Vec<(String, String)>,
+    /// Side-pane width in points, as the user last dragged it. `None` =
+    /// never set, so it opens at its share of the window.
+    pub pane_width: Option<f32>,
     /// Web nodes hidden by the `w` toggle. Stored inverted so the derived
     /// Default (false) means the default view: webs visible.
     pub hide_web: bool,
@@ -59,6 +62,9 @@ pub fn to_text(s: &ViewState) -> String {
     }
     for (session, pane) in &s.pins {
         out.push_str(&format!("pin\t{pane}\t{session}\n"));
+    }
+    if let Some(w) = s.pane_width {
+        out.push_str(&format!("pane\t{w}\n"));
     }
     if s.hide_web {
         out.push_str("hide_web\n");
@@ -101,6 +107,15 @@ pub fn from_text(text: &str) -> ViewState {
                         dy,
                     });
                 }
+            }
+            Some("pane") => {
+                // clamped on the way in like the camera: a corrupt width
+                // could park the pane over the whole window
+                s.pane_width = line
+                    .split('\t')
+                    .nth(1)
+                    .and_then(|v| num(Some(v)))
+                    .map(|w| w.clamp(120.0, 4000.0));
             }
             Some("hide_web") => s.hide_web = true,
             Some("light") => s.light = Some(true),
@@ -253,6 +268,7 @@ mod tests {
                 ("tg_claude".to_string(), "%4".to_string()),
                 ("work".to_string(), "%0".to_string()),
             ],
+            pane_width: Some(412.5),
             hide_web: true,
             light: None,
             default_agent: None,
@@ -293,6 +309,7 @@ mod tests {
             camera: None,
             cards: vec![card("weird\tname", "%1", 1.0, 2.0)],
             pins: vec![("weird\tname".to_string(), "%1".to_string())],
+            pane_width: None,
             hide_web: false,
             light: None,
             default_agent: None,
