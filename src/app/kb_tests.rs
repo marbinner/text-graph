@@ -706,3 +706,33 @@ fn the_finder_recenters_on_a_card_without_zooming() {
         "double-click still flies in"
     );
 }
+
+/// The "scanning…" hint is for scans long enough to explain a wait. Every
+/// keystroke starts one and every agent save (a vault reload) restarts
+/// one, and on a normal vault those finish in milliseconds — showing the
+/// hint for each made it strobe in and out.
+#[test]
+fn the_scanning_hint_stays_quiet_for_short_scans() {
+    let mut h = harness();
+    press(&mut h, Key::F);
+    h.state_mut().picker.query = "heading".into();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    for i in 0..40 {
+        h.step();
+        assert!(
+            !h.state().picker.scan_hint(),
+            "the fixture scan is milliseconds long — the hint must stay quiet"
+        );
+        if i == 20 {
+            // an agent saving a note mid-search: a reload, and the rescan
+            // it kicks off, must not make the hint blink either
+            let rebuilt = graph::build(vault::scan(&root).expect("rescan"));
+            h.state_mut().apply_graph(rebuilt);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        h.state().picker.rows.iter().any(|r| r.snippet.is_some()),
+        "…while the scan it stayed quiet about actually ran"
+    );
+}

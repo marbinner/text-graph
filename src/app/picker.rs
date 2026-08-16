@@ -53,6 +53,16 @@ const OVERLAY_W_MAX: f32 = 760.0;
 const PROMPT_Y_FRAC: f32 = 0.52;
 /// Height budget for the result list under the prompt.
 const LIST_H_FRAC: f32 = 0.36;
+/// A scan has to run at least this long before the "scanning…" hint
+/// appears. Every vault reload (an agent saving anything) and every
+/// keystroke restarts one, and those finish in milliseconds — a label
+/// that strobed on each was noise, not information.
+const SCAN_HINT_DELAY: Duration = Duration::from_millis(250);
+/// Gap below which a new scan continues the previous one's clock: a scan
+/// that ends and restarts within a frame or two is one search still
+/// running, while a rescan kicked off by a reload a moment later is a new
+/// (and, on a normal vault, very short) one.
+const SCAN_RESUME_GAP: Duration = Duration::from_millis(40);
 /// How far ABOVE the canvas center a framed node is placed while the
 /// finder floats there — the middle of the band left free above the
 /// prompt. Without it, following a result would park it under the
@@ -139,7 +149,11 @@ pub(super) struct Picker {
     /// renumber the arena), tagged with the generation that found them so a
     /// finished scan can evict the previous one's leftovers.
     content: HashMap<String, (u64, FileHits)>,
-    pub(super) scanning: bool,
+    scanning: bool,
+    /// When the current run of scanning began, and when it last went idle
+    /// — together they decide whether the hint is worth showing.
+    scan_since: Option<Instant>,
+    scan_idle_at: Option<Instant>,
     /// A query whose scan finished COMPLETE (not cancelled, not truncated)
     /// and the vault-relative paths that had hits — the candidate set a
     /// longer query may narrow against instead of re-reading the vault.
@@ -183,6 +197,8 @@ impl Picker {
             rx,
             content: HashMap::new(),
             scanning: false,
+            scan_since: None,
+            scan_idle_at: None,
             done: None,
             pending_scan: None,
             pending_at: Instant::now(),
@@ -230,7 +246,33 @@ impl Picker {
     fn cancel(&mut self) {
         self.generation += 1;
         self.live.store(self.generation, Ordering::Relaxed);
-        self.scanning = false;
+        self.set_scanning(false);
+    }
+
+    /// Mark the scan busy or idle, keeping the "busy since" clock running
+    /// across the brief gaps between back-to-back scans (a keystroke ends
+    /// one and starts the next within a frame or two).
+    fn set_scanning(&mut self, on: bool) {
+        if on && !self.scanning {
+            let resumes = self
+                .scan_idle_at
+                .is_some_and(|t| t.elapsed() < SCAN_RESUME_GAP);
+            if !resumes || self.scan_since.is_none() {
+                self.scan_since = Some(Instant::now());
+            }
+        } else if !on && self.scanning {
+            self.scan_idle_at = Some(Instant::now());
+        }
+        self.scanning = on;
+    }
+
+    /// Is a scan worth telling the user about? Only one that has been
+    /// running long enough to explain a wait.
+    pub(super) fn scan_hint(&self) -> bool {
+        self.scanning
+            && self
+                .scan_since
+                .is_some_and(|t| t.elapsed() >= SCAN_HINT_DELAY)
     }
 
     /// A vault reload renumbered the nodes, so the name tier re-scores —
@@ -431,7 +473,7 @@ impl Viewer {
             self.picker.refilter(&q, &prev);
             self.picker.pending_scan = Some(q.clone());
             self.picker.pending_at = Instant::now();
-            self.picker.scanning = !q.is_empty();
+            self.picker.set_scanning(!q.is_empty());
             self.picker.dirty = true;
         }
         // the pane list changes underneath the rows (agents come and go)
@@ -465,7 +507,7 @@ impl Viewer {
                 ScanMsg::Done(generation, query, outcome)
                     if generation == self.picker.generation =>
                 {
-                    self.picker.scanning = false;
+                    self.picker.set_scanning(false);
                     if outcome.cancelled {
                         continue;
                     }
@@ -496,7 +538,7 @@ impl Viewer {
         let generation = self.picker.generation;
         self.picker.live.store(generation, Ordering::Relaxed);
         if q.is_empty() {
-            self.picker.scanning = false;
+            self.picker.set_scanning(false);
             self.picker.content.clear();
             self.picker.done = None;
             return;
@@ -520,7 +562,10 @@ impl Viewer {
             .map(|n| n.path.clone())
             .collect();
         files.sort();
-        self.picker.scanning = true;
+        self.picker.set_scanning(true);
+        // wake once when the hint would become due — a long scan with no
+        // hits produces no other repaint to ride on
+        ctx.request_repaint_after(SCAN_HINT_DELAY);
         let root = self.root.clone();
         let tx = self.picker.tx.clone();
         let live = self.picker.live.clone();
@@ -1007,7 +1052,7 @@ impl Viewer {
                                 if content == 1 { "" } else { "s" }
                             )
                         };
-                        if self.picker.scanning {
+                        if self.picker.scan_hint() {
                             line.push_str(" · scanning…");
                         }
                         ui.label(egui::RichText::new(line).small().color(dim));
@@ -1034,7 +1079,7 @@ impl Viewer {
             ui.label(
                 egui::RichText::new(if self.picker.query.trim().is_empty() {
                     "type to search"
-                } else if self.picker.scanning {
+                } else if self.picker.scan_hint() {
                     "no name matches yet — still scanning contents…"
                 } else {
                     "nothing matches"
