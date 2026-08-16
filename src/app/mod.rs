@@ -250,10 +250,11 @@ fn label_lod(kind: NodeKind, r: f32, density: f32) -> f32 {
 }
 
 /// Side pane: the share of the window it opens at when the user has never
-/// resized it, and the floor it can be dragged to (below that the sibling
-/// column and the preview stop being usable side by side).
-const PANE_FRAC: f32 = 0.25;
-const PANE_MIN: f32 = 300.0;
+/// resized it, and the floor it can be dragged to. A preview wants ~70
+/// characters of prose before it stops being a preview and becomes a
+/// column of syllables.
+const PANE_FRAC: f32 = 0.3;
+const PANE_MIN: f32 = 340.0;
 
 /// What the side pane should be this frame: the width the user last set,
 /// else its share of the window. Clamped so a window resize can never
@@ -493,8 +494,10 @@ struct Viewer {
     /// Web nodes visible (the `w` toggle; persisted inverted as hide_web).
     show_web: bool,
     /// Side-pane width the user dragged to, persisted per vault. `None`
-    /// until they touch it — then it is theirs and nothing but a window
-    /// too narrow to hold it may change it.
+    /// until they DRAG it — a default must never be written back, or the
+    /// first frame's window size (eframe opens at 1280 before the WM has
+    /// its say) freezes the pane at a fraction of a window that no longer
+    /// exists.
     pane_width: Option<f32>,
     // ---- search ----
     matcher: Matcher,
@@ -503,6 +506,11 @@ struct Viewer {
     // ---- detail pane ----
     root: PathBuf,
     md_cache: CommonMarkCache,
+    /// Width the pane's body actually laid out at, measured each frame.
+    /// A body that lays out wider than the pane is a body that will be
+    /// CLIPPED at the window edge — the wrap-width regression test reads
+    /// this, and a Cell so measuring can happen inside the paint closure.
+    pane_content_w: std::cell::Cell<f32>,
     /// What the side pane is previewing — the finder's highlighted row
     /// while it is open, else the selection. Built by `sync_pane_preview`,
     /// drawn by `preview_pane`: one subject, one previewer.
@@ -697,6 +705,7 @@ impl Viewer {
             picker: Picker::new(),
             root,
             md_cache: CommonMarkCache::default(),
+            pane_content_w: std::cell::Cell::new(0.0),
             pane_preview: None,
             detail: None,
             detail_stamp: None,
@@ -1998,18 +2007,18 @@ impl Viewer {
             .size_range(PANE_MIN.min(max)..=max)
             .default_size(want)
             .show(ui, |ui| self.side_pane(ui));
-        // Record the width only while the pointer is down — that means
-        // a DRAG. Without the guard, a window briefly too narrow to
-        // hold the pane would clamp it and then save the clamp as the
-        // user's choice, quietly shrinking it for good. The stored
-        // value is clamped as well: the reported rect is CONTENT-
-        // driven, so anything that overflows the pane must not be able
-        // to enter the width the user thinks they chose.
+        // Record the width only while the pointer is down — that means a
+        // DRAG. A computed default is NEVER written back: the first frame
+        // sees eframe's startup window, not the one the user ends up with,
+        // and persisting that froze the pane at a fraction of a window
+        // that no longer existed. Without the pointer guard, a window
+        // briefly too narrow would clamp the pane and save the clamp as
+        // the user's choice. The stored value is clamped too: the reported
+        // rect is CONTENT-driven, so nothing that overflows the pane may
+        // enter the width the user thinks they chose.
         let got = resp.response.rect.width();
         let dragging = ui.input(|i| i.pointer.any_down());
-        if self.pane_width.is_none() {
-            self.pane_width = Some(want);
-        } else if dragging && (got - want).abs() > 0.5 {
+        if dragging && (got - want).abs() > 0.5 {
             self.pane_width = Some(got.clamp(PANE_MIN.min(max), max));
         }
         got

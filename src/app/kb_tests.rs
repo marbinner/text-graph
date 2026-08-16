@@ -1061,9 +1061,12 @@ fn the_key_list_renders_and_a_filter_falls_back_to_settings() {
 /// user: mode switches (ranger ↔ search preview) must not resize it, and
 /// only a window too narrow to hold it may.
 #[test]
-fn the_side_pane_defaults_to_a_quarter_and_then_stays_put() {
-    let quarter = super::pane_width(1600.0, None);
-    assert_eq!(quarter, 400.0, "a quarter of the window when never set");
+fn the_side_pane_defaults_to_a_share_of_the_window_and_then_stays_put() {
+    assert_eq!(
+        super::pane_width(1600.0, None),
+        480.00003,
+        "a share of the window when never set"
+    );
     assert_eq!(
         super::pane_width(1600.0, Some(720.0)),
         720.0,
@@ -1075,8 +1078,8 @@ fn the_side_pane_defaults_to_a_quarter_and_then_stays_put() {
         "…until the window can't hold it: never more than 60% of it"
     );
     assert!(
-        super::pane_width(800.0, Some(120.0)) >= 300.0,
-        "and never so narrow the columns stop working"
+        super::pane_width(800.0, Some(120.0)) >= 340.0,
+        "and never so narrow the preview stops being one"
     );
     // on a window too small for both, the ceiling wins and the canvas
     // keeps its share
@@ -1095,10 +1098,16 @@ fn the_pane_width_round_trips_through_the_view_file() {
         state::from_text(&state::to_text(&s)).pane_width,
         Some(512.0)
     );
-    let corrupt = state::from_text("text-graph view v1\npane\t99999\n");
+    let corrupt = state::from_text("text-graph view v1\npane_w\t99999\n");
     assert!(
         corrupt.pane_width.is_some_and(|w| w <= 4000.0),
         "a hand-edited width is clamped, like the camera"
+    );
+    // the old `pane` key held widths the pane SEEDED itself with, from a
+    // window that no longer exists — they are dropped, not honoured
+    assert_eq!(
+        state::from_text("text-graph view v1\npane\t300\n").pane_width,
+        None
     );
 }
 
@@ -1132,6 +1141,7 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
     let probe = seen.clone();
     let mut h = Harness::new_ui_state(
         move |ui, v: &mut Viewer| {
+            v.pump_picker(ui.ctx());
             let w = v.side_panel(ui);
             probe.store(w.round() as u32, Ordering::Relaxed);
         },
@@ -1156,8 +1166,8 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
     );
     assert_eq!(
         h.state().pane_width,
-        Some(super::pane_width(win, None)),
-        "and the width the user owns is still the one it opened at"
+        None,
+        "and nothing was written back: only a DRAG owns the width"
     );
 }
 
@@ -1235,4 +1245,59 @@ fn a_structural_reload_reaims_the_pane_at_the_right_node() {
     let path = h.state().g.node(subject).path.clone();
     let _ = std::fs::remove_dir_all(&d);
     assert_eq!(path, "keeper.md", "and it followed the file, not the index");
+}
+
+/// Prose must wrap at the pane's width. `max_image_width(Some(400))` set
+/// a FLOOR under the markdown Ui, so on a narrower pane every paragraph
+/// wrapped at 400 and ran off the edge, clipped by the window. The pane
+/// also has to open at its share of the CURRENT window: the computed
+/// default must never be written back, or the first frame (eframe opens
+/// at 1280, before the window manager has its say) freezes it forever.
+#[test]
+fn the_preview_wraps_inside_the_pane_and_the_default_is_not_persisted() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let d = std::env::temp_dir().join(format!("tg-wrap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("note.md"),
+        format!(
+            "# note\n\n{}\n",
+            "some prose that should wrap inside the pane ".repeat(40)
+        ),
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let seen = Arc::new(AtomicU32::new(0));
+    let probe = seen.clone();
+    let mut h = Harness::new_ui_state(
+        move |ui, v: &mut Viewer| {
+            v.pump_picker(ui.ctx());
+            let w = v.side_panel(ui);
+            probe.store(w.round() as u32, Ordering::Relaxed);
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    let id = h.state().g.by_path("note.md").expect("note");
+    h.state_mut().selected = Some(id);
+    for _ in 0..4 {
+        h.step();
+    }
+    let win = h.ctx.content_rect().width();
+    let pane = seen.load(Ordering::Relaxed) as f32;
+    let content = h.state().pane_content_w.get();
+    let _ = std::fs::remove_dir_all(&d);
+    assert!(
+        content <= pane + 1.0,
+        "the preview laid out {content} wide in a {pane} pane — it will \
+         run off the edge and be clipped"
+    );
+    assert_eq!(
+        h.state().pane_width,
+        None,
+        "a width nobody dragged to must not be written back ({win} window)"
+    );
 }

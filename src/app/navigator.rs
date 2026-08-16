@@ -19,15 +19,36 @@ use picker::{Preview, PreviewBody, one_line, push_marked_mono};
 pub(super) fn preview_scroll<R>(
     ui: &mut egui::Ui,
     salt: &str,
+    self_width: &std::cell::Cell<f32>,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    let w = ui.available_width();
-    egui::ScrollArea::both()
+    egui::ScrollArea::vertical()
         .id_salt(salt)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.set_max_width(w);
-            add(ui)
+            let full = ui.available_rect_before_wrap();
+            let w = full.width();
+            // A CONTAINED child: `set_max_width` isn't enough, because egui
+            // re-expands a Ui's max_rect to its min_rect (placer.rs), so one
+            // wide table teaches every paragraph after it to wrap at the
+            // table's width — text ran off the pane and got clipped at the
+            // window edge. The child is built at exactly the pane's width,
+            // clipped to it, and only the rect WE allocate is reported
+            // upward, so nothing inside can widen the pane either.
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(
+                egui::Rect::from_min_size(full.min, egui::vec2(w, full.height())),
+            ));
+            child.set_clip_rect(full.intersect(ui.clip_rect()));
+            let r = add(&mut child);
+            // what the body ACTUALLY laid out at — the wrap-width
+            // regression test watches this
+            self_width.set(child.min_rect().width());
+            let h = child.min_rect().height();
+            ui.allocate_rect(
+                egui::Rect::from_min_size(full.min, egui::vec2(w, h)),
+                egui::Sense::hover(),
+            );
+            r
         })
         .inner
 }
@@ -118,8 +139,13 @@ impl Viewer {
                 // be borrowed simultaneously without a per-frame clone
                 let detail = self.detail.take();
                 if let Some((_, body)) = &detail {
-                    preview_scroll(ui, "nav-preview", |ui| {
-                        CommonMarkViewer::new().max_image_width(Some(400)).show(
+                    preview_scroll(ui, "nav-preview", &self.pane_content_w, |ui| {
+                        // images take the pane's width, never a fixed 400:
+                        // that constant set a FLOOR under the markdown Ui,
+                        // so prose wrapped at 400 and ran off a narrower
+                        // pane, clipped at the window edge
+                        let w = ui.available_width().max(80.0) as usize;
+                        CommonMarkViewer::new().max_image_width(Some(w)).show(
                             ui,
                             &mut self.md_cache,
                             body,
@@ -130,7 +156,7 @@ impl Viewer {
             }
             NodeKind::Dir => {
                 let children = self.g.node(id).children.clone();
-                preview_scroll(ui, "nav-preview", |ui| {
+                preview_scroll(ui, "nav-preview", &self.pane_content_w, |ui| {
                     ui.label(format!("{} entries — l enters", children.len()));
                     ui.add_space(4.0);
                     let w = ui.available_width();
@@ -195,7 +221,7 @@ impl Viewer {
                 if filetype::is_text(&path) {
                     let detail = self.detail.take();
                     if let Some((_, body)) = &detail {
-                        preview_scroll(ui, "nav-preview", |ui| {
+                        preview_scroll(ui, "nav-preview", &self.pane_content_w, |ui| {
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(body.as_str()).monospace().size(11.0),
@@ -347,9 +373,9 @@ impl Viewer {
             }
             PreviewBody::Screen(rows) => {
                 // a terminal screen is 80+ monospace columns wide and
-                // cannot wrap: it scrolls sideways inside the pane rather
-                // than widening it (see navigator::preview_scroll)
-                super::navigator::preview_scroll(ui, "tg-picker-screen", |ui| {
+                // cannot wrap: it is clipped to the pane rather than
+                // widening it (see preview_scroll)
+                preview_scroll(ui, "tg-picker-screen", &self.pane_content_w, |ui| {
                     for r in rows {
                         ui.label(
                             egui::RichText::new(r.as_str())

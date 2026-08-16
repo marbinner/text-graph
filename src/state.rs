@@ -64,7 +64,7 @@ pub fn to_text(s: &ViewState) -> String {
         out.push_str(&format!("pin\t{pane}\t{session}\n"));
     }
     if let Some(w) = s.pane_width {
-        out.push_str(&format!("pane\t{w}\n"));
+        out.push_str(&format!("pane_w\t{w}\n"));
     }
     if s.hide_web {
         out.push_str("hide_web\n");
@@ -108,7 +108,13 @@ pub fn from_text(text: &str) -> ViewState {
                     });
                 }
             }
-            Some("pane") => {
+            // `pane` (v1) is deliberately dropped: those values were
+            // SEEDED by a bug rather than chosen — the pane wrote its own
+            // computed default on the first frame, when the window is
+            // still eframe's 1280 — and a width nobody picked must not
+            // outlive the fix. `pane_w` is only ever written by a drag.
+            Some("pane") => {}
+            Some("pane_w") => {
                 // clamped on the way in like the camera: a corrupt width
                 // could park the pane over the whole window
                 s.pane_width = line
