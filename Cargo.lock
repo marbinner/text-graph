@@ -3291,6 +3291,7 @@ dependencies = [
  "notify",
  "nucleo-matcher",
  "pulldown-cmark",
+ "rustix 1.1.4",
  "serde_yaml_ng",
  "syntect",
  "unicode-normalization",

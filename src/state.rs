@@ -9,7 +9,7 @@
 //! corrupt lines of a known kind are simply dropped.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Read as _};
+use std::io::{self, Read as _, Write as _};
 use std::path::Path;
 
 /// View state is a compact list of coordinates and pane identities. A
@@ -242,29 +242,115 @@ fn load_path(path: &Path) -> io::Result<ViewState> {
     Ok(from_text(&text))
 }
 
-/// Write-temp-then-rename, so a crash mid-write can't leave a torn file.
-/// The state dir and temp file must not be symlinks: saving starts ~3s
-/// after opening a vault with zero interaction, so a hostile vault could
-/// otherwise plant links that redirect the write outside the vault
-/// (truncating whatever they point at). `view` itself needs no check —
-/// rename() replaces a symlink instead of following it.
+/// Write through a private, exclusively-created temporary file, then rename.
+/// Concurrent viewers can all finish; the last rename wins with one complete
+/// snapshot. On Unix every mutation is relative to a no-follow directory
+/// descriptor, closing the check-then-use symlink race in a shared vault.
 pub fn save(vault: &Path, s: &ViewState) -> io::Result<()> {
-    let dir = vault.join(".text-graph");
-    let no_follow = |p: &Path, what: &str| {
-        if std::fs::symlink_metadata(p).is_ok_and(|m| m.is_symlink()) {
-            Err(io::Error::other(format!(
-                "{what} is a symlink — refusing to write view state through it"
-            )))
-        } else {
-            Ok(())
+    save_impl(vault, &to_text(s))
+}
+
+static NEXT_VIEW_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_view_temp_name() -> String {
+    let sequence = NEXT_VIEW_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("view.tmp.{}.{sequence}", std::process::id())
+}
+
+#[cfg(unix)]
+fn save_impl(vault: &Path, text: &str) -> io::Result<()> {
+    use rustix::fs::{AtFlags, Mode, OFlags};
+
+    let dir_path = vault.join(".text-graph");
+    match std::fs::create_dir(&dir_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+
+    // O_NOFOLLOW rejects a planted .text-graph symlink. Once opened, the
+    // descriptor keeps all later operations in this exact directory even if
+    // another process renames or replaces its path.
+    let dir = rustix::fs::open(
+        &dir_path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .map_err(|error| {
+        let error: io::Error = error.into();
+        io::Error::new(
+            error.kind(),
+            format!(
+                "cannot safely open view-state directory {}: {error}",
+                dir_path.display()
+            ),
+        )
+    })?;
+
+    let (temp_name, temp_fd) = loop {
+        let name = next_view_temp_name();
+        match rustix::fs::openat(
+            &dir,
+            name.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::RUSR | Mode::WUSR,
+        ) {
+            Ok(fd) => break (name, fd),
+            Err(rustix::io::Errno::EXIST) => continue,
+            Err(error) => return Err(error.into()),
         }
     };
-    no_follow(&dir, ".text-graph")?;
+
+    let mut temp = std::fs::File::from(temp_fd);
+    if let Err(error) = temp.write_all(text.as_bytes()) {
+        drop(temp);
+        let _ = rustix::fs::unlinkat(&dir, temp_name.as_str(), AtFlags::empty());
+        return Err(error);
+    }
+    drop(temp);
+
+    if let Err(error) = rustix::fs::renameat(&dir, temp_name.as_str(), &dir, "view") {
+        let _ = rustix::fs::unlinkat(&dir, temp_name.as_str(), AtFlags::empty());
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn save_impl(vault: &Path, text: &str) -> io::Result<()> {
+    let dir = vault.join(".text-graph");
+    if std::fs::symlink_metadata(&dir).is_ok_and(|metadata| metadata.is_symlink()) {
+        return Err(io::Error::other(
+            ".text-graph is a symlink — refusing to write view state through it",
+        ));
+    }
     std::fs::create_dir_all(&dir)?;
-    let tmp = dir.join("view.tmp");
-    no_follow(&tmp, "view.tmp")?;
-    std::fs::write(&tmp, to_text(s))?;
-    std::fs::rename(&tmp, dir.join("view"))
+
+    let (temp_path, mut temp) = loop {
+        let path = dir.join(next_view_temp_name());
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => break (path, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+
+    if let Err(error) = temp.write_all(text.as_bytes()) {
+        drop(temp);
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    drop(temp);
+
+    if let Err(error) = std::fs::rename(&temp_path, dir.join("view")) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -414,7 +500,7 @@ mod tests {
     /// opening a vault with no interaction, so a hostile vault could
     /// otherwise truncate an arbitrary user-writable file.
     #[test]
-    fn save_refuses_symlinked_state_dir_and_tmp() {
+    fn save_refuses_symlinked_state_dir_and_ignores_legacy_tmp() {
         use std::os::unix::fs::symlink;
         let base = std::env::temp_dir().join(format!("tg-symlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -437,12 +523,60 @@ mod tests {
         let victim = base.join("victim.txt");
         std::fs::write(&victim, "precious").unwrap();
         symlink(&victim, v2.join(".text-graph/view.tmp")).unwrap();
-        assert!(save(&v2, &ViewState::default()).is_err());
+        let expected = ViewState {
+            camera: Some((1.0, 2.0, 3.0)),
+            ..ViewState::default()
+        };
+        save(&v2, &expected).unwrap();
         assert_eq!(
             std::fs::read_to_string(&victim).unwrap(),
             "precious",
             "the victim file must not be truncated"
         );
+        assert_eq!(load(&v2), expected);
+        assert!(
+            std::fs::symlink_metadata(v2.join(".text-graph/view.tmp"))
+                .unwrap()
+                .is_symlink(),
+            "a legacy planted name is neither followed nor reused"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn concurrent_saves_each_use_a_private_temp_file() {
+        let base = std::env::temp_dir().join(format!("tg-save-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let vault = base.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+
+        let writers = 12;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(writers));
+        let mut threads = Vec::new();
+        for i in 0..writers {
+            let barrier = barrier.clone();
+            let vault = vault.clone();
+            threads.push(std::thread::spawn(move || {
+                let state = ViewState {
+                    camera: Some((i as f32, 2.0, 3.0)),
+                    ..ViewState::default()
+                };
+                barrier.wait();
+                save(&vault, &state)
+            }));
+        }
+        for thread in threads {
+            thread.join().unwrap().unwrap();
+        }
+
+        let x = load(&vault).camera.unwrap().0;
+        assert!((0.0..writers as f32).contains(&x));
+        let names: Vec<_> = std::fs::read_dir(vault.join(".text-graph"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("view")]);
 
         let _ = std::fs::remove_dir_all(&base);
     }
