@@ -20,11 +20,18 @@ pub(super) const TERMINAL_EDITORS: &[&str] = &[
     "vim", "nvim", "vi", "nano", "micro", "hx", "helix", "kak", "vis", "ne",
 ];
 
-/// $VISUAL, else $EDITOR, when set and non-blank.
-fn env_editor() -> Option<String> {
-    std::env::var("VISUAL")
-        .ok()
+/// The configured editor, else $VISUAL, else $EDITOR. The setting wins
+/// because a viewer launched from a desktop entry or an IDE inherits an
+/// environment the user never sees — the same reason agent launches carry
+/// their own PATH.
+fn editor_cmd(cfg: &Config) -> Option<String> {
+    Some(cfg.editor.clone())
         .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("VISUAL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .or_else(|| {
             std::env::var("EDITOR")
                 .ok()
@@ -32,8 +39,17 @@ fn env_editor() -> Option<String> {
         })
 }
 
-pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
-    spawn_editor_at(file, None)
+/// What opens a folder: the configured file manager, else xdg-open.
+fn file_manager(cfg: &Config) -> Vec<String> {
+    let raw = cfg.file_manager.trim();
+    if raw.is_empty() {
+        return vec!["xdg-open".into()];
+    }
+    raw.split_whitespace().map(str::to_string).collect()
+}
+
+pub(super) fn spawn_editor(cfg: &Config, file: &Path) -> std::io::Result<()> {
+    spawn_editor_at(cfg, file, None)
 }
 
 /// How an editor is told to open at a line. Conventions differ, and an
@@ -60,8 +76,12 @@ fn open_args(base: &str, file: &Path, line: Option<usize>) -> Vec<std::ffi::OsSt
 }
 
 /// Open `file` in $EDITOR, at `line` where the editor takes one.
-pub(super) fn spawn_editor_at(file: &Path, line: Option<usize>) -> std::io::Result<()> {
-    let Some(editor) = env_editor() else {
+pub(super) fn spawn_editor_at(
+    cfg: &Config,
+    file: &Path,
+    line: Option<usize>,
+) -> std::io::Result<()> {
+    let Some(editor) = editor_cmd(cfg) else {
         return detached(std::process::Command::new("xdg-open").arg(file));
     };
     // $EDITOR may carry args ("code --wait") — split on whitespace
@@ -74,7 +94,7 @@ pub(super) fn spawn_editor_at(file: &Path, line: Option<usize>) -> std::io::Resu
         .unwrap_or(&prog);
     let target = open_args(base, file, line);
     if TERMINAL_EDITORS.contains(&base)
-        && let Some(mut term) = new_terminal_window()
+        && let Some(mut term) = new_terminal_window(cfg)
     {
         term.arg(&prog).args(&args).args(&target);
         return detached(&mut term);
@@ -85,8 +105,8 @@ pub(super) fn spawn_editor_at(file: &Path, line: Option<usize>) -> std::io::Resu
 /// The user's terminal editor: $VISUAL/$EDITOR when it names one, else the
 /// first of hx/nvim/vim/nano/vi on PATH. For editing INSIDE a graph
 /// terminal card — GUI editors ($EDITOR=code) would exit instantly there.
-pub(super) fn terminal_editor() -> String {
-    if let Some(ed) = env_editor() {
+pub(super) fn terminal_editor(cfg: &Config) -> String {
+    if let Some(ed) = editor_cmd(cfg) {
         let base = ed.split_whitespace().next().unwrap_or("");
         let base = Path::new(base)
             .file_name()
@@ -105,7 +125,7 @@ pub(super) fn terminal_editor() -> String {
 
 /// A command that opens a new terminal-emulator window and runs whatever is
 /// appended to it. $TERMINAL wins; otherwise the first emulator on PATH.
-pub(super) fn new_terminal_window() -> Option<std::process::Command> {
+pub(super) fn new_terminal_window(cfg: &Config) -> Option<std::process::Command> {
     let mk = |bin: &str, extra: &[&str]| -> std::process::Command {
         let mut c = std::process::Command::new(bin);
         c.args(extra); // user-supplied flags go before the command separator
@@ -127,8 +147,9 @@ pub(super) fn new_terminal_window() -> Option<std::process::Command> {
         }
         c
     };
-    if let Ok(term) = std::env::var("TERMINAL") {
-        // "$TERMINAL" may carry flags ("foot -a floating"), like $EDITOR
+    let configured = Some(cfg.terminal.clone()).filter(|s| !s.trim().is_empty());
+    if let Some(term) = configured.or_else(|| std::env::var("TERMINAL").ok()) {
+        // the command may carry flags ("foot -a floating"), like $EDITOR
         let mut words = term.split_whitespace();
         if let Some(bin) = words.next() {
             return Some(mk(bin, &words.collect::<Vec<_>>()));
@@ -388,9 +409,17 @@ impl Viewer {
         let node = self.g.node(id);
         let path = self.root.join(&node.path);
         let result = match node.kind {
-            NodeKind::File => spawn_editor(&path),
-            NodeKind::Asset if filetype::is_text(&node.path) => spawn_editor(&path),
-            NodeKind::Dir | NodeKind::Image | NodeKind::Asset => {
+            NodeKind::File => spawn_editor(&self.cfg, &path),
+            NodeKind::Asset if filetype::is_text(&node.path) => spawn_editor(&self.cfg, &path),
+            NodeKind::Dir => {
+                let cmd = file_manager(&self.cfg);
+                detached(
+                    std::process::Command::new(&cmd[0])
+                        .args(&cmd[1..])
+                        .arg(&path),
+                )
+            }
+            NodeKind::Image | NodeKind::Asset => {
                 detached(std::process::Command::new("xdg-open").arg(&path))
             }
             // a web node's path IS its URL — the browser is its editor
@@ -400,5 +429,60 @@ impl Viewer {
         if let Err(e) = result {
             eprintln!("failed to open {}: {e}", path.display());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A viewer started from a desktop entry or an IDE inherits an
+    /// environment the user can't see, which is the whole reason these are
+    /// settings: what is configured wins over $VISUAL/$EDITOR/$TERMINAL.
+    #[test]
+    fn configured_tools_win_over_the_environment() {
+        let cfg = Config {
+            editor: "code --wait".into(),
+            ..Config::default()
+        };
+        assert_eq!(editor_cmd(&cfg).as_deref(), Some("code --wait"));
+
+        let cfg = Config {
+            terminal: "foot -a floating".into(),
+            ..Config::default()
+        };
+        let term = new_terminal_window(&cfg).expect("a configured terminal always resolves");
+        assert_eq!(term.get_program(), "foot");
+        let args: Vec<_> = term.get_args().collect();
+        assert_eq!(
+            args,
+            ["-a", "floating"],
+            "flags ride ahead of the command separator"
+        );
+    }
+
+    #[test]
+    fn a_gui_editor_is_not_used_inside_a_graph_card() {
+        // cards run a terminal; $EDITOR=code would exit instantly there
+        let cfg = Config {
+            editor: "nvim".into(),
+            ..Config::default()
+        };
+        assert_eq!(terminal_editor(&cfg), "nvim");
+        let gui = Config {
+            editor: "code".into(),
+            ..Config::default()
+        };
+        assert_ne!(terminal_editor(&gui), "code");
+    }
+
+    #[test]
+    fn folders_open_with_the_configured_file_manager() {
+        assert_eq!(file_manager(&Config::default()), vec!["xdg-open"]);
+        let cfg = Config {
+            file_manager: "nautilus --new-window".into(),
+            ..Config::default()
+        };
+        assert_eq!(file_manager(&cfg), vec!["nautilus", "--new-window"]);
     }
 }

@@ -1061,7 +1061,7 @@ impl Viewer {
     /// its pane. `;` is tmux's command separator — it goes through argv
     /// unshelled, so no quoting games.
     pub(super) fn attach_external(&mut self, session: &str, pane: &str) {
-        let Some(mut cmd) = new_terminal_window() else {
+        let Some(mut cmd) = new_terminal_window(&self.cfg) else {
             self.set_flash("no terminal emulator found — set $TERMINAL".into());
             return;
         };
@@ -1192,7 +1192,7 @@ impl Viewer {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| self.root.clone())
         };
-        let editor = super::actions::terminal_editor();
+        let editor = super::actions::terminal_editor(&self.cfg);
         // COLORFGBG tells the editor the pane is DARK: clientless tmux
         // answers no background-color query, and vim's fallback guesses
         // background=light — painting white blocks all over the dark card

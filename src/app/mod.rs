@@ -32,8 +32,11 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, FontId, Key, Pos2, Rect, Sense, Stroke, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use nucleo_matcher::{Config, Matcher};
+// `Config` in this tree means the user's settings — the matcher's is
+// aliased so the two can never be confused at a call site.
+use nucleo_matcher::{Config as MatcherConfig, Matcher};
 use text_graph::agents::{self, AgentPane};
+use text_graph::config::Config;
 use text_graph::graph::{Graph, LinkKind, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
@@ -458,7 +461,7 @@ struct Viewer {
     settings: settings::SettingsUi,
     /// User preferences (per user, not per vault) — see `config.rs`. The
     /// canvas reads it live, so every change shows on the next frame.
-    cfg: config::Config,
+    cfg: Config,
     /// In-flight camera glide: (start center, target node, start time).
     /// The target is a NODE so a settling sim can't make the glide land
     /// beside it. Manual pan/zoom input cancels it.
@@ -600,7 +603,7 @@ impl Viewer {
         }
     }
 
-    fn new(g: Graph, root: PathBuf, cfg: config::Config) -> Self {
+    fn new(g: Graph, root: PathBuf, cfg: Config) -> Self {
         let sim = Sim::new(&g);
         let Derived {
             radius,
@@ -662,7 +665,7 @@ impl Viewer {
             n_assets,
             n_webs,
             show_web,
-            matcher: Matcher::new(Config::DEFAULT),
+            matcher: Matcher::new(MatcherConfig::DEFAULT),
             picker: Picker::new(),
             root,
             md_cache: CommonMarkCache::default(),

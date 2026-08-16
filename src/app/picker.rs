@@ -978,7 +978,7 @@ impl Viewer {
         match line {
             Some(l) if self.editable(id) => {
                 let path = self.root.join(&self.g.node(id).path);
-                if let Err(e) = super::actions::spawn_editor_at(&path, Some(l)) {
+                if let Err(e) = super::actions::spawn_editor_at(&self.cfg, &path, Some(l)) {
                     eprintln!("failed to open {}: {e}", path.display());
                 }
             }
