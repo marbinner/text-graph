@@ -421,7 +421,10 @@ pub struct Row {
     pub score: u32,
     pub title: String,
     pub title_ranges: Vec<Range>,
+    /// Where the row lives (a path, a pane's cwd) — and, when the match was
+    /// on an alias or a path rather than the name, what matched.
     pub subtitle: String,
+    pub subtitle_ranges: Vec<Range>,
     /// The matched line, for content and terminal rows.
     pub snippet: Option<LineHit>,
     /// Further matching lines in the same file, beyond the one shown.
@@ -682,6 +685,7 @@ mod tests {
             title: key.to_string(),
             title_ranges: vec![],
             subtitle: String::new(),
+            subtitle_ranges: vec![],
             snippet: None,
             more: 0,
             key: key.to_string(),

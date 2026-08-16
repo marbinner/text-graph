@@ -1,11 +1,6 @@
 # notes made by human, don't take seriously
 
 # todo
-- perfect the focus mechanics and focus history.
-    - we want to be able to fluidly choose which node to focus on with minimal cognitive effort.
-    - we want to track a history of which panels were focused so we can jump back and forth quickly.
-    - when fuzzy searching we want to put higher priority on recently visited nodes.
-    - the telescope like fuzzy search
 - action view: automatically move to locations where things are happening.
     - when the agents are doing stuff. Sit back and relax and watch what they're doing automatically. 
     - we should probably have a centralized event logs of things that are happening. We're already tracking all the files and all the changes we should be able to see all the changes that are happening.
@@ -28,14 +23,22 @@
     - quick description and purpose of this file.
     - tags
 - make it so I can drag and drop files and paste shit into the gui.
+- when I pin a terminal/agent pane with ctrl+click it should stay at the exact same part of the screen regardless how I move. It's basically a stiky terminal I can take with me whereeve. 
+- syntax highlighting in the text previewer.
+
+
+# todo next
 - for opening an agent with 'a' or editor with 'e' or most other bindings like these, we should only have to hover over a node with the cursor, we shouldn't have to click on it first. So I shoudl be able to just hover over a node, press 'e' and then it opens up in the editor. Or I shoudl be able to do the same with 'a' and it opens up the default agent in the corresponding folder.
+- the side pane should have a more predictable witdth. The default hsould be 25% or so of the total window by default, and it should not resize automatically. It should stay the width it is set to by the user.
 - add a bunch of basic stuff to the settings so they're centralized and configuarable.
     - size of various text and UI.
     - how far we have to zoom in to see previews etc.
     - graph physics
-- when I pin a terminal/agent pane with ctrl+click it should stay at the exact same part of the screen regardless how I move. It's basically a stiky terminal I can take with me whereeve. 
-- the side pane should have a more predictable witdth. The default hsould be 25% or so of the total window by default, and it should not resize automatically. It should stay the width it is set to by the user.
-
+- perfect the focus mechanics and focus history.
+    - we want to be able to fluidly choose which node to focus on with minimal cognitive effort.
+    - we want to track a history of which panels were focused so we can jump back and forth quickly.
+    - when fuzzy searching we want to put higher priority on recently visited nodes.
+    - the telescope like fuzzy search
 
 
 

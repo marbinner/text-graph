@@ -146,16 +146,8 @@ impl Viewer {
                     if matches!(kind, NodeKind::File | NodeKind::Asset | NodeKind::Image)
                         && let Ok(meta) = std::fs::metadata(self.root.join(&path))
                     {
-                        let mut bits: Vec<String> = Vec::new();
-                        if let Ok(m) = meta.modified() {
-                            bits.push(format!("edited {}", ago(m)));
-                        }
-                        if let Ok(c) = meta.created() {
-                            bits.push(format!("created {}", ago(c)));
-                        }
-                        bits.push(human_size(meta.len()));
                         ui.label(
-                            egui::RichText::new(bits.join(" · "))
+                            egui::RichText::new(size_and_age(&meta))
                                 .small()
                                 .color(self.theme.text),
                         );
@@ -394,6 +386,20 @@ impl Viewer {
                 });
             });
     }
+}
+
+/// The one-line metadata strip a file gets in popups and the picker's
+/// preview header: when it was last touched, when it was born, how big.
+pub(super) fn size_and_age(meta: &std::fs::Metadata) -> String {
+    let mut bits: Vec<String> = Vec::new();
+    if let Ok(m) = meta.modified() {
+        bits.push(format!("edited {}", ago(m)));
+    }
+    if let Ok(c) = meta.created() {
+        bits.push(format!("created {}", ago(c)));
+    }
+    bits.push(human_size(meta.len()));
+    bits.join(" · ")
 }
 
 /// Compact relative timestamp for popup metadata ("3h ago"). Clock skew or

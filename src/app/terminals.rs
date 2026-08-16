@@ -836,7 +836,7 @@ impl Viewer {
                 .activity
                 .get(&a.session)
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(2));
-            let searching = self.search_open && !self.query.is_empty();
+            let searching = self.picker.searching();
             let smatch = searching && self.terms.scores.get(i).copied().flatten().is_some();
             let sbest = searching && self.terms.best.as_ref().is_some_and(|(_, bk)| bk == &key);
             // typing focus = thick cyan (unmistakable); the t-cursor =

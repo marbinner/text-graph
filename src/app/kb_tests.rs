@@ -1,6 +1,6 @@
 //! Viewer state-machine tests, driven through a real egui context via
 //! egui_kittest — synthetic events, real frames, no window and no
-//! renderer: the keyboard modal logic (handle_keys + update_search), the
+//! renderer: the keyboard modal logic (handle_keys + the picker), the
 //! hover-popup render path, and reload carry-over (apply_graph). The
 //! harness never runs canvas — sync_terminals would attach mirrors
 //! against the user's default tmux server (house rule).
@@ -21,7 +21,7 @@ fn harness() -> Harness<'static, Viewer> {
     let mut h = Harness::new_ui_state(
         |ui, v: &mut Viewer| {
             v.handle_keys(ui);
-            v.update_search();
+            v.pump_picker(ui.ctx());
         },
         viewer,
     );
@@ -313,7 +313,8 @@ fn global_keys_do_not_fire_while_a_text_field_has_focus() {
         |ui, v: &mut Viewer| {
             v.handle_keys(ui);
             // a stand-in for the find prompt: any focused TextEdit
-            ui.text_edit_singleline(&mut v.query).request_focus();
+            ui.text_edit_singleline(&mut v.nav_find_last)
+                .request_focus();
         },
         viewer,
     );
@@ -329,8 +330,8 @@ fn global_keys_do_not_fire_while_a_text_field_has_focus() {
     );
     press(&mut h, Key::Slash);
     assert!(
-        !h.state().search_open,
-        "'/' while typing must not open the search bar"
+        !h.state().picker.open,
+        "'/' while typing must not open the picker"
     );
     press(&mut h, Key::Z);
     assert!(
@@ -353,24 +354,173 @@ fn global_keys_do_not_fire_while_a_text_field_has_focus() {
     );
 }
 
+/// Step frames until `done` holds — the content scan runs on a worker
+/// thread, so its results land some frames after the query is typed.
+fn wait_for(h: &mut Harness<'_, Viewer>, what: &str, done: impl Fn(&Viewer) -> bool) {
+    for _ in 0..200 {
+        h.step();
+        if done(h.state()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("timed out waiting for {what}");
+}
+
 #[test]
-fn search_enter_jumps_to_the_best_node_and_clears_stale_term_cursor() {
+fn picker_enter_jumps_to_the_top_result_and_clears_a_stale_term_cursor() {
     let mut h = harness();
     h.state_mut().terms.cursor = Some(("tg_x".into(), "%9".into()));
-    h.state_mut().search_open = true;
-    h.state_mut().query = "grafer".into();
-    h.step(); // update_search scores the query
-    assert!(h.state().best.is_some(), "fuzzy match found");
+    press(&mut h, Key::Slash);
+    assert!(h.state().picker.open, "'/' opens the picker");
+    h.state_mut().picker.query = "grafer".into();
+    h.step(); // rebuild scores the query against every name
+    let top = h.state().picker.rows.first().expect("a match").key.clone();
+    assert_eq!(top, "topics/grafér.md", "the name match ranks first");
+
     press(&mut h, Key::Enter);
     assert_eq!(
         selected_path(&h).as_deref(),
         Some("topics/grafér.md"),
-        "Enter jumps to the best hit"
+        "Enter jumps to the highlighted result"
     );
-    assert!(!h.state().search_open, "search closed");
+    assert!(!h.state().picker.open, "picker closed");
+    assert!(h.state().picker.query.is_empty(), "and reset");
     assert_eq!(
         h.state().terms.cursor,
         None,
         "a stale terminal cursor must not hijack the next Enter"
+    );
+}
+
+/// The whole point of the feature: words inside a note find the note, with
+/// the matching line and its number attached to the row.
+#[test]
+fn content_search_finds_words_inside_notes() {
+    let mut h = harness();
+    press(&mut h, Key::Slash);
+    h.state_mut().picker.query = "Heading One".into();
+    wait_for(&mut h, "the content scan", |v| {
+        v.picker.rows.iter().any(|r| r.snippet.is_some())
+    });
+    let row = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .find(|r| r.snippet.is_some())
+        .cloned()
+        .expect("a content hit");
+    let hit = row.snippet.expect("snippet");
+    assert!(hit.text.contains("Heading One"));
+    assert!(hit.line >= 1, "1-based line number for the editor jump");
+    assert!(
+        h.state().picker.node_scores.iter().flatten().count() >= 1,
+        "matching nodes light up on the canvas"
+    );
+}
+
+/// Arrowing through results moves the cursor by identity and, after its
+/// dwell, glides the camera — without selecting anything (a selection would
+/// open the navigator and squeeze the canvas the picker previews into).
+#[test]
+fn arrows_walk_results_and_the_camera_follows_after_a_dwell() {
+    let mut h = harness();
+    press(&mut h, Key::Slash);
+    h.state_mut().picker.query = "e".into();
+    h.step();
+    assert!(h.state().picker.rows.len() > 1, "several matches");
+    let first = h.state().picker.rows[0].key.clone();
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(h.state().picker.cursor, 1, "↓ steps down");
+    assert_ne!(
+        h.state().picker.cursor_row().unwrap().key,
+        first,
+        "onto a different result"
+    );
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(h.state().picker.cursor, 0, "↑ steps back");
+    press(&mut h, Key::ArrowUp);
+    assert_eq!(h.state().picker.cursor, 0, "clamped at the top");
+    assert!(h.state().selected.is_none(), "browsing selects nothing");
+
+    // the glide starts only once the cursor has settled on a row
+    h.state_mut().cam_anim = None;
+    wait_for(&mut h, "the camera glide", |v| v.cam_anim.is_some());
+}
+
+#[test]
+fn esc_closes_the_picker_and_leaves_the_graph_alone() {
+    let mut h = harness();
+    select(&mut h, "index.md");
+    press(&mut h, Key::Slash);
+    h.state_mut().picker.query = "grafer".into();
+    h.step();
+    press(&mut h, Key::Escape);
+    assert!(!h.state().picker.open);
+    assert!(h.state().picker.rows.is_empty(), "results dropped");
+    assert!(
+        h.state().picker.node_scores.iter().all(Option::is_none),
+        "the canvas lit mask goes dark"
+    );
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("index.md"),
+        "Esc in the picker must not also deselect"
+    );
+}
+
+/// Agents save files constantly: a reload lands mid-search. The rows point
+/// into the old node arena and must be re-derived, but the query and the
+/// row the cursor sits on have to survive it.
+#[test]
+fn a_reload_rebuilds_the_rows_but_keeps_query_and_cursor() {
+    let mut h = harness();
+    press(&mut h, Key::Slash);
+    h.state_mut().picker.query = "grafer".into();
+    h.step();
+    let before = h.state().picker.cursor_row().expect("a row").key.clone();
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let rebuilt = graph::build(vault::scan(&root).expect("rescan"));
+    h.state_mut().apply_graph(rebuilt);
+    h.step();
+    assert_eq!(h.state().picker.query, "grafer", "the query survives");
+    assert_eq!(
+        h.state().picker.cursor_row().map(|r| r.key.clone()),
+        Some(before),
+        "and the cursor stays on the same result"
+    );
+}
+
+/// The picker's own UI renders headlessly (canvas does not — it would
+/// attach tmux mirrors). This exercises the real layout path: prompt,
+/// virtualized result list, and the preview pane's per-line layout jobs.
+#[test]
+fn picker_ui_renders_prompt_results_and_preview() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root);
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.pump_picker(ui.ctx());
+            v.picker_ui(ui);
+        },
+        viewer,
+    );
+    // result rows carry file-type glyphs; the real app installs the family
+    // in run(), so the harness has to as well
+    super::install_icon_font(&h.ctx);
+    h.state_mut().picker.open = true;
+    h.state_mut().picker.query = "grafer".into();
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label_contains("result").is_some(),
+        "the status line reports the match count"
+    );
+    assert!(
+        h.query_by_label_contains("topics/grafér.md").is_some(),
+        "the preview header names the previewed file"
     );
 }

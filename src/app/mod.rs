@@ -10,6 +10,7 @@ mod actions;
 mod diag;
 mod images;
 mod navigator;
+mod picker;
 mod previews;
 mod reload;
 mod settings;
@@ -19,6 +20,7 @@ mod terminals;
 mod kb_tests;
 
 use actions::CreateDialog;
+use picker::Picker;
 use reload::ReloadMsg;
 use terminals::{ResizeDrag, TERM_BG, resize_handle};
 
@@ -381,7 +383,6 @@ fn paint_doc_icon(
 struct Derived {
     radius: Vec<f32>,
     depths: Vec<u8>,
-    haystacks: Vec<String>,
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
@@ -471,14 +472,8 @@ struct Viewer {
     show_web: bool,
     // ---- search ----
     matcher: Matcher,
-    /// Per-node "name aliases path" string the fuzzy pattern scores against.
-    haystacks: Vec<String>,
-    search_open: bool,
-    search_focus_pending: bool,
-    query: String,
-    last_query: String,
-    scores: Vec<Option<u32>>,
-    best: Option<NodeId>,
+    /// The picker: prompt, ranked results, preview, content-scan worker.
+    picker: Picker,
     // ---- detail pane ----
     root: PathBuf,
     md_cache: CommonMarkCache,
@@ -584,11 +579,6 @@ impl Viewer {
                 (base + (*d as f32).sqrt() * 1.3f32).min(18.0)
             })
             .collect();
-        let haystacks: Vec<String> = g
-            .nodes
-            .iter()
-            .map(|n| format!("{} {} {}", n.display_name(), n.aliases.join(" "), n.path))
-            .collect();
         let n_files = g.nodes.iter().filter(|n| n.kind == NodeKind::File).count();
         let n_dirs = g.nodes.iter().filter(|n| n.kind == NodeKind::Dir).count();
         let n_images = g.nodes.iter().filter(|n| n.kind == NodeKind::Image).count();
@@ -603,7 +593,6 @@ impl Viewer {
         Derived {
             radius,
             depths,
-            haystacks,
             n_files,
             n_dirs,
             n_images,
@@ -618,7 +607,6 @@ impl Viewer {
         let Derived {
             radius,
             depths,
-            haystacks,
             n_files,
             n_dirs,
             n_images,
@@ -626,7 +614,6 @@ impl Viewer {
             n_webs,
             dir_by_path,
         } = Self::derived(&g);
-        let n = haystacks.len();
         let (reload_tx, reload_rx) = std::sync::mpsc::channel();
         let vs = state::load(&root);
         let cam = vs.camera;
@@ -687,13 +674,7 @@ impl Viewer {
             n_webs,
             show_web,
             matcher: Matcher::new(Config::DEFAULT),
-            haystacks,
-            search_open: false,
-            search_focus_pending: false,
-            query: String::new(),
-            last_query: String::new(),
-            scores: vec![None; n],
-            best: None,
+            picker: Picker::new(),
             root,
             md_cache: CommonMarkCache::default(),
             detail: None,
@@ -752,14 +733,6 @@ impl Viewer {
         self.cam_anim = Some((self.center, id, Instant::now()));
     }
 
-    fn close_search(&mut self) {
-        self.search_open = false;
-        self.query.clear();
-        self.last_query.clear();
-        self.scores.fill(None);
-        self.best = None;
-    }
-
     fn handle_keys(&mut self, ui: &egui::Ui) {
         if self.create.is_some() {
             return; // the create dialog owns the keyboard
@@ -784,45 +757,13 @@ impl Viewer {
         // without consuming it, so keys typed into a focused text field
         // (the find-in-directory prompt) reach here too. Unguarded branches
         // re-fit the camera on '0', opened search on '/', and deselected on
-        // Esc — all mid-typing. (The search bar's own branch stays
-        // unguarded on purpose: its Enter/Esc act WHILE its field is
-        // focused.)
+        // Esc — all mid-typing. (The picker's own branch stays unguarded on
+        // purpose: its Enter/Esc/arrows act WHILE its field is focused.)
         let widget_free = ui.memory(|m| m.focused().is_none());
-        if self.search_open {
-            if esc {
-                self.close_search();
-            } else if enter {
-                // a terminal hit that outscores every node wins the jump —
-                // and lands focused, ready to type
-                let node_score = self.best.and_then(|id| self.scores[id.0 as usize]);
-                let term_score = self
-                    .terms
-                    .best
-                    .as_ref()
-                    .and_then(|(i, _)| self.terms.scores.get(*i).copied().flatten());
-                if term_score > node_score
-                    && let Some((_, bk)) = self.terms.best.clone()
-                    // resolve by key, not index: the pane list may have
-                    // shifted since the scores were computed
-                    && self
-                        .terms
-                        .panes
-                        .iter()
-                        .any(|a| a.session == bk.0 && a.pane == bk.1)
-                {
-                    self.terms.cursor = Some(bk.clone());
-                    self.terms.focused = Some(bk.clone());
-                    self.fly_to_card(bk);
-                } else if let Some(best) = self.best {
-                    self.selected = Some(best);
-                    self.frame_node(best);
-                    self.terms.cursor = None; // Enter must not later hijack
-                }
-                self.close_search();
-            }
+        if self.picker.open {
+            self.picker_keys(ui);
         } else if open_key && widget_free {
-            self.search_open = true;
-            self.search_focus_pending = true;
+            self.picker.open();
         } else if esc && widget_free {
             // dismiss order: find prompt, link cursor, terminal cursor,
             // then selection. The prompt is a stage of ITS OWN here because
@@ -1050,83 +991,6 @@ impl Viewer {
 
     fn set_flash(&mut self, msg: String) {
         self.flash = Some((msg, Instant::now()));
-    }
-
-    /// Re-score all nodes when the query changed (cheap: one fuzzy match per
-    /// node per keystroke).
-    fn update_search(&mut self) {
-        if !self.search_open || self.query.is_empty() {
-            if !self.last_query.is_empty() || self.best.is_some() {
-                self.last_query.clear();
-                self.scores.fill(None);
-                self.best = None;
-            }
-            self.terms.scores.clear();
-            self.terms.best = None;
-            return;
-        }
-        // Terminals re-score every frame (cheap: a handful of panes) — the
-        // pane list changes underneath the node-score cache.
-        let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
-        let mut buf = Vec::new();
-        let mut tbest: Option<(u32, usize)> = None;
-        self.terms.scores = self
-            .terms
-            .panes
-            .iter()
-            .enumerate()
-            .map(|(i, a)| {
-                let dir = a
-                    .cwd
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or_default();
-                let hay = format!("{} {} {} {}", a.agent, a.session, a.pane, dir);
-                let score = pattern.score(Utf32Str::new(&hay, &mut buf), &mut self.matcher);
-                if let Some(s) = score
-                    && tbest.is_none_or(|(bs, _)| s > bs)
-                {
-                    tbest = Some((s, i));
-                }
-                score
-            })
-            .collect();
-        self.terms.best = tbest.map(|(_, i)| {
-            let a = &self.terms.panes[i];
-            (i, (a.session.clone(), a.pane.clone()))
-        });
-        if self.query == self.last_query {
-            return;
-        }
-        self.last_query = self.query.clone();
-        let pattern = Pattern::parse(&self.query, CaseMatching::Ignore, Normalization::Smart);
-        let mut buf = Vec::new();
-        let mut best: Option<(u32, NodeId)> = None;
-        for (i, hay) in self.haystacks.iter().enumerate() {
-            let score = pattern.score(Utf32Str::new(hay, &mut buf), &mut self.matcher);
-            self.scores[i] = score;
-            if let Some(s) = score
-                && best.is_none_or(|(bs, _)| s > bs)
-            {
-                best = Some((s, NodeId(i as u32)));
-            }
-        }
-        self.best = best.map(|(_, id)| id);
-    }
-
-    fn search_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("search:");
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut self.query)
-                    .hint_text("name, alias, or path — Enter jumps to best, Esc closes")
-                    .desired_width(f32::INFINITY),
-            );
-            if self.search_focus_pending {
-                resp.request_focus();
-                self.search_focus_pending = false;
-            }
-        });
     }
 
     fn world_pos(&self, i: usize) -> Pos2 {
@@ -1536,7 +1400,9 @@ impl Viewer {
                 } else {
                     self.terms.cursor = Some(t.clone());
                     self.terms.focused = Some(t);
-                    self.close_search();
+                    // the pane owns the keyboard now — the picker's prompt
+                    // would swallow every keystroke meant for it
+                    self.picker.close();
                 }
             } else {
                 // click-away releases terminal focus AND lands as a normal
@@ -1600,10 +1466,15 @@ impl Viewer {
         }
 
         // ---- lit mask: search matches win; else the active neighborhood ----
-        let searching = self.search_open && !self.query.is_empty();
+        let searching = self.picker.searching();
+        let cursor_node = self.picker.cursor_node();
         let n_nodes = self.g.nodes.len();
         let lit: Vec<bool> = if searching {
-            self.scores.iter().map(Option::is_some).collect()
+            self.picker
+                .node_scores
+                .iter()
+                .map(Option::is_some)
+                .collect()
         } else if active.is_some() {
             (0..n_nodes)
                 .map(|i| neighbors.contains(&NodeId(i as u32)))
@@ -1876,7 +1747,7 @@ impl Viewer {
                     self.theme.hover
                 };
                 ring(color, 2.0);
-            } else if searching && self.best == Some(id) {
+            } else if searching && cursor_node == Some(id) {
                 ring(self.theme.hover, 2.0);
             } else if partners.contains(&id) {
                 ring(self.theme.wiki, 1.5);
@@ -1901,7 +1772,7 @@ impl Viewer {
             // the LOD ramp and the cursor flashlight compete — whichever
             // reveals harder wins
             let full = if searching {
-                lit[id.0 as usize] && (r >= 3.0 || self.best == Some(id))
+                lit[id.0 as usize] && (r >= 3.0 || cursor_node == Some(id))
             } else {
                 active == Some(id) || partners.contains(&id)
             };
@@ -1993,7 +1864,7 @@ impl Viewer {
         } else if let Some((s, p)) = &self.terms.focused {
             format!("typing into {s} {p} — Ctrl+Q or click away releases")
         } else if searching {
-            let count = self.scores.iter().filter(|s| s.is_some()).count();
+            let count = self.picker.node_scores.iter().flatten().count();
             let tcount = self.terms.scores.iter().flatten().count();
             let terms = if tcount > 0 {
                 format!(" + {tcount} terminals")
@@ -2001,8 +1872,8 @@ impl Viewer {
                 String::new()
             };
             format!(
-                "{count} match{}{terms} — Enter jumps to best · Esc closes",
-                if count == 1 { "" } else { "es" }
+                "{count} node{}{terms} lit — the highlighted result is framed here",
+                if count == 1 { "" } else { "s" }
             )
         } else if active.is_none()
             && let Some((s, p)) = &self.terms.cursor
@@ -2019,7 +1890,7 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs{}{}{} · {} links{}   |   / search · hjkl move · d/u zoom · f find · z center · w web · 0 reset  |  on selection: e edit · t terminal · a agent",
+                    "{} files · {} dirs{}{}{} · {} links{}   |   / find anything · hjkl move · d/u zoom · f find here · z center · w web · 0 reset  |  on selection: e edit · t terminal · a agent",
                     self.n_files,
                     self.n_dirs,
                     if self.n_images > 0 {
@@ -2079,15 +1950,23 @@ impl eframe::App for Viewer {
         } else {
             self.handle_keys(ui);
         }
-        self.update_search();
-        if self.search_open {
-            egui::Panel::top("search_bar").show(ui, |ui| self.search_bar(ui));
+        self.pump_picker(ui.ctx());
+        if self.picker.open {
+            // docked left, so the canvas keeps the right of the window and
+            // the highlighted result glides into what's still visible
+            let w = (ui.available_width() * 0.62).clamp(420.0, 1100.0);
+            egui::Panel::left("tg-picker")
+                .default_size(w)
+                .size_range(360.0..=1500.0)
+                .show(ui, |ui| self.picker_ui(ui));
         }
-        if self.selected.is_some() {
+        // the navigator would squeeze the canvas out from between the two
+        // panels — the picker is the navigator while it's open
+        if self.selected.is_some() && !self.picker.open {
             egui::Panel::right("detail")
                 .resizable(true)
                 .show(ui, |ui| self.detail_pane(ui));
-        } else {
+        } else if self.selected.is_none() {
             self.nav_find = None; // no navigator, no find prompt
         }
         egui::CentralPanel::default()

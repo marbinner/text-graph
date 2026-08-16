@@ -130,12 +130,10 @@ impl Viewer {
                 .map(|&nid| (from, nid, t))
         });
         self.conn_cursor = None; // indexes the old graph's link lists
-        self.best = None;
 
         let Derived {
             radius,
             depths,
-            haystacks,
             n_files,
             n_dirs,
             n_images,
@@ -145,15 +143,15 @@ impl Viewer {
         } = Self::derived(&g);
         self.radius = radius;
         self.depths = depths;
-        self.haystacks = haystacks;
         self.n_files = n_files;
         self.n_dirs = n_dirs;
         self.n_images = n_images;
         self.n_assets = n_assets;
         self.n_webs = n_webs;
         self.dir_by_path = dir_by_path;
-        self.scores = vec![None; g.nodes.len()];
-        self.last_query.clear(); // force a re-score against the new nodes
+        // rows and content hits index the OLD arena — the picker re-derives
+        // them (keeping its query and its cursor's identity)
+        self.picker.on_reload(g.nodes.len());
         self.detail = None; // re-read the body — the pane shows fresh edits
         // evict only thumbnails/excerpts whose file actually changed —
         // reloads are frequent (agents writing notes) and a full clear made

@@ -33,6 +33,34 @@ fn env_editor() -> Option<String> {
 }
 
 pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
+    spawn_editor_at(file, None)
+}
+
+/// How an editor is told to open at a line. Conventions differ, and an
+/// editor that does NOT know the one we guess opens a file literally named
+/// "+42" — so anything unrecognized just gets the path.
+fn open_args(base: &str, file: &Path, line: Option<usize>) -> Vec<std::ffi::OsString> {
+    // line 1 is where every editor lands anyway
+    let Some(l) = line.filter(|l| *l > 1) else {
+        return vec![file.into()];
+    };
+    let suffixed = || {
+        let mut s = file.as_os_str().to_os_string();
+        s.push(format!(":{l}"));
+        s
+    };
+    match base {
+        "hx" | "helix" | "subl" | "sublime_text" => vec![suffixed()],
+        "code" | "codium" | "code-insiders" | "cursor" => vec!["-g".into(), suffixed()],
+        "vim" | "nvim" | "vi" | "nano" | "micro" | "kak" | "emacs" | "emacsclient" | "gedit" => {
+            vec![format!("+{l}").into(), file.into()]
+        }
+        _ => vec![file.into()],
+    }
+}
+
+/// Open `file` in $EDITOR, at `line` where the editor takes one.
+pub(super) fn spawn_editor_at(file: &Path, line: Option<usize>) -> std::io::Result<()> {
     let Some(editor) = env_editor() else {
         return detached(std::process::Command::new("xdg-open").arg(file));
     };
@@ -44,13 +72,14 @@ pub(super) fn spawn_editor(file: &Path) -> std::io::Result<()> {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(&prog);
+    let target = open_args(base, file, line);
     if TERMINAL_EDITORS.contains(&base)
         && let Some(mut term) = new_terminal_window()
     {
-        term.arg(&prog).args(&args).arg(file);
+        term.arg(&prog).args(&args).args(&target);
         return detached(&mut term);
     }
-    detached(std::process::Command::new(&prog).args(&args).arg(file))
+    detached(std::process::Command::new(&prog).args(&args).args(&target))
 }
 
 /// The user's terminal editor: $VISUAL/$EDITOR when it names one, else the
@@ -272,7 +301,7 @@ impl Viewer {
 
     pub(super) fn open_create(&mut self, folder: bool, dir: String, label: String) {
         self.terms.focused = None; // the dialog owns the keyboard now
-        self.close_search();
+        self.picker.close();
         self.create = Some(CreateDialog {
             folder,
             dir,
