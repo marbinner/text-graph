@@ -72,7 +72,10 @@
   editing `extra_agents` can strip the choice out from under it). The
   accessor table is fn pointers, so a copy-pasted row would silently read
   one field and write another — `every_spec_reads_and_writes_its_own_field`
-  is what catches that. PER-USER (`~/.config/text-graph/config`, XDG-aware)
+  is what catches that. The file holds what the user PICKED, not what
+  exists: `to_text` skips settings still at their default, because writing
+  every key froze this build's defaults into it and no later version could
+  improve one for anyone who had opened the app once. PER-USER (`~/.config/text-graph/config`, XDG-aware)
   vs per-vault is the dividing line: preferences follow the person, camera/
   cards/pins/web-toggle stay in `state.rs`. Saves resolve symlinks (config
   files get linked into dotfiles repos) but do NOT refuse them the way the
