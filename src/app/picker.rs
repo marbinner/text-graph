@@ -115,8 +115,23 @@ pub(super) struct Preview {
     pub(super) source: Option<(String, Option<super::images::Stamp>)>,
 }
 
+/// Where the list comes from. The overlay is ONE surface — browsing is
+/// the finder pointed at a folder instead of at the whole vault — so a
+/// second chooser (with its own preview, its own keys, its own drift)
+/// never has to exist.
+#[derive(Clone, PartialEq)]
+pub(super) enum Source {
+    /// Fuzzy over names, aliases, paths, file contents and live panes.
+    Find,
+    /// The entries of one folder, in tree order, filtered by the query.
+    /// Held as a vault-relative PATH: reloads renumber the arena, and an
+    /// open overlay must survive an agent's save.
+    Browse(String),
+}
+
 pub(super) struct Picker {
     pub(super) open: bool,
+    pub(super) source: Source,
     pub(super) query: String,
     /// Query the rows were last built for.
     built: String,
@@ -128,7 +143,7 @@ pub(super) struct Picker {
     pub(super) cursor: usize,
     /// The cursor row's identity — rows are rebuilt constantly (streaming
     /// batches, reloads), and an index would slide out from under it.
-    cursor_key: Option<String>,
+    pub(super) cursor_key: Option<String>,
     /// Keep the cursor row in view on the next paint.
     scroll: bool,
     list_offset: f32,
@@ -151,7 +166,7 @@ pub(super) struct Picker {
     /// Content hits by vault-relative PATH (never by node index — reloads
     /// renumber the arena), tagged with the generation that found them so a
     /// finished scan can evict the previous one's leftovers.
-    content: HashMap<String, (u64, FileHits)>,
+    pub(super) content: HashMap<String, (u64, FileHits)>,
     scanning: bool,
     /// When the current run of scanning began, and when it last went idle
     /// — together they decide whether the hint is worth showing.
@@ -179,6 +194,7 @@ impl Picker {
         let (tx, rx) = std::sync::mpsc::channel();
         Picker {
             open: false,
+            source: Source::Find,
             query: String::new(),
             built: String::new(),
             dirty: false,
@@ -211,19 +227,44 @@ impl Picker {
         }
     }
 
-    /// Is a non-empty query live? Drives the canvas lit mask.
+    /// Is the canvas showing a result set? Drives the lit mask — a browse
+    /// listing lights its folder's entries the way a query lights matches.
     pub(super) fn searching(&self) -> bool {
-        self.open && !self.query.trim().is_empty()
+        self.open && (!self.query.trim().is_empty() || self.browsing().is_some())
     }
 
     pub(super) fn open(&mut self) {
         self.open = true;
+        self.source = Source::Find;
         self.focus_pending = true;
         self.dirty = true;
     }
 
+    /// Open on a folder's entries. The query starts empty — browsing is
+    /// "show me what is here", and typing narrows it to this folder
+    /// (the scoped search that never needed its own keybind).
+    pub(super) fn browse(&mut self, dir: String) {
+        self.open = true;
+        self.source = Source::Browse(dir);
+        self.query.clear();
+        self.built.clear();
+        self.cursor = 0;
+        self.cursor_key = None;
+        self.user_moved = false;
+        self.focus_pending = true;
+        self.dirty = true;
+    }
+
+    pub(super) fn browsing(&self) -> Option<&str> {
+        match &self.source {
+            Source::Browse(dir) => Some(dir),
+            Source::Find => None,
+        }
+    }
+
     pub(super) fn close(&mut self) {
         self.open = false;
+        self.source = Source::Find;
         self.query.clear();
         self.built.clear();
         self.rows.clear();
@@ -345,12 +386,15 @@ impl Viewer {
     /// this branch is deliberately NOT `widget_free`-guarded: its Enter,
     /// Esc and arrows must act while its own text field has focus.
     pub(super) fn picker_keys(&mut self, ui: &egui::Ui) {
-        let (esc, enter, ctrl, alt) = ui.input(|i| {
+        let (esc, enter, ctrl, alt, shift, tab, backspace) = ui.input(|i| {
             (
                 i.key_pressed(Key::Escape),
                 i.key_pressed(Key::Enter),
                 i.modifiers.command,
                 i.modifiers.alt,
+                i.modifiers.shift,
+                i.key_pressed(Key::Tab),
+                i.key_pressed(Key::Backspace),
             )
         });
         let step = ui.input(|i| {
@@ -374,41 +418,67 @@ impl Viewer {
             self.picker.close();
             return;
         }
-        // An empty query IS the ranger: the arrows drive its sibling
-        // column, exactly like j/k do when the prompt isn't focused. There
-        // is no result list to walk yet, and stepping an invisible one
-        // would move the camera for no visible reason.
-        if !self.picker.searching() {
-            if step != 0 {
-                self.walk_siblings(step);
+        // Tab swaps the SOURCE, keeping the query: what you typed as a
+        // filter inside a folder is usually what you want to search the
+        // whole vault for when it wasn't there.
+        if tab {
+            match self.picker.browsing().map(str::to_string) {
+                Some(_) => {
+                    let q = self.picker.query.clone();
+                    self.picker.open();
+                    self.picker.query = q;
+                }
+                None => {
+                    let dir = self.browse_start();
+                    let q = self.picker.query.clone();
+                    self.picker.browse(dir);
+                    self.picker.query = q;
+                }
             }
-            if enter {
-                self.picker.close(); // nothing to take — back to plain browsing
-            }
+            return;
+        }
+        let browsing = self.picker.browsing().is_some();
+        // Backspace on an EMPTY filter walks up — with text it edits, which
+        // is what a text field must always do first.
+        if browsing && backspace && self.picker.query.is_empty() {
+            self.browse_up();
             return;
         }
         if step != 0 {
             self.picker.move_cursor(step);
         }
         if enter {
-            // Ctrl/Alt+Enter opens the file in $EDITOR at the matched line
-            self.picker_accept(ctrl || alt);
+            // Enter on a FOLDER means "go in" while browsing — that is what
+            // browsing is. Shift+Enter takes the folder itself instead, so
+            // a directory can still become the selection (t/a/e act on it).
+            let into = browsing
+                .then(|| self.picker.cursor_row())
+                .flatten()
+                .and_then(|r| match r.target {
+                    Target::Node(i) if (i as usize) < self.g.nodes.len() => Some(NodeId(i)),
+                    _ => None,
+                })
+                .filter(|id| self.g.node(*id).kind == NodeKind::Dir && !shift);
+            match into {
+                Some(id) => self.browse_into(id),
+                // Ctrl/Alt+Enter opens the file in $EDITOR at the matched line
+                None => self.picker_accept(ctrl || alt),
+            }
         }
     }
 
-    /// Step the ranger's cursor by `delta` siblings (arrow keys with an
-    /// empty prompt). With nothing selected yet, the first step enters the
-    /// vault root, so `f` + ↓ starts browsing.
-    fn walk_siblings(&mut self, delta: isize) {
-        let to = match self.selected {
-            Some(sel) => self.g.nav_sibling(sel, delta),
-            None => self.g.nav_enter(self.g.root),
-        };
-        if let Some(t) = to {
-            self.selected = Some(t);
-            self.frame_node(t);
-            self.nav_scroll = true;
-            self.conn_cursor = None;
+    /// Where `b` starts browsing: the selected folder, the selected file's
+    /// folder, or the vault root.
+    pub(super) fn browse_start(&self) -> String {
+        match self.selected {
+            Some(id) if self.g.node(id).kind == NodeKind::Dir => self.g.node(id).path.clone(),
+            Some(id) => self
+                .g
+                .node(id)
+                .parent
+                .map(|p| self.g.node(p).path.clone())
+                .unwrap_or_default(),
+            None => self.g.node(self.g.root).path.clone(),
         }
     }
 
@@ -544,9 +614,10 @@ impl Viewer {
         self.picker.generation += 1;
         let generation = self.picker.generation;
         self.picker.live.store(generation, Ordering::Relaxed);
-        // an empty query has nothing to scan for, and content search off
-        // means the picker is names/aliases/paths only
-        if q.is_empty() || !self.cfg.content_search {
+        // an empty query has nothing to scan for; content search off means
+        // names/aliases/paths only; and browsing is structural — typing
+        // filters the folder, it does not read every file in the vault
+        if q.is_empty() || !self.cfg.content_search || self.picker.browsing().is_some() {
             self.picker.set_scanning(false);
             self.picker.content.clear();
             self.picker.done = None;
@@ -655,10 +726,111 @@ impl Viewer {
         self.picker.name_rows = rows;
     }
 
+    /// The entries of the browsed folder, in TREE order (dirs first, as
+    /// the graph stores them) — never ranked by score, because a list you
+    /// are walking must not reorder under the cursor. A query filters it
+    /// in place, which is scoped search: same surface, same keys.
+    fn browse_rows(&mut self, dir: &str) {
+        let id = self.g.by_path(dir).unwrap_or(self.g.root);
+        let q = Query::parse(&self.picker.query);
+        let pat = search::pattern(&self.picker.query);
+        let mut scores: Vec<Option<u32>> = vec![None; self.g.nodes.len()];
+        let mut rows = Vec::new();
+        for c in self.g.node(id).children.clone() {
+            let n = self.g.node(c);
+            let (kind, name) = (n.kind, n.display_name().to_string());
+            let label = if kind == NodeKind::Dir {
+                format!("{name}/")
+            } else {
+                name
+            };
+            let mut ranges = Vec::new();
+            if !q.is_empty() {
+                // match on the NAME only: inside a folder, the path is
+                // context you already have
+                let names = Names {
+                    display: &label,
+                    aliases: &n.aliases,
+                    path: "",
+                };
+                let Some(hit) = search::score_names(&pat, &mut self.matcher, names) else {
+                    continue;
+                };
+                if hit.class == Class::Name {
+                    ranges = hit.ranges;
+                }
+            }
+            // a note titled from its frontmatter reads under a name its
+            // file doesn't have — show the filename alongside, or a folder
+            // listing can't be matched against what is on disk
+            let file = n.path.rsplit('/').next().unwrap_or_default().to_string();
+            let subtitle = if kind == NodeKind::Dir || label.trim_end_matches('/') == file {
+                String::new()
+            } else {
+                file
+            };
+            scores[c.0 as usize] = Some(1);
+            rows.push(Row {
+                target: Target::Node(c.0),
+                class: Class::Name,
+                score: 0,
+                title: label,
+                title_ranges: ranges,
+                subtitle,
+                subtitle_ranges: Vec::new(),
+                snippet: None,
+                more: 0,
+                more_capped: false,
+                key: self.g.node(c).ident(),
+            });
+        }
+        self.picker.node_scores = scores;
+        self.picker.rows = rows;
+        let was = self.picker.cursor;
+        self.picker.cursor = self
+            .picker
+            .cursor_key
+            .as_ref()
+            .and_then(|k| self.picker.rows.iter().position(|r| &r.key == k))
+            .unwrap_or(0);
+        if self.picker.cursor != was {
+            self.picker.scroll = true;
+        }
+        self.picker.cursor_key = self.picker.cursor_row().map(|r| r.key.clone());
+    }
+
+    /// Walk into a folder (Enter on a directory row) — the list becomes
+    /// its entries and the filter starts over, like `l` in the ranger.
+    fn browse_into(&mut self, id: NodeId) {
+        let path = self.g.node(id).path.clone();
+        self.picker.browse(path);
+    }
+
+    /// Up to the parent folder, landing the cursor on the folder we came
+    /// from so `Backspace`-then-Enter is a no-op round trip.
+    fn browse_up(&mut self) {
+        let Some(dir) = self.picker.browsing().map(str::to_string) else {
+            return;
+        };
+        let Some(id) = self.g.by_path(&dir) else {
+            return;
+        };
+        let Some(parent) = self.g.node(id).parent else {
+            return; // already at the vault root
+        };
+        let came_from = self.g.node(id).ident();
+        self.picker.browse(self.g.node(parent).path.clone());
+        self.picker.cursor_key = Some(came_from);
+    }
+
     /// Merge the three sources — cached fuzzy name hits, streamed content
     /// hits, live terminal panes — into one ranked list, at most one row
     /// per node, and put the cursor back on the row it was on.
     fn rebuild_rows(&mut self) {
+        if let Some(dir) = self.picker.browsing().map(str::to_string) {
+            self.browse_rows(&dir);
+            return;
+        }
         let q = Query::parse(&self.picker.query);
         self.score_names();
         let mut scores = self.picker.name_scores.clone();
@@ -1081,11 +1253,27 @@ impl Viewer {
                 ui.set_width(w);
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_width(w);
+                    let browsing = self.picker.browsing().map(str::to_string);
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("find").color(dim));
+                        let (tag, hint) = match &browsing {
+                            Some(dir) => (
+                                if dir.is_empty() {
+                                    "/".to_string()
+                                } else {
+                                    format!("{dir}/")
+                                },
+                                "filter this folder",
+                            ),
+                            None => ("find".to_string(), "name, path, or words in the text"),
+                        };
+                        ui.label(egui::RichText::new(tag).color(if browsing.is_some() {
+                            self.theme.dir
+                        } else {
+                            dim
+                        }));
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.picker.query)
-                                .hint_text("name, path, or words in the text")
+                                .hint_text(hint)
                                 .font(FontId::proportional(15.0))
                                 .desired_width(f32::INFINITY),
                         );
@@ -1101,7 +1289,9 @@ impl Viewer {
                     ui.horizontal(|ui| {
                         let n = self.picker.rows.len();
                         let content = self.picker.content.len();
-                        let mut line = if self.picker.query.trim().is_empty() {
+                        let mut line = if browsing.is_some() {
+                            format!("{n} entr{}", if n == 1 { "y" } else { "ies" })
+                        } else if self.picker.query.trim().is_empty() {
                             "type to search names, paths, contents and terminals".to_string()
                         } else {
                             format!(
@@ -1115,7 +1305,9 @@ impl Viewer {
                         }
                         ui.label(egui::RichText::new(line).small().color(dim));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let hints = if self.picker.searching() {
+                            let hints = if browsing.is_some() {
+                                "↑↓ move · ↵ open · ⌫ up · ⇥ search all · esc close"
+                            } else if self.picker.searching() {
                                 "↑↓ move · ↵ jump · ^↵ edit at line · esc close"
                             } else {
                                 "↑↓ walk · esc close"

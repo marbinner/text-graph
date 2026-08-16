@@ -768,6 +768,7 @@ impl Viewer {
         });
         let no_mods = ui.input(|i| i.modifiers.is_none());
         let settings_key = no_mods && pressed_fresh(ui, Key::Comma);
+        let browse_key = no_mods && pressed_fresh(ui, Key::B);
         // '?' carries Shift on every layout that has it — no no_mods here
         let help_key = pressed_fresh(ui, Key::Questionmark);
         let (term_key, web_key, edit_key, agent_key) = (
@@ -787,6 +788,12 @@ impl Viewer {
             self.picker_keys(ui);
         } else if open_key && widget_free {
             self.picker.open();
+        } else if browse_key && widget_free {
+            // b = the same overlay, listing a folder instead of searching
+            // everything. Finding is the default way around the vault;
+            // browsing is the deliberate one.
+            let dir = self.browse_start();
+            self.picker.browse(dir);
         } else if settings_key && widget_free {
             self.toggle_settings();
         } else if help_key && widget_free {

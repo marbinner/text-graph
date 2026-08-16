@@ -551,39 +551,127 @@ fn picker_ui_renders_prompt_results_and_preview() {
     );
 }
 
-/// An empty prompt IS the ranger: no result rows, nothing lit on the
-/// canvas, and the arrows walk the sibling column exactly like j/k. The
-/// pane opens on the vault root when nothing is selected yet.
+/// `b` is the ranger now: the same overlay, listing a folder instead of
+/// searching everything. Arrows walk the entries, Enter goes INTO a
+/// folder (Shift+Enter takes the folder itself), Backspace on an empty
+/// filter goes back up, and Enter on a file takes it like any result.
 #[test]
-fn an_empty_prompt_leaves_the_ranger_in_place_and_the_arrows_walk_it() {
+fn b_browses_the_folder_in_the_finder_and_walks_the_tree_with_it() {
+    let mut h = harness();
+    select(&mut h, "bom.md");
+    press(&mut h, Key::B);
+    assert_eq!(
+        h.state().picker.browsing(),
+        Some(""),
+        "b lists the selection's folder — bom.md lives in the vault root"
+    );
+    let names: Vec<String> = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .map(|r| r.title.clone())
+        .collect();
+    assert!(
+        names.iter().any(|t| t == "assets/") && names.iter().any(|t| t == "bom"),
+        "the folder's entries, dirs first, in tree order: {names:?}"
+    );
+    // a note titled from frontmatter still shows the file it lives in
+    let index = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .find(|r| r.title == "Index")
+        .expect("index.md is listed under its title")
+        .subtitle
+        .clone();
+    assert_eq!(index, "index.md", "…with its filename alongside");
+
+    // walking the list moves the cursor without touching the selection —
+    // browsing is choosing, and Enter is what commits
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(h.state().picker.cursor, 1);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("bom.md"),
+        "the selection waits for Enter"
+    );
+
+    // Enter on a folder descends into it
+    h.state_mut().picker.cursor = 0;
+    h.state_mut().picker.cursor_key = h.state().picker.cursor_row().map(|r| r.key.clone());
+    press(&mut h, Key::Enter);
+    assert_eq!(h.state().picker.browsing(), Some("assets"), "Enter goes in");
+
+    // …and Backspace on an empty filter comes back out, landing on it
+    press(&mut h, Key::Backspace);
+    assert_eq!(h.state().picker.browsing(), Some(""));
+    assert_eq!(
+        h.state().picker.cursor_row().map(|r| r.title.clone()),
+        Some("assets/".to_string()),
+        "the cursor lands on the folder we came from"
+    );
+
+    // typing filters this folder — scoped search, same surface, same keys
+    h.state_mut().picker.query = "bom".into();
+    h.step();
+    let names: Vec<String> = h
+        .state()
+        .picker
+        .rows
+        .iter()
+        .map(|r| r.title.clone())
+        .collect();
+    assert_eq!(names, vec!["bom".to_string()]);
+    assert!(
+        h.state().picker.content.is_empty(),
+        "and never reads a file: browsing is structural"
+    );
+
+    // Enter on a file takes it, like any result
+    press(&mut h, Key::Enter);
+    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"));
+    assert!(!h.state().picker.open, "taking a result closes the overlay");
+}
+
+/// An empty FIND prompt has no list, so the arrows have nothing to walk —
+/// they must not move the selection either, or the camera jumps for a
+/// list nobody can see.
+#[test]
+fn an_empty_find_prompt_walks_nothing() {
     let mut h = harness();
     select(&mut h, "bom.md");
     press(&mut h, Key::F);
-    h.step();
     assert!(h.state().picker.open);
     assert!(
         h.state().picker.rows.is_empty(),
         "an empty query ranks nothing"
     );
+    press(&mut h, Key::ArrowDown);
+    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"));
+    assert!(h.state().cam_anim.is_none(), "and the camera stays put");
+}
+
+/// Tab swaps the source and keeps what you typed: a filter that found
+/// nothing in this folder is usually the thing to search the vault for.
+#[test]
+fn tab_swaps_between_browsing_and_finding_keeping_the_query() {
+    let mut h = harness();
+    select(&mut h, "index.md");
+    press(&mut h, Key::B);
+    h.state_mut().picker.query = "grafer".into();
+    h.step();
     assert!(
-        h.state().picker.node_scores.iter().all(Option::is_none),
-        "and dims nothing on the canvas"
+        h.state().picker.rows.is_empty(),
+        "no entry of the root folder matches"
     );
-
-    press(&mut h, Key::ArrowDown);
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some("empty.md"),
-        "↓ steps to the next sibling, like j"
-    );
-    press(&mut h, Key::ArrowUp);
-    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"), "↑ steps back");
-    assert!(h.state().cam_anim.is_some(), "the camera follows the walk");
-
-    // …and with nothing selected, the first step enters the vault root
-    h.state_mut().selected = None;
-    press(&mut h, Key::ArrowDown);
-    assert_eq!(selected_path(&h).as_deref(), Some("assets"));
+    press(&mut h, Key::Tab);
+    assert_eq!(h.state().picker.browsing(), None, "tab lands in find");
+    assert_eq!(h.state().picker.query, "grafer", "with the query intact");
+    wait_for(&mut h, "the vault-wide match", |v| {
+        v.picker.rows.iter().any(|r| r.title.contains("Grafér"))
+    });
 }
 
 /// The keystroke that OPENS the picker must not land in its prompt: the
