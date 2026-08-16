@@ -967,3 +967,62 @@ fn the_pane_width_round_trips_through_the_view_file() {
         "a hand-edited width is clamped, like the camera"
     );
 }
+
+/// Content must not be able to widen the pane. egui STORES a panel's
+/// content-driven rect, so a note the pane can't fit (a wide markdown
+/// table, an unwrappable code line, a terminal screen) used to push it
+/// open — and the new width stuck, ratcheting further with every wide
+/// note walked onto, until the pane covered the canvas and its own
+/// columns ran off the window.
+#[test]
+fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let d = std::env::temp_dir().join(format!("tg-panewide-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let row = format!("| {} |\n", "wide-cell-that-never-wraps ".repeat(40));
+    std::fs::write(
+        d.join("wide.md"),
+        format!(
+            "# wide\n\n|h|\n|---|\n{row}{row}{row}\n\n`{}`\n",
+            "x".repeat(4000)
+        ),
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+
+    let seen = Arc::new(AtomicU32::new(0));
+    let probe = seen.clone();
+    let mut h = Harness::new_ui_state(
+        move |ui, v: &mut Viewer| {
+            let w = v.side_panel(ui);
+            probe.store(w.round() as u32, Ordering::Relaxed);
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    let id = h.state().g.by_path("wide.md").expect("the wide note");
+    h.state_mut().selected = Some(id);
+    // several frames: the ratchet needed a stored rect to grow from
+    for _ in 0..4 {
+        h.step();
+    }
+    let _ = std::fs::remove_dir_all(&d);
+
+    let win = h.ctx.content_rect().width();
+    let got = seen.load(Ordering::Relaxed) as f32;
+    let opened_at = super::pane_width(win, None);
+    assert!(
+        (got - opened_at).abs() <= 1.0,
+        "the pane took {got} of a {win} window instead of staying at \
+         {opened_at} — wide content widened it again"
+    );
+    assert_eq!(
+        h.state().pane_width,
+        Some(super::pane_width(win, None)),
+        "and the width the user owns is still the one it opened at"
+    );
+}

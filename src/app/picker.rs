@@ -1280,19 +1280,19 @@ impl Viewer {
                 });
             }
             PreviewBody::Screen(rows) => {
-                egui::ScrollArea::vertical()
-                    .id_salt("tg-picker-screen")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for r in rows {
-                            ui.label(
-                                egui::RichText::new(r.as_str())
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(text_color),
-                            );
-                        }
-                    });
+                // a terminal screen is 80+ monospace columns wide and
+                // cannot wrap: it scrolls sideways inside the pane rather
+                // than widening it (see navigator::preview_scroll)
+                super::navigator::preview_scroll(ui, "tg-picker-screen", |ui| {
+                    for r in rows {
+                        ui.label(
+                            egui::RichText::new(r.as_str())
+                                .monospace()
+                                .size(11.0)
+                                .color(text_color),
+                        );
+                    }
+                });
             }
             PreviewBody::Node(id) => {
                 // a name match, a folder, a picture: the pane shows exactly
@@ -1317,7 +1317,7 @@ impl Viewer {
 }
 
 /// One-line, ellipsized text wrapping for a row of the given width.
-fn one_line(max_width: f32) -> egui::text::TextWrapping {
+pub(super) fn one_line(max_width: f32) -> egui::text::TextWrapping {
     egui::text::TextWrapping {
         max_width,
         max_rows: 1,

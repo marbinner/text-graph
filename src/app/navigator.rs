@@ -8,6 +8,51 @@
 
 use super::*;
 
+/// A preview body scrolls in BOTH directions with its layout width pinned
+/// to the pane. Prose still wraps where the pane ends, while a wide
+/// markdown table or an unwrappable code line scrolls inside the pane
+/// instead of pushing it out over the canvas: egui stores a panel's
+/// CONTENT-driven rect, so "too wide to fit" used to mean "wider pane",
+/// ratcheting further open with every note you walked onto.
+pub(super) fn preview_scroll<R>(
+    ui: &mut egui::Ui,
+    salt: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let w = ui.available_width();
+    egui::ScrollArea::both()
+        .id_salt(salt)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_max_width(w);
+            add(ui)
+        })
+        .inner
+}
+
+/// One line, ellipsized at `w` — every NAME in the pane's columns goes
+/// through this, for the same reason: an over-long filename is content
+/// that would otherwise widen the pane.
+fn clipped(mut job: egui::text::LayoutJob, w: f32) -> egui::text::LayoutJob {
+    job.wrap = super::picker::one_line(w);
+    job
+}
+
+/// An ellipsized plain-text job (for the link lists, which have no icon).
+fn clipped_text(text: &str, color: egui::Color32, size: f32, w: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(size),
+            color,
+            ..Default::default()
+        },
+    );
+    clipped(job, w)
+}
+
 impl Viewer {
     /// Cap on the raw-text detail read for Asset files — logs can be huge,
     /// and the pane is a glance, not an editor.
@@ -71,42 +116,36 @@ impl Viewer {
                 // be borrowed simultaneously without a per-frame clone
                 let detail = self.detail.take();
                 if let Some((_, body)) = &detail {
-                    egui::ScrollArea::vertical()
-                        .id_salt("nav-preview")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            CommonMarkViewer::new().max_image_width(Some(400)).show(
-                                ui,
-                                &mut self.md_cache,
-                                body,
-                            );
-                        });
+                    preview_scroll(ui, "nav-preview", |ui| {
+                        CommonMarkViewer::new().max_image_width(Some(400)).show(
+                            ui,
+                            &mut self.md_cache,
+                            body,
+                        );
+                    });
                 }
                 self.detail = detail;
             }
             NodeKind::Dir => {
                 let children = self.g.node(id).children.clone();
-                egui::ScrollArea::vertical()
-                    .id_salt("nav-preview")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.label(format!("{} entries — l enters", children.len()));
-                        ui.add_space(4.0);
-                        for c in children {
-                            let child = self.g.node(c);
-                            let label = if child.kind == NodeKind::Dir {
-                                format!("{}/", child.display_name())
-                            } else {
-                                child.display_name().to_string()
-                            };
-                            let (glyph, color) = self.node_icon(c);
-                            let job =
-                                icon_label(glyph, color, &label, ui.visuals().text_color(), 12.5);
-                            if ui.link(job).clicked() {
-                                jump = Some(c);
-                            }
+                preview_scroll(ui, "nav-preview", |ui| {
+                    ui.label(format!("{} entries — l enters", children.len()));
+                    ui.add_space(4.0);
+                    let w = ui.available_width();
+                    for c in children {
+                        let child = self.g.node(c);
+                        let label = if child.kind == NodeKind::Dir {
+                            format!("{}/", child.display_name())
+                        } else {
+                            child.display_name().to_string()
+                        };
+                        let (glyph, color) = self.node_icon(c);
+                        let job = icon_label(glyph, color, &label, ui.visuals().text_color(), 12.5);
+                        if ui.link(clipped(job, w)).clicked() {
+                            jump = Some(c);
                         }
-                    });
+                    }
+                });
             }
             NodeKind::Image => {
                 if acting {
@@ -154,17 +193,14 @@ impl Viewer {
                 if filetype::is_text(&path) {
                     let detail = self.detail.take();
                     if let Some((_, body)) = &detail {
-                        egui::ScrollArea::vertical()
-                            .id_salt("nav-preview")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(body.as_str()).monospace().size(11.0),
-                                    )
-                                    .wrap(),
-                                );
-                            });
+                        preview_scroll(ui, "nav-preview", |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(body.as_str()).monospace().size(11.0),
+                                )
+                                .wrap(),
+                            );
+                        });
                     }
                     self.detail = detail;
                 } else {
@@ -189,8 +225,10 @@ impl Viewer {
                 ui.label("Cited from:");
                 ui.add_space(2.0);
                 let refs: Vec<NodeId> = self.g.backlinks(id).map(|l| l.from).collect();
+                let (w, color) = (ui.available_width(), ui.visuals().hyperlink_color);
                 for r in refs {
-                    if ui.link(self.g.node(r).path.clone()).clicked() {
+                    let job = clipped_text(&self.g.node(r).path, color, 12.5, w);
+                    if ui.link(job).clicked() {
                         jump = Some(r);
                     }
                 }
@@ -199,8 +237,10 @@ impl Viewer {
                 ui.label("Not written yet. Referenced from:");
                 ui.add_space(4.0);
                 let refs: Vec<NodeId> = self.g.backlinks(id).map(|l| l.from).collect();
+                let (w, color) = (ui.available_width(), ui.visuals().hyperlink_color);
                 for r in refs {
-                    if ui.link(self.g.node(r).path.clone()).clicked() {
+                    let job = clipped_text(&self.g.node(r).path, color, 12.5, w);
+                    if ui.link(job).clicked() {
                         jump = Some(r);
                     }
                 }
@@ -348,9 +388,10 @@ impl Viewer {
                                 } else {
                                     ui.visuals().text_color()
                                 };
+                                let job = icon_label(glyph, color, &label, text_color, 12.5);
                                 let resp = ui.selectable_label(
                                     *c == sel,
-                                    icon_label(glyph, color, &label, text_color, 12.5),
+                                    clipped(job, ui.available_width()),
                                 );
                                 if *c == sel && self.nav_scroll {
                                     resp.scroll_to_me(Some(egui::Align::Center));
@@ -431,9 +472,10 @@ impl Viewer {
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
+                        let cap = ui.available_width().min(240.0);
                         for (idx, (id, job)) in entries.iter().enumerate() {
                             let is_cur = self.conn_cursor == Some(idx);
-                            let resp = ui.selectable_label(is_cur, job.clone());
+                            let resp = ui.selectable_label(is_cur, clipped(job.clone(), cap));
                             if is_cur && self.nav_scroll {
                                 resp.scroll_to_me(Some(egui::Align::Center));
                             }

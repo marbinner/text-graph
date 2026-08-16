@@ -1967,6 +1967,38 @@ impl Viewer {
     }
 }
 
+impl Viewer {
+    /// The side pane, and the width it actually took (the return value is
+    /// what the regression test watches: content used to be able to widen
+    /// it, and egui STORES a panel's content-driven rect, so the pane
+    /// ratcheted further open with every wide note walked onto).
+    fn side_panel(&mut self, ui: &mut egui::Ui) -> f32 {
+        let win_w = ui.available_width();
+        let want = pane_width(win_w, self.pane_width);
+        let max = (win_w * 0.6).max(1.0);
+        let resp = egui::Panel::right("detail")
+            .resizable(true)
+            .size_range(PANE_MIN.min(max)..=max)
+            .default_size(want)
+            .show(ui, |ui| self.side_pane(ui));
+        // Record the width only while the pointer is down — that means
+        // a DRAG. Without the guard, a window briefly too narrow to
+        // hold the pane would clamp it and then save the clamp as the
+        // user's choice, quietly shrinking it for good. The stored
+        // value is clamped as well: the reported rect is CONTENT-
+        // driven, so anything that overflows the pane must not be able
+        // to enter the width the user thinks they chose.
+        let got = resp.response.rect.width();
+        let dragging = ui.input(|i| i.pointer.any_down());
+        if self.pane_width.is_none() {
+            self.pane_width = Some(want);
+        } else if dragging && (got - want).abs() > 0.5 {
+            self.pane_width = Some(got.clamp(PANE_MIN.min(max), max));
+        }
+        got
+    }
+}
+
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.apply_visuals {
@@ -1996,23 +2028,7 @@ impl eframe::App for Viewer {
         // compensates the camera as the pane widens, so the highlighted
         // result glides into what stays visible.
         if self.selected.is_some() || self.picker.open {
-            let win_w = ui.available_width();
-            let want = pane_width(win_w, self.pane_width);
-            let max = (win_w * 0.6).max(1.0);
-            let resp = egui::Panel::right("detail")
-                .resizable(true)
-                .size_range(PANE_MIN.min(max)..=max)
-                .default_size(want)
-                .show(ui, |ui| self.side_pane(ui));
-            // Record the width only while the pointer is down — that means
-            // a DRAG. Without the guard, a window briefly too narrow to
-            // hold the pane would clamp it and then save the clamp as the
-            // user's choice, quietly shrinking it for good.
-            let got = resp.response.rect.width();
-            let dragging = ui.input(|i| i.pointer.any_down());
-            if self.pane_width.is_none() || (dragging && (got - want).abs() > 0.5) {
-                self.pane_width = Some(got);
-            }
+            self.side_panel(ui);
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(self.theme.bg))

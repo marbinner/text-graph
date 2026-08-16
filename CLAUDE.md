@@ -238,6 +238,17 @@
   compensates (`frame_target` lifts a followed node by `FRAME_LIFT_FRAC`
   of the canvas height) — without it, following a result parks it behind
   the overlay, the one place you can't see.
+- NOTHING inside the side pane may ask for more width than the pane has.
+  egui STORES a panel's content-driven rect, so one wide markdown table,
+  one unwrappable code line, one long filename or a terminal screen used
+  to push the pane open — and it stuck, ratcheting further with every
+  wide note walked onto until the pane covered the canvas and its own
+  columns ran off the window. Bodies go through
+  `navigator::preview_scroll` (scrolls BOTH ways, layout width pinned to
+  the pane, so prose still wraps where the pane ends); every NAME goes
+  through `clipped`/`clipped_text` (one line, ellipsized). Guarded by
+  `wide_content_scrolls_inside_the_pane_instead_of_widening_it`, which
+  fails on the width, not on a screenshot.
 - The side pane's WIDTH belongs to the user: a quarter of the window the
   first time, then whatever they drag it to (`pane_width`, persisted per
   vault). Never size it from the inside — `ui.set_min_width` in the mode
