@@ -100,6 +100,22 @@ fn alias_heading_and_block_suffixes_resolve_to_files() {
 
 #[test]
 fn crlf_and_bom_files_extract_links() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let crlf = std::fs::read(root.join("notes/daily/2026-08-14.md")).unwrap();
+    let newline_count = crlf.iter().filter(|&&byte| byte == 10).count();
+    let crlf_count = crlf.windows(2).filter(|pair| *pair == b"\r\n").count();
+    assert!(crlf_count > 0, "the CRLF fixture must contain CRLF bytes");
+    assert_eq!(
+        crlf_count, newline_count,
+        "every fixture newline must remain CRLF"
+    );
+
+    let bom = std::fs::read(root.join("bom.md")).unwrap();
+    assert!(
+        bom.starts_with(b"\xef\xbb\xbf"),
+        "the BOM fixture must retain its UTF-8 BOM"
+    );
+
     let g = build_fixture();
     assert!(has_link(
         &g,
