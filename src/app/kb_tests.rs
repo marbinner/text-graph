@@ -1301,3 +1301,48 @@ fn the_preview_wraps_inside_the_pane_and_the_default_is_not_persisted() {
         "a width nobody dragged to must not be written back ({win} window)"
     );
 }
+
+/// The finder's list fills the window below the prompt. It used to be
+/// capped at a fraction of the canvas, which on a laptop screen left room
+/// for two or three results — and with an empty prompt the list wasn't
+/// drawn at all, so the recently-edited rows were built and then never
+/// shown.
+#[test]
+fn the_finder_list_fills_the_window_and_shows_the_empty_prompt_rows() {
+    let d = std::env::temp_dir().join(format!("tg-listh-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    for i in 0..40 {
+        std::fs::write(d.join(format!("note{i:02}.md")), "x").unwrap();
+    }
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            v.pump_picker(ui.ctx());
+            v.picker_overlay_ui(ui.ctx());
+        },
+        viewer,
+    );
+    super::install_icon_font(&h.ctx);
+    press(&mut h, Key::F);
+    h.step();
+    let win = h.ctx.content_rect().height();
+    let rows_shown = h.state().picker.list_h / 34.0;
+    let _ = std::fs::remove_dir_all(&d);
+    assert!(
+        !h.state().picker.rows.is_empty(),
+        "the empty prompt lists what changed last"
+    );
+    assert!(
+        h.state().picker.list_h > 0.0,
+        "…and those rows are actually DRAWN — the list used to render \
+         only while a query was live"
+    );
+    assert!(
+        rows_shown >= 8.0,
+        "only {rows_shown:.1} rows fit in a {win}pt window — the list is \
+         supposed to run to the bottom margin"
+    );
+}

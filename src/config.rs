@@ -31,6 +31,7 @@ pub struct Config {
     pub label_density: f32,
     pub node_scale: f32,
     pub focus_fade: f32,
+    pub finder_y: f32,
     pub thumbnails: bool,
     pub canvas_previews: bool,
     // ---- motion ----
@@ -65,6 +66,7 @@ impl Default for Config {
             label_density: 1.0,
             node_scale: 1.0,
             focus_fade: 0.18,
+            finder_y: 0.38,
             thumbnails: true,
             canvas_previews: true,
             spread: 1.0,
@@ -381,6 +383,11 @@ static SPECS: &[Spec] = specs![
         "focus_fade", Section::Appearance, "unrelated fade",
         "how visible things outside the selection's neighborhood stay",
         num(0.0, 1.0, 0.02, "", 2), focus_fade, Num;
+
+        "finder_y", Section::Appearance, "finder position",
+        "how far down the window the finder's prompt sits — lower it for \
+         a prompt near the middle, raise it to see more results at once",
+        num(0.1, 0.7, 0.01, "", 2), finder_y, Num;
 
         "thumbnails", Section::Appearance, "image thumbnails",
         "draw picture nodes as their contents once they are big enough",

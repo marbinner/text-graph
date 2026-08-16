@@ -43,15 +43,10 @@ const ROW_H: f32 = 34.0;
 const RECENT_MAX: usize = 30;
 /// Rows a Ctrl+D / Ctrl+U half-page jump moves.
 const HALF_PAGE: isize = 8;
-/// The floating finder's width, as a fraction of the canvas and clamped.
+/// The floating finder's width, as a fraction of the window and clamped.
 const OVERLAY_W_FRAC: f32 = 0.46;
 const OVERLAY_W_MIN: f32 = 380.0;
 const OVERLAY_W_MAX: f32 = 760.0;
-/// Where the prompt sits down the canvas — just below the middle, so the
-/// results have room to stack under it without leaving the eye's center.
-const PROMPT_Y_FRAC: f32 = 0.52;
-/// Height budget for the result list under the prompt.
-const LIST_H_FRAC: f32 = 0.36;
 /// A scan has to run at least this long before the "scanning…" hint
 /// appears. Every vault reload (an agent saving anything) and every
 /// keystroke restarts one, and those finish in milliseconds — a label
@@ -66,7 +61,13 @@ const SCAN_RESUME_GAP: Duration = Duration::from_millis(40);
 /// finder floats there — the middle of the band left free above the
 /// prompt. Without it, following a result would park it under the
 /// overlay, which is the one place you cannot see.
-pub(super) const FRAME_LIFT_FRAC: f32 = 0.5 - PROMPT_Y_FRAC * 0.5;
+/// How far up the canvas a followed node is lifted so the overlay never
+/// covers it: half the distance from the prompt to the middle. Derived
+/// from where the prompt actually IS (a setting), or framing would park
+/// results behind the one thing you can't see through.
+pub(super) fn frame_lift_frac(finder_y: f32) -> f32 {
+    0.5 - finder_y * 0.5
+}
 
 pub(super) enum ScanMsg {
     Hits(u64, Vec<FileHits>),
@@ -149,7 +150,7 @@ pub(super) struct Picker {
     /// Keep the cursor row in view on the next paint.
     scroll: bool,
     list_offset: f32,
-    list_h: f32,
+    pub(super) list_h: f32,
     /// Per-node match score, for the canvas lit mask (None = no match).
     pub(super) node_scores: Vec<Option<u32>>,
     /// The name tier, cached: fuzzy-scoring every node is the expensive
@@ -1311,18 +1312,17 @@ impl Viewer {
         if !self.picker.open {
             return;
         }
-        // center over the CANVAS, not the window: the side pane holds the
-        // preview, and an overlay centered on the window would sit half
-        // underneath it
-        let screen = self.last_canvas_rect.unwrap_or_else(|| ctx.content_rect());
+        // Centered on the WINDOW. It floats in Foreground order, so it
+        // draws over the side pane rather than under it, and the eye finds
+        // it in the same place whether or not the pane is open.
+        let screen = ctx.content_rect();
         let w = (screen.width() * OVERLAY_W_FRAC)
             .clamp(OVERLAY_W_MIN, OVERLAY_W_MAX)
             .min((screen.width() - 24.0).max(120.0));
         let pos = Pos2::new(
             screen.center().x - w * 0.5,
-            screen.top() + screen.height() * PROMPT_Y_FRAC,
+            screen.top() + screen.height() * self.cfg.finder_y,
         );
-        let list_h = (screen.height() * LIST_H_FRAC).clamp(120.0, 520.0);
         let dim = self.theme.text;
         egui::Area::new(egui::Id::new("tg-picker"))
             .order(egui::Order::Foreground)
@@ -1394,10 +1394,15 @@ impl Viewer {
                             ui.label(egui::RichText::new(hints).small().color(dim));
                         });
                     });
-                    if self.picker.searching() {
-                        ui.separator();
-                        self.picker_list(ui, list_h);
-                    }
+                    // The list is drawn whenever there are rows — with an
+                    // empty prompt those are the recently edited files,
+                    // which used to be built and then never shown.
+                    ui.separator();
+                    // it runs from here to the bottom margin: a finder you
+                    // can only see three results in is a finder you have to
+                    // scroll to use
+                    let h = ui.available_height().max(ROW_H * 3.0);
+                    self.picker_list(ui, h);
                 });
             });
     }

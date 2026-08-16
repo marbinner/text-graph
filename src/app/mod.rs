@@ -1049,7 +1049,7 @@ impl Viewer {
     fn frame_target(&self, i: usize, rect: Rect) -> Pos2 {
         let mut p = self.world_pos(i);
         if self.picker.open {
-            p.y += rect.height() * picker::FRAME_LIFT_FRAC / self.zoom;
+            p.y += rect.height() * picker::frame_lift_frac(self.cfg.finder_y) / self.zoom;
         }
         p
     }
