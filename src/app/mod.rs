@@ -776,6 +776,12 @@ impl Viewer {
             )
         });
         let no_mods = ui.input(|i| i.modifiers.is_none());
+        let (g_key, parent_key) = ui.input(|i| {
+            (
+                i.modifiers.is_none() && i.key_pressed(Key::G),
+                i.modifiers.is_none() && i.key_pressed(Key::P),
+            )
+        });
         let settings_key = no_mods && pressed_fresh(ui, Key::Comma);
         let browse_key = no_mods && pressed_fresh(ui, Key::B);
         let raw_key = no_mods && pressed_fresh(ui, Key::R);
@@ -861,7 +867,40 @@ impl Viewer {
         {
             self.frame_node(sel);
         } else if reset && widget_free {
-            self.fitted = false; // canvas re-fits on the next frame
+            // 0 resets the ZOOM and leaves you where you are; gg resets the
+            // whole camera. Splitting them is the difference between "let
+            // me see this properly" and "take me back out".
+            let rect = self
+                .last_canvas_rect
+                .unwrap_or_else(|| ui.ctx().content_rect());
+            if let Some((_, zoom)) = self.whole_graph_view(rect) {
+                self.cam_anim = None;
+                self.zoom = zoom;
+            }
+        } else if g_key && widget_free {
+            // vim gg: two bare g presses in quick succession refit the
+            // camera on the whole graph
+            if self
+                .pending_g
+                .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
+            {
+                self.pending_g = None;
+                self.cam_anim = None;
+                self.fitted = false; // canvas re-fits on the next frame
+            } else {
+                self.pending_g = Some(Instant::now());
+            }
+        } else if parent_key
+            && widget_free
+            && let Some(sel) = self.selected
+            && let Some(parent) = self.g.node(sel).parent
+        {
+            // p = up to the parent folder — the one tree move worth a key
+            // of its own now that browsing lives in the finder
+            self.selected = Some(parent);
+            self.frame_node(parent);
+            self.nav_scroll = true;
+            self.conn_cursor = None;
         } else if edit_key
             && widget_free
             && let Some(sel) = self.selected
@@ -903,68 +942,19 @@ impl Viewer {
             self.launch_agent(&ctx, &dir, &agent);
         }
 
-        // Ranger-style tree walk — SELECTION IS THE MODE: with a node
-        // selected, hjkl walks the Contains tree (discrete steps, key
-        // repeat); with nothing selected they pan. Esc switches back.
-        let tree_nav = self.selected.is_some() && widget_free;
-        if let Some(sel) = self.selected.filter(|_| tree_nav) {
-            let (h, j, k, l, g, sg, out_jump, back_jump) = ui.input(|i| {
+        // The connections strip is the one thing a SELECTION still walks
+        // with keys: ] and [ step its highlight (children, then outgoing,
+        // then incoming), Enter follows. Everything else about choosing a
+        // node lives in the finder now — hjkl belong to the camera.
+        if let Some(sel) = self.selected.filter(|_| widget_free) {
+            let (out_jump, back_jump) = ui.input(|i| {
                 let m = i.modifiers.is_none();
                 (
-                    m && i.key_pressed(Key::H),
-                    m && i.key_pressed(Key::J),
-                    m && i.key_pressed(Key::K),
-                    m && i.key_pressed(Key::L),
-                    m && i.key_pressed(Key::G),
-                    i.modifiers.shift_only() && i.key_pressed(Key::G),
                     m && i.key_pressed(Key::CloseBracket),
                     m && i.key_pressed(Key::OpenBracket),
                 )
             });
-            let mut to: Option<NodeId> = None;
-            if h {
-                to = self.g.node(sel).parent;
-            } else if j {
-                to = self.g.nav_sibling(sel, 1);
-            } else if k {
-                to = self.g.nav_sibling(sel, -1);
-            } else if l {
-                if let Some(ci) = self.conn_cursor {
-                    // l on a highlighted connection = follow it
-                    to = self.connections(sel).get(ci).copied();
-                    self.conn_cursor = None;
-                } else {
-                    match self.g.node(sel).kind {
-                        NodeKind::Dir => to = self.g.nav_enter(sel),
-                        // every leaf kind opens — the navigator's Asset pane
-                        // advertises "open (Enter / l)", so l must match
-                        // Enter's open_in_editor behavior (text Assets edit,
-                        // binary ones xdg-open). key repeat must not spawn
-                        // an editor per repeat tick
-                        NodeKind::File | NodeKind::Image | NodeKind::Web | NodeKind::Asset
-                            if !ui.input(|i| {
-                                i.events.iter().any(|e| {
-                                    matches!(
-                                        e,
-                                        egui::Event::Key {
-                                            key: Key::L,
-                                            pressed: true,
-                                            repeat: true,
-                                            ..
-                                        }
-                                    )
-                                })
-                            }) =>
-                        {
-                            self.open_in_editor(sel);
-                        }
-                        _ => {}
-                    }
-                }
-            } else if out_jump || back_jump {
-                // ] / [ walk a highlight through the connections strip
-                // (children, then outgoing, then incoming); Enter or l
-                // follows the highlighted one
+            if out_jump || back_jump {
                 let len = self.connections(sel).len() as isize;
                 if len > 0 {
                     let cur = self.conn_cursor.map(|i| i as isize);
@@ -976,59 +966,35 @@ impl Viewer {
                     self.conn_cursor = Some(next as usize);
                     self.nav_scroll = true;
                 }
-            } else if sg {
-                to = self.g.nav_sibling_end(sel, true);
-            } else if g {
-                // vim gg: two bare g presses in quick succession
-                if self
-                    .pending_g
-                    .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
-                {
-                    to = self.g.nav_sibling_end(sel, false);
-                    self.pending_g = None;
-                } else {
-                    self.pending_g = Some(Instant::now());
-                }
-            }
-            if (h || j || k || l || sg || out_jump || back_jump) && !g {
-                self.pending_g = None;
-            }
-            if h || j || k || sg {
-                self.conn_cursor = None; // tree moves dismiss the link cursor
-            }
-            if let Some(t) = to {
-                self.selected = Some(t);
-                self.frame_node(t); // the camera follows the walk
-                self.nav_scroll = true; // and the sibling list follows too
-                self.conn_cursor = None;
             }
         }
 
-        // vim-style camera: hjkl pans (when no node is selected), d/u zooms
-        // — continuous while held. Suppressed under the picker: its prompt
-        // can lose focus (a click into the preview), and a bare 'd' must
-        // not start zooming the canvas behind an open finder.
+        // The camera owns hjkl unconditionally now — no selection mode to
+        // switch out of — with s/d zooming out/in beside them, so one hand
+        // drives the whole view. Continuous while held. Suppressed under
+        // the picker: its prompt can lose focus (a click into the
+        // preview), and a bare 'd' must not zoom the canvas behind an open
+        // finder.
         if widget_free && !self.picker.open {
-            let (dt, h, j, k, l, d, u) = ui.input(|i| {
-                let m = i.modifiers.is_none() && !tree_nav;
+            let (dt, h, j, k, l, zoom_in, zoom_out) = ui.input(|i| {
+                let m = i.modifiers.is_none();
                 (
                     i.stable_dt.min(0.1),
                     m && i.key_down(Key::H),
                     m && i.key_down(Key::J),
                     m && i.key_down(Key::K),
                     m && i.key_down(Key::L),
-                    i.modifiers.is_none() && i.key_down(Key::D),
-                    i.modifiers.is_none() && i.key_down(Key::U),
+                    m && i.key_down(Key::D),
+                    m && i.key_down(Key::S),
                 )
             });
-            if h || j || k || l || d || u {
+            if h || j || k || l || zoom_in || zoom_out {
                 self.cam_anim = None; // manual camera input wins
                 let axis = |pos: bool, neg: bool| (pos as i8 - neg as i8) as f32;
                 let pan = 2200.0 * dt / self.zoom; // constant screen-space speed
                 self.center.x += pan * axis(l, h);
                 self.center.y += pan * axis(j, k);
-                // u dives in, d pulls out (vim half-page up/down, roughly)
-                let zf = 6.0f32.powf(dt * axis(u, d));
+                let zf = 6.0f32.powf(dt * axis(zoom_in, zoom_out));
                 self.zoom = (self.zoom * zf).clamp(0.02, 50.0);
                 ui.ctx().request_repaint();
             }
@@ -1055,7 +1021,10 @@ impl Viewer {
     }
 
     /// Frame the whole graph (first paint only — rect is unknown before then).
-    fn fit(&mut self, rect: Rect) {
+    /// Where the camera would sit to show the whole graph: center and
+    /// zoom, computed together but applied separately — `gg` takes both,
+    /// `0` takes only the zoom and stays where you are.
+    fn whole_graph_view(&self, rect: Rect) -> Option<(Pos2, f32)> {
         let mut min = Pos2::new(f32::INFINITY, f32::INFINITY);
         let mut max = Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY);
         for i in 0..self.g.nodes.len() {
@@ -1064,11 +1033,20 @@ impl Viewer {
             max = max.max(p);
         }
         if !min.x.is_finite() {
-            return;
+            return None;
         }
         let size = (max - min).max(Vec2::splat(1.0));
-        self.center = Pos2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
-        self.zoom = ((rect.width() / size.x).min(rect.height() / size.y) * 0.85).clamp(0.02, 50.0);
+        Some((
+            Pos2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5),
+            ((rect.width() / size.x).min(rect.height() / size.y) * 0.85).clamp(0.02, 50.0),
+        ))
+    }
+
+    fn fit(&mut self, rect: Rect) {
+        if let Some((center, zoom)) = self.whole_graph_view(rect) {
+            self.center = center;
+            self.zoom = zoom;
+        }
     }
 
     fn to_screen(&self, rect: Rect, w: Pos2) -> Pos2 {

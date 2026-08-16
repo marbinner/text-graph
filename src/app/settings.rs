@@ -412,9 +412,11 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "camera",
         &[
-            ("h j k l", "pan (with nothing selected)"),
+            ("h j k l", "pan"),
+            ("s / d", "zoom out / in"),
             ("drag / scroll", "pan / zoom toward the cursor"),
-            ("0  Home", "fit the whole graph"),
+            ("gg", "back out to the whole graph"),
+            ("0  Home", "reset the zoom, stay where you are"),
             ("z", "center on the selection"),
         ],
     ),
@@ -433,14 +435,11 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "browsing (a node selected)",
+        "a selected node",
         &[
-            ("j / k", "step through siblings"),
-            ("h", "up to the parent"),
-            ("l", "enter a directory, or open a file"),
-            ("r", "read the preview as source, or back to markdown"),
-            ("gg / G", "first / last sibling"),
+            ("p", "up to the parent folder"),
             ("] / [", "walk the connections strip"),
+            ("r", "read the preview as source, or back to markdown"),
             ("Enter", "open in the editor (folders: the file manager)"),
             ("Esc", "dismiss what's transient, then deselect"),
         ],

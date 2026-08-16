@@ -115,73 +115,75 @@ fn w_toggles_web_nodes() {
     assert!(h.state().show_web);
 }
 
+/// hjkl belong to the CAMERA now, selection or not — choosing a node
+/// lives in the finder (f / b). `p` is the one tree move left: up to the
+/// parent. s and d zoom, so one hand drives the whole view.
 #[test]
-fn hjkl_walks_the_tree_when_a_node_is_selected() {
+fn hjkl_pan_and_sd_zoom_whatever_is_selected() {
     let mut h = harness();
-    // root's files in sorted order: bom, empty, frontmatter-only, index
-    select(&mut h, "bom.md");
-    press(&mut h, Key::J);
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some("empty.md"),
-        "j = next sibling"
-    );
-    press(&mut h, Key::K);
-    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"), "k = previous");
-    press(&mut h, Key::K);
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some("topics"),
-        "k crosses from the files into the dirs — one sorted sibling list"
-    );
-    press(&mut h, Key::J);
-    assert_eq!(selected_path(&h).as_deref(), Some("bom.md"));
-    press(&mut h, Key::H);
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some(""),
-        "h = parent (vault root)"
-    );
-    press(&mut h, Key::L);
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some("assets"),
-        "l enters the root: first child, dirs-first order"
-    );
-    // G / gg jump to the ends of the sibling list
-    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::G);
-    h.step();
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some("index.md"),
-        "G = last sibling"
-    );
-    press(&mut h, Key::G);
-    press(&mut h, Key::G);
-    assert_eq!(
-        selected_path(&h).as_deref(),
-        Some("assets"),
-        "gg = first sibling"
-    );
-}
-
-#[test]
-fn hjkl_pans_the_camera_when_nothing_is_selected() {
-    let mut h = harness();
-    assert!(h.state().selected.is_none());
+    select(&mut h, "topics/grafér.md");
     let x0 = h.state().center.x;
     h.key_down(Key::H);
     h.run_steps(3);
     h.key_up(Key::H);
     h.step();
-    assert!(h.state().center.x < x0, "h pans left with no selection");
+    assert!(
+        h.state().center.x < x0,
+        "h pans left even with a node selected"
+    );
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("topics/grafér.md"),
+        "and panning never moves the selection"
+    );
 
-    // with a selection, the same key walks the tree and the camera recenters
-    // on the node instead of free-panning
-    select(&mut h, "bom.md");
-    let sel_before = selected_path(&h);
-    press(&mut h, Key::J);
-    assert_ne!(selected_path(&h), sel_before, "j navigates, not pans");
+    let z0 = h.state().zoom;
+    h.key_down(Key::D);
+    h.run_steps(3);
+    h.key_up(Key::D);
+    h.step();
+    assert!(h.state().zoom > z0, "d zooms in");
+    h.key_down(Key::S);
+    h.run_steps(6);
+    h.key_up(Key::S);
+    h.step();
+    assert!(h.state().zoom < z0, "s zooms out");
+
+    press(&mut h, Key::P);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("topics"),
+        "p goes up to the parent folder"
+    );
+    press(&mut h, Key::P);
+    assert_eq!(selected_path(&h).as_deref(), Some(""), "…and up again");
+    press(&mut h, Key::P);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some(""),
+        "the root has no parent to climb to"
+    );
+}
+
+/// `gg` puts the whole graph back on screen; `0` resets only the zoom and
+/// leaves you where you were looking.
+#[test]
+fn gg_refits_the_camera_and_zero_resets_only_the_zoom() {
+    let mut h = harness();
+    h.state_mut().fitted = true;
+    h.state_mut().zoom = 9.0;
+    let center = h.state().center;
+    press(&mut h, Key::Num0);
+    assert!(
+        h.state().zoom < 9.0,
+        "0 pulls the zoom back to a whole view"
+    );
+    assert_eq!(h.state().center, center, "…without moving the camera");
+
+    press(&mut h, Key::G);
+    assert!(h.state().fitted, "one g is half a chord — nothing yet");
+    press(&mut h, Key::G);
+    assert!(!h.state().fitted, "gg refits the whole graph next frame");
 }
 
 #[test]
@@ -205,11 +207,17 @@ fn brackets_walk_connections_and_enter_follows() {
     );
     assert_eq!(h.state().conn_cursor, None, "consumed by the jump");
 
-    // tree moves dismiss a live link cursor
+    // moving to another node dismisses a live link cursor (it indexes the
+    // node you were on); panning does not — the camera is not a move
     press(&mut h, Key::CloseBracket);
     assert!(h.state().conn_cursor.is_some());
     press(&mut h, Key::J);
-    assert_eq!(h.state().conn_cursor, None, "j clears the link cursor");
+    assert!(
+        h.state().conn_cursor.is_some(),
+        "j pans the camera and leaves the link cursor alone"
+    );
+    press(&mut h, Key::P);
+    assert_eq!(h.state().conn_cursor, None, "p moves, so it clears it");
 }
 
 #[test]
@@ -1037,8 +1045,7 @@ fn the_key_list_renders_and_a_filter_falls_back_to_settings() {
     h.step();
     h.step();
     assert!(
-        h.query_by_label_contains("browsing (a node selected)")
-            .is_some(),
+        h.query_by_label_contains("a selected node").is_some(),
         "the key groups render"
     );
     assert!(

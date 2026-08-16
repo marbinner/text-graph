@@ -173,42 +173,6 @@ impl Graph {
         id
     }
 
-    // ---- ranger-style tree walking (keyboard navigation) ----
-    // All in the deterministic sorted child order, so the navigator list,
-    // the graph layout, and the key stepping always agree.
-
-    /// (parent, index of `id` within its children). None for root/ghosts.
-    fn sibling_index(&self, id: NodeId) -> Option<(NodeId, usize)> {
-        let parent = self.node(id).parent?;
-        let i = self.node(parent).children.iter().position(|c| *c == id)?;
-        Some((parent, i))
-    }
-
-    /// The sibling `delta` steps away, clamped at the ends; None when the
-    /// move goes nowhere (already at an end, or no parent).
-    pub fn nav_sibling(&self, id: NodeId, delta: isize) -> Option<NodeId> {
-        let (parent, i) = self.sibling_index(id)?;
-        let sibs = &self.node(parent).children;
-        let j = (i as isize + delta).clamp(0, sibs.len() as isize - 1) as usize;
-        (j != i).then(|| sibs[j])
-    }
-
-    /// First or last sibling (vim gg / G).
-    pub fn nav_sibling_end(&self, id: NodeId, last: bool) -> Option<NodeId> {
-        let (parent, _) = self.sibling_index(id)?;
-        let sibs = &self.node(parent).children;
-        if last {
-            sibs.last().copied()
-        } else {
-            sibs.first().copied()
-        }
-    }
-
-    /// Enter a directory: its first child (ranger `l`).
-    pub fn nav_enter(&self, id: NodeId) -> Option<NodeId> {
-        self.node(id).children.first().copied()
-    }
-
     // ---- query layer: link adjacency and stable lookups ----
 
     /// Wikilinks FROM this node, in body order.
@@ -473,23 +437,15 @@ mod tests {
     }
 
     #[test]
-    fn tree_walk_steps_clamps_and_enters() {
+    fn the_tree_still_knows_its_shape() {
+        // the keyboard walk is gone (browsing lives in the finder), but
+        // `p` climbs parents and the finder lists children
         let g = tree();
-        let (a, z, b, c) = (NodeId(1), NodeId(2), NodeId(3), NodeId(4));
-        // j/k between siblings, clamped at the ends
-        assert_eq!(g.nav_sibling(b, 1), Some(c));
-        assert_eq!(g.nav_sibling(c, 1), None, "clamped at last");
-        assert_eq!(g.nav_sibling(c, -1), Some(b));
-        assert_eq!(g.nav_sibling(b, -1), None, "clamped at first");
-        // gg / G
-        assert_eq!(g.nav_sibling_end(c, false), Some(b));
-        assert_eq!(g.nav_sibling_end(b, true), Some(c));
-        // l enters a dir; h is just .parent
-        assert_eq!(g.nav_enter(a), Some(b));
-        assert_eq!(g.nav_enter(z), None, "files have no children");
-        // root has no parent, no siblings
-        assert_eq!(g.nav_sibling(g.root, 1), None);
+        let (a, b) = (NodeId(1), NodeId(3));
         assert_eq!(g.node(a).parent, Some(g.root));
+        assert_eq!(g.node(b).parent, Some(a));
+        assert_eq!(g.node(g.root).parent, None, "the root has nowhere up");
+        assert_eq!(g.node(a).children.first().copied(), Some(b));
     }
 
     /// The cross-reload identity invariant: a ghost whose raw target text
