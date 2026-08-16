@@ -113,7 +113,32 @@ the agent until `Ctrl+Q`.
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
 | `⚙` (bottom-right) | settings: **dark / light theme** and the **default agent** for one-click launching — both persisted per vault |
-| `/` or `Ctrl+F` | fuzzy search over names, aliases, paths — and agent terminals; matches stay lit, `Enter` jumps to the ringed best hit (a winning terminal lands focused, ready to type), `Esc` closes |
+| `/` or `Ctrl+F` | **the picker** — see below |
+
+### The picker (`/` or `Ctrl+F`)
+
+One finder over everything in the vault: note names, aliases, paths, the
+**text inside every file**, and the live agent terminals. Names, aliases
+and paths match fuzzily (`apbn` finds `agent-protocol-benchmark.md`);
+file content matches literally — every word you type has to appear on the
+same line, case-insensitively unless you type a capital. Content is never
+indexed: a worker thread streams the vault per query and stops the moment
+you type another character, so nothing goes stale under agents that
+rewrite notes while you search.
+
+It docks to the left — prompt, ranked results, live preview — leaving the
+canvas visible on the right, where matching nodes stay lit and the
+highlighted result **glides into view** as you arrow through the list. An
+empty prompt lists the whole vault, so `/` doubles as a browser.
+
+| Input | Action |
+|---|---|
+| type | filter — names first, then paths, then terminals, then content hits (with the matching line and its number) |
+| `↑` `↓` / `Ctrl+P` `Ctrl+N` | move through results; the preview and the camera follow |
+| `PageUp` `PageDown` / `Ctrl+U` `Ctrl+D` | half-page jumps |
+| `Enter` / click | select the result and frame it (a terminal card lands focused, ready to type) |
+| `Ctrl+Enter` | open the file in `$VISUAL`/`$EDITOR` **at the matched line** |
+| `Esc` | close |
 
 ### Navigator (a node is selected)
 
@@ -316,10 +341,12 @@ src/
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, tg_*, grace) + launch
   keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
-  app/        egui shell: transform, input, painting, search, navigator,
-              reload worker, terminal cards + focus; images.rs = thumbnail
-              textures, previews.rs = text previews + hover popup,
-              diag.rs = health badge
+  search.rs   the picker's engine: fuzzy name/path scoring, literal content
+              scanning (streamed from disk, never indexed), ranked rows
+  app/        egui shell: transform, input, painting, picker, navigator,
+              reload worker, terminal cards + focus; picker.rs = the finder
+              (state, keys, preview), images.rs = thumbnail textures,
+              previews.rs = text previews + hover popup, diag.rs = health badge
 assets/
   icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
   gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs
@@ -347,7 +374,7 @@ A suite of integration tests runs against a real tmux on a private socket
 path end-to-end, native resize propagation, and agent launching. The
 mirror's protocol layer (reply correlation, capture replay, cursor
 restore) is additionally unit-tested without tmux, and the keyboard state
-machine (modal hjkl, Esc ordering, link walking, search-Enter) is driven
+machine (modal hjkl, Esc ordering, link walking, the picker) is driven
 through a headless egui harness (`egui_kittest`).
 
 House rules: if you touch `fixtures/vault/`, re-count `fixtures/EXPECTED.md`

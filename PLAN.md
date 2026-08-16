@@ -184,7 +184,8 @@ degree-scaled node sizes, alias resolution, ghosts rendered hollow.
 
 **C — Daily driver. ✓ done.** One commit per step, in order:
 1. Fuzzy search (`nucleo-matcher`): `/` opens bar; matches name+path+aliases; live
-   dims non-matches; Enter frames + selects best hit; Esc clears.
+   dims non-matches; Enter frames + selects best hit; Esc clears. **Superseded**
+   by the picker (below), which kept the lit-mask and the glide-on-jump.
 2. Detail pane (`egui_commonmark`): selection opens right panel with rendered
    markdown, body read from disk on demand. Ghost selected → list of referencers.
 3. Open in `$EDITOR` on Enter / double-click. Viewer stays read-only.
@@ -192,6 +193,15 @@ degree-scaled node sizes, alias resolution, ghosts rendered hollow.
    positions carried over by path + gentle reheat so edits ripple instead of
    re-settling; selection/camera survive by path.
 5. Navigation: `f` frames selection, `Home` fits all, `Esc` deselects.
+
+**C+ — The picker. ✓ done.** The search bar grew into a telescope-style finder
+(lib `search.rs` + `app/picker.rs`): one docked pane over names, aliases, paths,
+**file contents**, and live terminal panes, with a ranked result list, a preview
+that highlights every match in context, arrow-key browsing that glides the camera
+to the highlighted node, `Ctrl+Enter` to open `$EDITOR` at the matched line, and
+an empty prompt that lists the whole vault. Content is streamed from disk per
+query on a cancellable worker (never indexed — bodies stay out of memory and
+nothing goes stale under agents writing notes).
 
 Checkpoint after C: daily-drive it against the real vault; annoyances set D's order.
 
@@ -206,8 +216,8 @@ Audit backlog (external audit, 2026-08):
 - Query layer core ✓ done (outlinks/backlinks indexes, by_path/by_ident,
   Link.offset preserved) — JSON/headless output still deferred to Phase 2.
 - app decomposition ✓ done: app/{mod,terminals,navigator,actions,reload,diag}.rs,
-  terminal state grouped in terminals::Terminals. mod.rs ~2,100 lines (canvas +
-  keys + search).
+  terminal state grouped in terminals::Terminals, the finder in app/picker.rs
+  over lib search.rs. mod.rs ~2,000 lines (canvas + keys).
 - Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
 - License + release packaging (user decision on license first).
 

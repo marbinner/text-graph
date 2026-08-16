@@ -63,7 +63,7 @@
   — without that, the world slides out from under the cursor and
   double-clicks miss. Don't reintroduce the slide.
 - Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
-  `create`, `state`, `graph`, `filetype`, `mdview`, …) must stay egui-free
+  `create`, `state`, `graph`, `filetype`, `mdview`, `search`, …) must stay egui-free
   (headless-testable). `mdview::prepare` rewrites note bodies for display
   ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs);
   relative markdown dests resolve against the SOURCE note's directory
@@ -73,7 +73,8 @@
   OpenUrl commands and jumps instead of opening a browser — keep that
   interception, or wikilink clicks leak to the OS.
   Only the bin's `app/` tree touches egui. Its layout: `mod.rs` = Viewer +
-  camera/canvas painting + key dispatch + search; `terminals.rs` = the
+  camera/canvas painting + key dispatch; `picker.rs` = the finder (state,
+  keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
   lifecycle; `navigator.rs` = the ranger pane; `actions.rs` = right-click
   menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
@@ -161,8 +162,27 @@
   egui surrenders widget focus at frame START on Escape, so
   guard-by-focus can't see the prompt — transient text inputs (like
   `nav_find`) must be their OWN first stage of the Esc dismiss chain.
-  The search bar's branch is the one deliberate exception (its Enter/Esc
-  act while its field is focused).
+  The picker's branch is the one deliberate exception (its Enter/Esc/
+  arrows act while its own field is focused).
+- The picker (`/`, `Ctrl+F`) is the ONE search surface: names/aliases/paths
+  fuzzy (nucleo, scored per FIELD — one concatenated haystack manufactured
+  subsequence matches straddling name and path), file CONTENT literal (all
+  terms on one line, smart case). Content is NEVER indexed: `search::
+  scan_files` streams from disk per query on a worker thread, generation-
+  cancelled between files, batched back so the list fills progressively —
+  bodies stay out of memory and nothing goes stale under agents that
+  rewrite notes. A query that only GREW may rescan just the previous
+  scan's hit FILES (`Query::narrows`), but only when that scan finished
+  un-truncated. Rows are nodes, at most one each (a name match keeps its
+  class and gains the matching line), ranked class → score → key, so a
+  streaming scan never reorders under the cursor; the cursor rides its
+  row's IDENTITY, since reloads renumber the arena. Content lines are
+  matched against the RAW file, frontmatter included — that is what makes
+  the line number the one `$EDITOR +N` wants (Ctrl+Enter). Browsing
+  results must NOT set the selection (it would open the navigator and
+  squeeze out the canvas the picker previews into) and an empty prompt
+  lists the vault without moving the camera. The picker docks LEFT and
+  the navigator is suppressed while it is open.
 - hjkl are MODAL on selection: node selected = ranger tree-walk (discrete,
   graph.rs `nav_*` helpers, camera follows via `frame_node`), nothing
   selected = continuous pan. Esc deselects back to pan. Don't bind hjkl to
