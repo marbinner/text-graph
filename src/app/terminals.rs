@@ -964,10 +964,13 @@ impl Viewer {
         if !compact {
             return;
         }
+        if !self.cfg.hover_previews {
+            return;
+        }
         let elapsed = since.elapsed();
-        if elapsed < super::previews::HOVER_DELAY {
-            ui.ctx()
-                .request_repaint_after(super::previews::HOVER_DELAY - elapsed);
+        let dwell = self.hover_delay();
+        if elapsed < dwell {
+            ui.ctx().request_repaint_after(dwell - elapsed);
             return;
         }
         let Some(c) = self.terms.cache.get(&key) else {

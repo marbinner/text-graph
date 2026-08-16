@@ -26,8 +26,9 @@ use nucleo_matcher::{Matcher, Utf32Str};
 
 use crate::vault;
 
-/// Files larger than this are skipped by the content scan (a vendored
-/// bundle or a 50MB log is never what you are looking for by line).
+/// Default ceiling for the content scan — a vendored bundle or a 50MB log
+/// is never what you are looking for by line. The caller passes the live
+/// value (`config::search_max_bytes`); this is what it defaults to.
 pub const MAX_FILE_BYTES: u64 = 1 << 20;
 /// Matching lines counted per file; beyond it the count reads "200+".
 pub const MAX_LINES_PER_FILE: usize = 200;
@@ -264,6 +265,7 @@ pub fn scan_files(
     root: &Path,
     query: &Query,
     files: &[String],
+    max_bytes: u64,
     cancelled: &dyn Fn() -> bool,
     emit: &mut dyn FnMut(Vec<FileHits>),
 ) -> ScanOutcome {
@@ -283,10 +285,10 @@ pub fn scan_files(
         let Ok(meta) = std::fs::metadata(&path) else {
             continue;
         };
-        if meta.len() > MAX_FILE_BYTES {
+        if meta.len() > max_bytes {
             continue;
         }
-        let Ok(text) = vault::read_head(&path, MAX_FILE_BYTES) else {
+        let Ok(text) = vault::read_head(&path, max_bytes) else {
             continue;
         };
         out.files_read += 1;
@@ -562,6 +564,7 @@ mod tests {
                 &fixture_root(),
                 &q("heading"),
                 &files,
+                MAX_FILE_BYTES,
                 &|| false,
                 &mut |b| got.extend(b),
             );
@@ -582,11 +585,14 @@ mod tests {
     fn a_superseded_scan_stops_early() {
         let files = fixture_files();
         let mut got = Vec::new();
-        let out = scan_files(&fixture_root(), &q("e"), &files, &|| true, &mut |b: Vec<
-            FileHits,
-        >| {
-            got.extend(b)
-        });
+        let out = scan_files(
+            &fixture_root(),
+            &q("e"),
+            &files,
+            MAX_FILE_BYTES,
+            &|| true,
+            &mut |b: Vec<FileHits>| got.extend(b),
+        );
         assert!(out.cancelled);
         assert_eq!(out.files_read, 0, "cancelled before the first read");
         assert!(got.is_empty());
@@ -598,6 +604,7 @@ mod tests {
             &fixture_root(),
             &q("  "),
             &fixture_files(),
+            MAX_FILE_BYTES,
             &|| false,
             &mut |_| panic!("must not emit"),
         );

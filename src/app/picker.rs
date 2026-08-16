@@ -29,9 +29,6 @@ use super::*;
 /// Typing pause before the content scan starts. Long enough that a fast
 /// typist never starts a scan per character, short enough to feel live.
 const DEBOUNCE: Duration = Duration::from_millis(90);
-/// Dwell on a result before the camera glides to it — arrowing quickly
-/// through 30 rows must not launch 30 glides.
-const FOLLOW_DELAY: Duration = Duration::from_millis(120);
 /// Bytes of a file read for the preview pane.
 const PREVIEW_BYTES: u64 = 256 * 1024;
 /// Preview context above the hit, and total lines kept.
@@ -537,7 +534,9 @@ impl Viewer {
         self.picker.generation += 1;
         let generation = self.picker.generation;
         self.picker.live.store(generation, Ordering::Relaxed);
-        if q.is_empty() {
+        // an empty query has nothing to scan for, and content search off
+        // means the picker is names/aliases/paths only
+        if q.is_empty() || !self.cfg.content_search {
             self.picker.set_scanning(false);
             self.picker.content.clear();
             self.picker.done = None;
@@ -569,13 +568,15 @@ impl Viewer {
         let root = self.root.clone();
         let tx = self.picker.tx.clone();
         let live = self.picker.live.clone();
+        let max_bytes = self.cfg.search_max_bytes();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let cancelled = || live.load(Ordering::Relaxed) != generation;
-            let outcome = search::scan_files(&root, &q, &files, &cancelled, &mut |batch| {
-                let _ = tx.send(ScanMsg::Hits(generation, batch));
-                ctx.request_repaint();
-            });
+            let outcome =
+                search::scan_files(&root, &q, &files, max_bytes, &cancelled, &mut |batch| {
+                    let _ = tx.send(ScanMsg::Hits(generation, batch));
+                    ctx.request_repaint();
+                });
             let _ = tx.send(ScanMsg::Done(generation, q, outcome));
             ctx.request_repaint();
         });
@@ -821,6 +822,7 @@ impl Viewer {
     /// highlighted node for a moment. Selection is NOT touched: browsing
     /// results must not open the navigator and squeeze the canvas.
     fn picker_follow(&mut self, ctx: &egui::Context) {
+        let follow_delay = Duration::from_secs_f32(self.cfg.follow_delay.max(0.0));
         if !self.picker.searching() && !self.picker.user_moved {
             self.picker.follow = None;
             return;
@@ -828,18 +830,18 @@ impl Viewer {
         match (self.picker.cursor_node(), self.picker.follow) {
             (Some(id), Some((prev, at))) if prev == id => {
                 let waited = at.elapsed();
-                if waited >= FOLLOW_DELAY {
+                if waited >= follow_delay {
                     if self.picker.followed != Some(id) {
                         self.picker.followed = Some(id);
                         self.frame_node(id);
                     }
                 } else {
-                    ctx.request_repaint_after(FOLLOW_DELAY - waited);
+                    ctx.request_repaint_after(follow_delay - waited);
                 }
             }
             (Some(id), _) => {
                 self.picker.follow = Some((id, Instant::now()));
-                ctx.request_repaint_after(FOLLOW_DELAY);
+                ctx.request_repaint_after(follow_delay);
             }
             (None, _) => {
                 self.picker.follow = None;

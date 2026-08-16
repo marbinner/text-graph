@@ -827,3 +827,54 @@ fn label_density_and_node_scale_move_what_they_feed() {
         "node scale multiplies every radius, cap included"
     );
 }
+
+/// Content search off makes the picker a name/alias/path finder — no
+/// worker, no snippets — while name matching keeps working.
+#[test]
+fn content_search_can_be_turned_off() {
+    let mut h = harness();
+    h.state_mut().cfg.content_search = false;
+    press(&mut h, Key::Slash);
+    h.state_mut().picker.query = "Heading One".into();
+    for _ in 0..25 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(4));
+    }
+    assert!(
+        h.state().picker.rows.iter().all(|r| r.snippet.is_none()),
+        "no file was scanned for content"
+    );
+    h.state_mut().picker.query = "index".into();
+    wait_for(&mut h, "the name match", |v| !v.picker.rows.is_empty());
+    assert!(
+        h.state()
+            .picker
+            .rows
+            .iter()
+            .any(|r| r.title.contains("Index")),
+        "names still match with content search off"
+    );
+}
+
+/// The hover popup is a setting: off means a dwell opens nothing, at any
+/// delay.
+#[test]
+fn hover_previews_can_be_turned_off() {
+    use std::time::{Duration, Instant};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/vault");
+    let scan = vault::scan(&root).expect("fixture scans");
+    let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
+    let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.hover_preview_ui(ui), viewer);
+    let id = h.state().g.by_path("index.md").expect("index exists");
+    let since = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    h.state_mut().cfg.hover_previews = false;
+    h.state_mut().hover_since = Some((id, since, eframe::egui::Pos2::new(80.0, 80.0)));
+    h.step();
+    h.step();
+    assert!(
+        h.query_by_label("Index").is_none(),
+        "the dwell popup must stay closed when previews are off"
+    );
+}

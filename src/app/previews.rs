@@ -69,9 +69,6 @@ impl Previews {
     }
 }
 
-/// Dwell before the hover preview opens — sweeping the cursor across nodes
-/// must not strobe popups. Shared with the terminal-card peek.
-pub(super) const HOVER_DELAY: Duration = Duration::from_millis(350);
 /// Popup content width; images fit within it, text wraps to it.
 const POPUP_W: f32 = 430.0;
 const POPUP_MAX_H: f32 = 460.0;
@@ -97,16 +94,27 @@ impl Viewer {
     /// The full-content hover preview: linger on any node — a File renders
     /// its whole body as markdown, an Image the picture at popup size, a
     /// text Asset its raw head, a Dir its listing, a Ghost its referrers.
+    /// The hover dwell, as configured — sweeping the cursor across nodes
+    /// must not strobe popups. The node popup and the terminal-card peek
+    /// share it, so they open on the same beat.
+    pub(super) fn hover_delay(&self) -> Duration {
+        Duration::from_secs_f32(self.cfg.hover_delay.max(0.0))
+    }
+
     /// Non-interactable, tooltip layer, anchored where the dwell began.
     pub(super) fn hover_preview_ui(&mut self, ui: &egui::Ui) {
         let Some((id, since, anchor)) = self.hover_since else {
             return;
         };
+        if !self.cfg.hover_previews {
+            return;
+        }
         let kind = self.g.node(id).kind;
         let elapsed = since.elapsed();
-        if elapsed < HOVER_DELAY {
+        let dwell = self.hover_delay();
+        if elapsed < dwell {
             // wake exactly when the dwell completes
-            ui.ctx().request_repaint_after(HOVER_DELAY - elapsed);
+            ui.ctx().request_repaint_after(dwell - elapsed);
             return;
         }
         let screen = ui.ctx().content_rect();
