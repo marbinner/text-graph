@@ -14,6 +14,7 @@ pub mod config;
 pub mod create;
 pub mod filetype;
 pub mod graph;
+pub mod highlight;
 pub mod keys;
 pub mod layout;
 pub mod mdview;

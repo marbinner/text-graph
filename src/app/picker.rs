@@ -75,10 +75,14 @@ pub(super) enum ScanMsg {
 }
 
 /// One rendered line of the preview pane.
+#[derive(Clone)]
 pub(super) struct PreviewLine {
     pub(super) no: usize,
     pub(super) text: String,
     pub(super) ranges: Vec<search::Range>,
+    /// Syntax colouring for this line, empty when the file type is one
+    /// syntect doesn't know (or the file was too big to colour).
+    pub(super) spans: Vec<highlight::Span>,
     /// The line the result row points at.
     pub(super) hit: bool,
 }
@@ -1236,6 +1240,11 @@ impl Viewer {
                     // the scan works on the RAW file, so line numbers here
                     // are the ones an editor's +N expects
                     let start = hit.map_or(1, |h| h.saturating_sub(PREVIEW_BEFORE).max(1));
+                    // colouring runs from line ONE — a highlighter's state
+                    // is what knows whether line 400 is inside a string
+                    let colours =
+                        highlight::spans(&path, &text, start + PREVIEW_LINES, self.cfg.light)
+                            .unwrap_or_default();
                     let mut buf = String::new();
                     let mut lines = Vec::new();
                     for (i, line) in text.lines().enumerate().skip(start - 1).take(PREVIEW_LINES) {
@@ -1244,10 +1253,23 @@ impl Viewer {
                         if hit == Some(no) {
                             focus = Some(lines.len());
                         }
+                        let shown = cap_chars(line, PREVIEW_LINE_CAP);
+                        // a capped line keeps only the colouring that still
+                        // has text under it
+                        let spans = colours
+                            .get(i)
+                            .map(|v| {
+                                v.iter()
+                                    .filter(|s| s.range.end <= shown.len())
+                                    .cloned()
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         lines.push(PreviewLine {
                             no,
-                            text: cap_chars(line, PREVIEW_LINE_CAP),
+                            text: shown,
                             ranges: m.map(|m| m.ranges).unwrap_or_default(),
+                            spans,
                             hit: hit == Some(no),
                         });
                     }
@@ -1609,6 +1631,58 @@ pub(super) fn push_marked_mono(
         base,
         accent,
     );
+}
+
+/// One line of source: syntax colour underneath, search matches marked
+/// with a background rather than a colour of their own — recolouring the
+/// hit would erase exactly the colouring the source view is for.
+pub(super) fn push_source_line(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    matches: &[search::Range],
+    spans: &[highlight::Span],
+    size: f32,
+    base: Color32,
+    accent: Color32,
+) {
+    let mut cuts: Vec<usize> = vec![0, text.len()];
+    for &(s, e) in matches {
+        cuts.push(s);
+        cuts.push(e);
+    }
+    for sp in spans {
+        cuts.push(sp.range.start);
+        cuts.push(sp.range.end);
+    }
+    cuts.retain(|c| *c <= text.len() && text.is_char_boundary(*c));
+    cuts.sort_unstable();
+    cuts.dedup();
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if a >= b {
+            continue;
+        }
+        let hit = matches.iter().any(|&(s, e)| s <= a && b <= e);
+        let sp = spans
+            .iter()
+            .find(|sp| sp.range.start <= a && b <= sp.range.end);
+        let color = sp.map_or(base, |s| Color32::from_rgb(s.color.0, s.color.1, s.color.2));
+        job.append(
+            &text[a..b],
+            0.0,
+            egui::TextFormat {
+                font_id: FontId::monospace(size),
+                color,
+                italics: sp.is_some_and(|s| s.italic),
+                background: if hit {
+                    accent.gamma_multiply(0.35)
+                } else {
+                    Color32::TRANSPARENT
+                },
+                ..Default::default()
+            },
+        );
+    }
 }
 
 fn push_marked_font(

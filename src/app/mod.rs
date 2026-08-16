@@ -41,7 +41,7 @@ use text_graph::graph::{Graph, LinkKind, NodeId, NodeKind};
 use text_graph::keys::{self, Mods, Special};
 use text_graph::mirror::{SessionMirror, TermGrid};
 use text_graph::sim::Sim;
-use text_graph::{config, create, filetype, graph, mdview, state, vault};
+use text_graph::{config, create, filetype, graph, highlight, mdview, state, vault};
 
 // ---- palette (dark) ----
 const BG: Color32 = Color32::from_rgb(0x0f, 0x11, 0x15);

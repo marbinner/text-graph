@@ -1464,3 +1464,54 @@ fn a_narrow_result_set_does_not_shrink_the_finder_for_good() {
          on every keystroke"
     );
 }
+
+/// The source view colours code. The search match keeps its own mark —
+/// a background, not a colour — because recolouring the hit would erase
+/// exactly the colouring the source view is for.
+#[test]
+fn the_source_view_is_syntax_coloured_and_keeps_its_match_marks() {
+    let d = std::env::temp_dir().join(format!("tg-hl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("code.rs"),
+        "fn main() {\n    let greeting = \"hello\"; // a comment\n}\n",
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        |ui, v: &mut Viewer| {
+            v.handle_keys(ui);
+            v.pump_picker(ui.ctx());
+        },
+        viewer,
+    );
+    h.step();
+    let id = h.state().g.by_path("code.rs").expect("the code file");
+    h.state_mut().selected = Some(id);
+    h.state_mut().cfg.preview_raw = true; // r: read it as source
+    h.step();
+
+    let lines = match h.state().pane_preview.as_ref().map(|p| &p.body) {
+        Some(super::picker::PreviewBody::Text(lines)) => lines.clone(),
+        _ => panic!("expected the source view"),
+    };
+    let _ = std::fs::remove_dir_all(&d);
+    let line = lines
+        .iter()
+        .find(|l| l.text.contains("greeting"))
+        .expect("the line is there");
+    let colors: std::collections::HashSet<(u8, u8, u8)> =
+        line.spans.iter().map(|s| s.color).collect();
+    assert!(
+        colors.len() >= 3,
+        "keyword, string and comment must not share one colour: {colors:?}"
+    );
+    assert!(
+        line.spans
+            .iter()
+            .all(|s| s.range.end <= line.text.len() && line.text.is_char_boundary(s.range.start)),
+        "spans index into the line as drawn, capping included"
+    );
+}

@@ -8,7 +8,7 @@
 //! `picker.rs`; keyboard walking lives in handle_keys.
 
 use super::*;
-use picker::{Preview, PreviewBody, one_line, push_marked_mono};
+use picker::{Preview, PreviewBody, one_line};
 
 /// A preview body scrolls in BOTH directions with its layout width pinned
 /// to the pane. Prose still wraps where the pane ends, while a wide
@@ -145,11 +145,14 @@ impl Viewer {
                         // so prose wrapped at 400 and ran off a narrower
                         // pane, clipped at the window edge
                         let w = ui.available_width().max(80.0) as usize;
-                        CommonMarkViewer::new().max_image_width(Some(w)).show(
-                            ui,
-                            &mut self.md_cache,
-                            body,
-                        );
+                        CommonMarkViewer::new()
+                            .max_image_width(Some(w))
+                            // fenced code is highlighted by the same
+                            // syntect themes the source view uses, so a
+                            // snippet reads the same in either
+                            .syntax_theme_dark("base16-ocean.dark")
+                            .syntax_theme_light("InspiredGitHub")
+                            .show(ui, &mut self.md_cache, body);
                     });
                 }
                 self.detail = detail;
@@ -356,7 +359,9 @@ impl Viewer {
                                 ..Default::default()
                             },
                         );
-                        push_marked_mono(&mut job, &l.text, &l.ranges, 11.5, text_color, accent);
+                        picker::push_source_line(
+                            &mut job, &l.text, &l.ranges, &l.spans, 11.5, text_color, accent,
+                        );
                         job.wrap = one_line(ui.available_width());
                         let galley = ui.painter().layout_job(job);
                         let (rect, _) = ui.allocate_exact_size(
