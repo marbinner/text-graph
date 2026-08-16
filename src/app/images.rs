@@ -35,8 +35,12 @@ pub(super) fn fresh(stored: &Option<Stamp>, current: Option<Stamp>) -> bool {
     stored.is_some() && *stored == current
 }
 
+type JobId = u64;
+type Job = (String, JobId, PathBuf);
+type JobResult = (String, JobId, Result<(thumb::Thumb, Option<Stamp>), ()>);
+
 pub(super) enum ThumbState {
-    Pending,
+    Pending(JobId),
     Failed,
     Ready {
         tex: egui::TextureHandle,
@@ -47,9 +51,9 @@ pub(super) enum ThumbState {
 pub(super) struct Thumbs {
     /// Decode worker, spawned on first request (it needs a Context to wake
     /// the UI, which Viewer::new doesn't have).
-    jobs: Option<Sender<(String, PathBuf)>>,
-    #[allow(clippy::type_complexity)]
-    results: Option<Receiver<(String, Result<(thumb::Thumb, Option<Stamp>), ()>)>>,
+    jobs: Option<Sender<Job>>,
+    results: Option<Receiver<JobResult>>,
+    next_job: JobId,
     pub(super) cache: HashMap<String, ThumbState>,
 }
 
@@ -58,6 +62,7 @@ impl Thumbs {
         Thumbs {
             jobs: None,
             results: None,
+            next_job: 1,
             cache: HashMap::new(),
         }
     }
@@ -65,14 +70,17 @@ impl Thumbs {
     /// Upload finished decodes as textures. Once per frame, before painting.
     pub(super) fn pump(&mut self, ctx: &egui::Context) {
         let Some(rx) = &self.results else { return };
-        while let Ok((key, res)) = rx.try_recv() {
+        while let Ok((key, job, res)) = rx.try_recv() {
             // Accept only results still WANTED: if retain_fresh evicted the
             // Pending entry while this decode was in flight (the file
             // changed under it), inserting would pin the stale pixels until
             // the next reload — which may never come if the vault goes
             // quiet. Dropped results are re-queued by paint-time request()
             // against the new bytes.
-            if !matches!(self.cache.get(&key), Some(ThumbState::Pending)) {
+            if !matches!(
+                self.cache.get(&key),
+                Some(ThumbState::Pending(wanted)) if *wanted == job
+            ) {
                 continue;
             }
             let state = match res {
@@ -102,18 +110,18 @@ impl Thumbs {
             return;
         }
         if self.jobs.is_none() {
-            let (job_tx, job_rx) = std::sync::mpsc::channel::<(String, PathBuf)>();
+            let (job_tx, job_rx) = std::sync::mpsc::channel::<Job>();
             let (res_tx, res_rx) = std::sync::mpsc::channel();
             let ctx = ctx.clone();
             std::thread::spawn(move || {
-                while let Ok((key, path)) = job_rx.recv() {
+                while let Ok((key, job, path)) = job_rx.recv() {
                     // stamp BEFORE decoding: if the file changes mid-decode,
                     // the stale stamp makes the next reload re-decode it
                     let stamp = file_stamp(&path);
                     let res = thumb::decode(&path, THUMB_PX)
                         .map(|t| (t, stamp))
                         .map_err(|e| eprintln!("thumbnail {key}: {e:#}"));
-                    if res_tx.send((key, res)).is_err() {
+                    if res_tx.send((key, job, res)).is_err() {
                         return; // viewer is gone
                     }
                     ctx.request_repaint();
@@ -122,9 +130,14 @@ impl Thumbs {
             self.jobs = Some(job_tx);
             self.results = Some(res_rx);
         }
-        self.cache.insert(key.to_string(), ThumbState::Pending);
+        let job = self.next_job;
+        self.next_job = self
+            .next_job
+            .checked_add(1)
+            .expect("thumbnail job generation overflow");
+        self.cache.insert(key.to_string(), ThumbState::Pending(job));
         if let Some(tx) = &self.jobs {
-            let _ = tx.send((key.to_string(), abs));
+            let _ = tx.send((key.to_string(), job, abs));
         }
     }
 
@@ -183,7 +196,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         th.results = Some(rx);
 
-        tx.send(("gone.png".to_string(), Ok((one_px(), None))))
+        tx.send(("gone.png".to_string(), 1, Ok((one_px(), None))))
             .unwrap();
         th.pump(&ctx);
         assert!(
@@ -191,14 +204,47 @@ mod tests {
             "orphaned result must not resurrect an evicted entry"
         );
 
-        th.cache.insert("live.png".into(), ThumbState::Pending);
-        tx.send(("live.png".to_string(), Ok((one_px(), None))))
+        th.cache.insert("live.png".into(), ThumbState::Pending(2));
+        tx.send(("live.png".to_string(), 2, Ok((one_px(), None))))
             .unwrap();
         th.pump(&ctx);
         assert!(
             matches!(th.cache.get("live.png"), Some(ThumbState::Ready { .. })),
             "a still-pending key accepts its decode"
         );
+    }
+
+    /// A result for an older request of the same key must not satisfy a
+    /// replacement request queued after a reload.
+    #[test]
+    fn pump_discards_superseded_results_for_the_same_key() {
+        let ctx = egui::Context::default();
+        let one_px = || thumb::Thumb {
+            w: 1,
+            h: 1,
+            rgba: vec![0; 4],
+        };
+        let mut th = Thumbs::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        th.results = Some(rx);
+        th.cache
+            .insert("changed.png".into(), ThumbState::Pending(2));
+
+        tx.send(("changed.png".into(), 1, Ok((one_px(), None))))
+            .unwrap();
+        th.pump(&ctx);
+        assert!(matches!(
+            th.cache.get("changed.png"),
+            Some(ThumbState::Pending(2))
+        ));
+
+        tx.send(("changed.png".into(), 2, Ok((one_px(), None))))
+            .unwrap();
+        th.pump(&ctx);
+        assert!(matches!(
+            th.cache.get("changed.png"),
+            Some(ThumbState::Ready { .. })
+        ));
     }
 
     #[test]
