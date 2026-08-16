@@ -40,6 +40,15 @@ pub struct Sim {
     /// Node pinned to a world position while the user drags it.
     pinned: Option<(u32, f32, f32)>,
     alpha: f32,
+    /// Layout spread (a setting): scales spring rest lengths, and charge by
+    /// its SQUARE — repulsion falls off as 1/d², so both sides of the force
+    /// balance have to scale together or the graph changes shape instead of
+    /// size. Applied at integration time rather than baked into the spring
+    /// table, so changing it never rebuilds anything.
+    spread: f32,
+    /// Layout paused (a setting). A frozen sim still honours the pin, so a
+    /// dragged node goes exactly where it is dropped and stays there.
+    frozen: bool,
 }
 
 impl Sim {
@@ -110,11 +119,25 @@ impl Sim {
             charge,
             pinned: None,
             alpha: 1.0,
+            spread: 1.0,
+            frozen: false,
         }
     }
 
+    /// Carry the live settings into a sim (a fresh one, or after a reload
+    /// rebuilds it). Reheats when the spread actually moves, since the
+    /// graph has to relax into the new equilibrium to show the change.
+    pub fn configure(&mut self, spread: f32, frozen: bool) {
+        let spread = spread.clamp(0.1, 10.0);
+        if (spread - self.spread).abs() > f32::EPSILON {
+            self.spread = spread;
+            self.reheat();
+        }
+        self.frozen = frozen;
+    }
+
     pub fn active(&self) -> bool {
-        self.alpha > ALPHA_MIN
+        !self.frozen && self.alpha > ALPHA_MIN
     }
 
     pub fn reheat(&mut self) {
@@ -141,6 +164,13 @@ impl Sim {
 
     pub fn tick(&mut self, iters: usize) {
         let n = self.x.len();
+        if self.frozen {
+            // a frozen layout still follows the hand: the drag pin is the
+            // one thing allowed to move a node
+            self.apply_pin();
+            return;
+        }
+        let charge_scale = self.spread * self.spread;
         for _ in 0..iters {
             if !self.active() {
                 return;
@@ -162,7 +192,7 @@ impl Sim {
                         dy = ang.sin();
                     }
                     let d2 = (dx * dx + dy * dy).max(64.0);
-                    let inv = a / d2;
+                    let inv = a / d2 * charge_scale;
                     self.vx[i] += dx * inv * self.charge[j];
                     self.vy[i] += dy * inv * self.charge[j];
                     self.vx[j] -= dx * inv * self.charge[i];
@@ -172,6 +202,7 @@ impl Sim {
 
             // springs
             for &(pa, pb, rest) in &self.springs {
+                let rest = rest * self.spread;
                 let (i, j) = (pa as usize, pb as usize);
                 let dx = self.x[j] - self.x[i];
                 let dy = self.y[j] - self.y[i];
@@ -199,16 +230,20 @@ impl Sim {
                 self.y[i] += self.vy[i];
             }
 
-            if let Some((id, px, py)) = self.pinned {
-                let i = id as usize;
-                if i < n {
-                    // bounds-guarded: a stale pin held across a graph swap
-                    // must degrade, not panic
-                    self.x[i] = px;
-                    self.y[i] = py;
-                    self.vx[i] = 0.0;
-                    self.vy[i] = 0.0;
-                }
+            self.apply_pin();
+        }
+    }
+
+    fn apply_pin(&mut self) {
+        if let Some((id, px, py)) = self.pinned {
+            let i = id as usize;
+            // bounds-guarded: a stale pin held across a graph swap must
+            // degrade, not panic
+            if i < self.x.len() {
+                self.x[i] = px;
+                self.y[i] = py;
+                self.vx[i] = 0.0;
+                self.vy[i] = 0.0;
             }
         }
     }
@@ -276,6 +311,61 @@ mod tests {
         let mut s = Sim::new(&g);
         s.pin(999, 0.0, 0.0);
         s.tick(10);
+    }
+
+    /// Spread has to scale the picture, not redraw it: springs and charge
+    /// move together (charge by the square, since repulsion falls off as
+    /// 1/d²), so a wider setting spaces the same layout out.
+    #[test]
+    fn spread_scales_the_layout() {
+        let g = synth();
+        let extent = |spread: f32| {
+            let mut s = Sim::new(&g);
+            s.configure(spread, false);
+            s.tick(600);
+            let n = s.x.len() as f32;
+            let (cx, cy) = (s.x.iter().sum::<f32>() / n, s.y.iter().sum::<f32>() / n);
+            s.x.iter()
+                .zip(&s.y)
+                .map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt())
+                .sum::<f32>()
+                / n
+        };
+        let (tight, wide) = (extent(1.0), extent(1.6));
+        assert!(
+            wide > tight * 1.2 && wide < tight * 2.2,
+            "1.6x spread should space the graph out by roughly that much: \
+             {tight} -> {wide}"
+        );
+        // still deterministic at a non-default setting
+        let mut a = Sim::new(&g);
+        let mut b = Sim::new(&g);
+        a.configure(1.6, false);
+        b.configure(1.6, false);
+        a.tick(200);
+        b.tick(200);
+        assert_eq!((a.x, a.y), (b.x, b.y));
+    }
+
+    #[test]
+    fn a_frozen_layout_holds_still_but_still_follows_the_hand() {
+        let g = synth();
+        let mut s = Sim::new(&g);
+        s.tick(50);
+        s.configure(1.0, true);
+        let (x, y) = (s.x.clone(), s.y.clone());
+        s.tick(300);
+        assert_eq!(
+            (s.x.clone(), s.y.clone()),
+            (x.clone(), y),
+            "frozen means frozen"
+        );
+        assert!(!s.active(), "and it stops asking for frames");
+        // dragging is the one thing that may still move a node
+        s.pin(2, 500.0, -500.0);
+        s.tick(1);
+        assert_eq!((s.x[2], s.y[2]), (500.0, -500.0));
+        assert_eq!(s.x[1], x[1], "…and only that node");
     }
 
     #[test]

@@ -82,6 +82,7 @@ impl Viewer {
                 .map(|(i, n)| (n.ident(), (self.sim.x[i], self.sim.y[i])))
                 .collect();
             let mut sim = Sim::new(&g);
+            sim.configure(self.cfg.spread, self.cfg.freeze);
             for (i, node) in g.nodes.iter().enumerate() {
                 if let Some(&(x, y)) = old_pos.get(&node.ident()) {
                     sim.x[i] = x;

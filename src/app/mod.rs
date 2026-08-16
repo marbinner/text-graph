@@ -136,10 +136,6 @@ impl Theme {
 /// Screen radius above which a ghost shows its hollow-page silhouette.
 const ICON_MIN_R: f32 = 6.5;
 
-/// Camera glide duration for frame_node jumps — long enough to read the
-/// direction of travel, short enough to never feel laggy.
-const CAM_ANIM_SECS: f32 = 0.18;
-
 /// Screen radius above which a node paints as its file-type glyph instead
 /// of a disc — glyphs are unreadable smaller than this.
 const GLYPH_MIN_R: f32 = 4.0;
@@ -1120,7 +1116,12 @@ impl Viewer {
         self.last_canvas_rect = Some(rect);
         if let Some((from, id, t0)) = self.cam_anim {
             if (id.0 as usize) < self.g.nodes.len() {
-                let t = (t0.elapsed().as_secs_f32() / CAM_ANIM_SECS).min(1.0);
+                // glide duration is a setting; 0 means jump
+                let t = if self.cfg.glide <= 0.0 {
+                    1.0
+                } else {
+                    (t0.elapsed().as_secs_f32() / self.cfg.glide).min(1.0)
+                };
                 let e = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
                 self.center = from.lerp(self.frame_target(id.0 as usize, rect), e);
                 if t >= 1.0 {
@@ -1137,6 +1138,7 @@ impl Viewer {
         }
 
         // ---- simulation ----
+        self.sim.configure(self.cfg.spread, self.cfg.freeze);
         if self.sim.active() {
             self.sim.tick(3);
             ui.ctx().request_repaint();
@@ -1297,7 +1299,7 @@ impl Viewer {
             }
         }
         let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-        let factor = pinch * (scroll * 0.0025).exp();
+        let factor = pinch * (scroll * 0.0025 * self.cfg.zoom_speed).exp();
         if factor != 1.0
             && let Some(cursor) = response.hover_pos()
         {
