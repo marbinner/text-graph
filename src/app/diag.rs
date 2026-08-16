@@ -17,6 +17,7 @@ impl Viewer {
             + usize::from(self._watcher.is_none() || self.watch_error.lock().unwrap().is_some())
             + usize::from(self.reload_error.is_some())
             + usize::from(self.config_error.is_some())
+            + usize::from(self.terms.discovery_error.lock().unwrap().is_some())
             + self.terms.attach_backoff.len()
     }
 
@@ -45,6 +46,7 @@ impl Viewer {
 
         let mut jump = None;
         let watch_error = self.watch_error.lock().unwrap().clone();
+        let discovery_error = self.terms.discovery_error.lock().unwrap().clone();
         egui::Window::new("vault health")
             .anchor(Align2::LEFT_BOTTOM, Vec2::new(10.0, -44.0))
             .collapsible(false)
@@ -84,6 +86,16 @@ impl Viewer {
                             ui.label(
                                 RichText::new(
                                     "settings saves are disabled; fix the config and restart",
+                                )
+                                .small()
+                                .color(self.theme.text),
+                            );
+                        }
+                        if let Some(error) = &discovery_error {
+                            ui.colored_label(BAD, format!("tmux discovery failed: {error}"));
+                            ui.label(
+                                RichText::new(
+                                    "keeping the last cards briefly; discovery is retrying",
                                 )
                                 .small()
                                 .color(self.theme.text),

@@ -11,6 +11,9 @@ use super::*;
 pub(super) struct Terminals {
     /// Written by the scanner thread, snapshotted each frame.
     pub(super) seen: Arc<Mutex<Vec<AgentPane>>>,
+    /// Latest unexpected tmux discovery failure. The scanner keeps retrying
+    /// and clears this only after a successful poll.
+    pub(super) discovery_error: Arc<Mutex<Option<String>>>,
     pub(super) panes: Vec<AgentPane>,
     pub(super) mirrors: HashMap<String, SessionMirror>,
     /// Sessions whose last mirror attach failed, with the failure time —
@@ -75,6 +78,7 @@ impl Terminals {
     ) -> Self {
         Terminals {
             seen: Arc::new(Mutex::new(Vec::new())),
+            discovery_error: Arc::new(Mutex::new(None)),
             panes: Vec::new(),
             mirrors: HashMap::new(),
             attach_backoff: HashMap::new(),
@@ -462,6 +466,18 @@ pub(super) fn key_char(key: Key) -> Option<char> {
     })
 }
 
+/// Replace the shared discovery failure only when its visible value changes.
+/// Returns whether diagnostics need a repaint.
+fn update_discovery_error(slot: &Mutex<Option<String>>, next: Option<String>) -> bool {
+    let mut current = slot.lock().unwrap();
+    if *current == next {
+        false
+    } else {
+        *current = next;
+        true
+    }
+}
+
 impl Viewer {
     /// The node a card tethers to: an explicit `@tg_anchor` binding (edit
     /// sessions pin to their FILE) when it resolves in the current graph,
@@ -566,6 +582,7 @@ impl Viewer {
     /// publish diffs, wake the UI.
     pub(super) fn start_agent_scan(&self, ctx: egui::Context) {
         let shared = self.terms.seen.clone();
+        let discovery_error = self.terms.discovery_error.clone();
         let root = self.root.clone();
         std::thread::spawn(move || {
             let allow = agents::default_allowlist();
@@ -582,13 +599,24 @@ impl Viewer {
                 match agents::scan(&root) {
                     Ok(panes) => {
                         failing_since = None;
+                        if update_discovery_error(&discovery_error, None) {
+                            ctx.request_repaint();
+                        }
                         publish(tracker.update(&panes, &allow, Instant::now()));
                     }
                     // a transient scan failure (server dying/wedged) keeps
                     // the LAST snapshot — one bad poll must not blank every
                     // card and drop terminal focus. Persist past GRACE and
                     // we stop showing cards we can no longer verify.
-                    Err(_) => {
+                    Err(error) => {
+                        let message = if error.is_empty() {
+                            "tmux pane discovery failed".to_string()
+                        } else {
+                            error
+                        };
+                        if update_discovery_error(&discovery_error, Some(message)) {
+                            ctx.request_repaint();
+                        }
                         let since = *failing_since.get_or_insert_with(Instant::now);
                         if since.elapsed() > agents::GRACE {
                             publish(Vec::new());
@@ -1298,6 +1326,16 @@ impl Viewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_error_updates_wake_only_on_visible_changes() {
+        let slot = Mutex::new(None);
+        assert!(update_discovery_error(&slot, Some("server wedged".into())));
+        assert!(!update_discovery_error(&slot, Some("server wedged".into())));
+        assert_eq!(slot.lock().unwrap().as_deref(), Some("server wedged"));
+        assert!(update_discovery_error(&slot, None));
+        assert!(slot.lock().unwrap().is_none());
+    }
 
     /// Regression: a session coming back (tmux restart) with fewer panes
     /// than saved pins strands a leftover in parked_pins; claim's
