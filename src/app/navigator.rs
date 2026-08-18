@@ -4,8 +4,24 @@
 //! this file" surface to drift out of sync. Header (glyph, name, clickable
 //! breadcrumb, size · age), body (`preview_column` — the one place
 //! markdown renders and so the one place `tg://` clicks are claimed), and
-//! the selection's connections strip along the bottom. Choosing lives in
-//! `picker.rs`; keyboard walking lives in handle_keys.
+//! the selection's connections strip along the bottom (hidden while the
+//! overlay is open — `]`/`[` index the SELECTION's list, not somebody
+//! else's). Choosing lives in `picker.rs`; keyboard walking lives in
+//! `keymap.rs`.
+//!
+//! Two standing rules:
+//!
+//! - NOTHING in here may ask for more width than the pane has — egui
+//!   stores a panel's content-driven rect, and wide content used to
+//!   ratchet the pane open for good. Bodies go through
+//!   [`preview_scroll`], every name through [`clipped`]/[`clipped_text`];
+//!   guarded by `wide_content_scrolls_inside_the_pane_instead_of_
+//!   widening_it`, which fails on the width. The pane's WIDTH itself
+//!   belongs to the user (`pane_width` + `side_panel` in mod.rs carry
+//!   the ownership and never-persist-a-default rules).
+//! - The body cache is keyed by subject identity, so `r` (markdown ⇄
+//!   source) and a STRUCTURAL reload must both drop it: the first
+//!   changes the reading, the second renumbers the NodeId inside it.
 
 use super::*;
 use picker::{Preview, PreviewBody, one_line};

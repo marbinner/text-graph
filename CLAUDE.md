@@ -198,43 +198,13 @@
   IDENTITY (reloads renumber the arena); `frame_target` (mod.rs) lifts
   a followed node above the overlay; a STRUCTURAL reload must drop the
   cached pane body — its `tg://` links carry node indexes.
-- NOTHING inside the side pane may ask for more width than the pane has.
-  egui STORES a panel's content-driven rect, so one wide markdown table,
-  one unwrappable code line, one long filename or a terminal screen used
-  to push the pane open — and it stuck, ratcheting further with every
-  wide note walked onto until the pane covered the canvas and its own
-  columns ran off the window. Bodies go through
-  `navigator::preview_scroll` (scrolls BOTH ways, layout width pinned to
-  the pane, so prose still wraps where the pane ends); every NAME goes
-  through `clipped`/`clipped_text` (one line, ellipsized). Guarded by
-  `wide_content_scrolls_inside_the_pane_instead_of_widening_it`, which
-  fails on the width, not on a screenshot.
-- The side pane's WIDTH belongs to the user: `PANE_FRAC` of the window
-  until they DRAG it, then whatever they dragged to (`pane_w` in the view
-  file). Never write a computed default back — the first frame sees
-  eframe's startup window, not the user's, and persisting that froze the
-  pane at a fraction of a window that no longer existed (the v1 `pane`
-  key is dropped on load for exactly that reason). Never size it from the inside — `ui.set_min_width` in the mode
-  bodies is what used to resize it on every mode switch and snap it back
-  when dragged narrower; content columns take a SHARE of the pane
-  instead. The only automatic change is a window too narrow to hold it,
-  where the 60% ceiling outranks the 300pt floor, and the drag is
-  recorded only while the pointer is down — otherwise that clamp gets
-  saved as the user's choice.
-- ONE previewer, and the chooser only picks its SUBJECT: the overlay's
-  highlighted row while it is open, else the selection
-  (`sync_pane_preview` in the picker pump — the preview is state, not
-  paint). `preview_pane` draws it: header (glyph, name, the path as
-  clickable ancestors, size · age), body, then the SELECTION's
-  connections strip (hidden while the overlay is open — `]`/`[` index the
-  selection's list, not somebody else's). Body rules: rendered markdown
-  for notes via `preview_column` — still the one place markdown renders
-  and so the one place `tg://` OpenUrl commands are claimed, or wikilink
-  clicks leak to the OS browser — and numbered SOURCE when a content hit
-  needs showing where it lives, or when `r` (the `preview_raw` setting)
-  asks for it. The cache is keyed by subject identity, so `r` and a
-  STRUCTURAL reload must both drop it: the first changes the reading, the
-  second renumbers the NodeId inside it.
+- The side pane: `app/navigator.rs`'s module doc is the contract (ONE
+  previewer whose subject the chooser picks; nothing inside may ask for
+  more width than the pane has; the cache's double drop). The width
+  mechanics — user-owned width, never persist a computed default, the
+  60%-ceiling clamp, drag recorded only while the pointer is down — are
+  documented on `pane_width`/`side_panel` in mod.rs and on the
+  `pane_width` field, guarded by the pane kb-tests.
 - The camera owns hjkl unconditionally — selection is no longer a mode —
   with `s`/`d` zooming out/in beside them (one hand drives the view) and
   `gg` refitting the whole graph while `0` resets ONLY the zoom. Choosing
