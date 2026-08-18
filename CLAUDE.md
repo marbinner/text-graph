@@ -144,9 +144,11 @@
   wikilink clicks leak to the OS.
   Only the bin's `app/` tree touches egui. `highlight` and `thumb` remain
   egui-free but are compiled only by the `gui` feature. The app layout:
-  `mod.rs` = Viewer +
-  canvas painting; `camera.rs` = the camera substruct; `keymap.rs` = the
-  keybinding table + key dispatch; `picker.rs` = the finder (state,
+  `mod.rs` = the Viewer struct +
+  shared node geometry/icon helpers; `canvas.rs` = the frame pipeline
+  (named stages, order = stacking order); `camera.rs` = the camera
+  substruct; `keymap.rs` = the keybinding table + key dispatch;
+  `picker.rs` = the finder (state,
   keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
   lifecycle; `navigator.rs` = the side pane (the one previewer: subject
