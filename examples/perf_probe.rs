@@ -9,6 +9,10 @@
 //! full content scan; the ⚙ "frame statistics" overlay covers the paint
 //! side in the running viewer. "per frame" under settle is what the sim
 //! adds to every frame while the layout is still moving (3 ticks).
+//!
+//! Numbers wobble with thermals: a long compile right before a run can
+//! throttle the first measurement badly (observed 2×). Run it a few
+//! times on a quiet machine and trust the settled readings.
 
 use std::collections::HashMap;
 use std::path::Path;

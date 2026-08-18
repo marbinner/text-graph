@@ -60,3 +60,8 @@ rustix = { version = "1.1", features = ["fs"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.36", default-features = false }
+
+# Thin LTO: ~5% on the sim hot loop (measured with perf_probe at 2k
+# nodes) for some extra link time. Fat LTO was not worth the build cost.
+[profile.release]
+lto = "thin"
