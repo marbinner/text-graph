@@ -284,10 +284,18 @@ Audit backlog (external audit, 2026-08):
   guards), Derived/Reload/Persist/Menu substructs, kb_tests/ by topic;
   mod.rs ~970 lines, invariants moved from CLAUDE.md prose into module
   docs and tests (CLAUDE.md 434 → ~210 lines).
-- Perf budgets against the stress vault (scan/build/settle/reload at
-  0.5k/2k/10k). Instrumentation landed 2026-08-18: examples/perf_probe.rs
-  (headless pipeline timings) + the ⚙ frame-statistics overlay (per-stage
-  frame times, repaint rate). Budgets to be recorded from real measurements.
+- Perf budgets against the stress vault ✓ measured 2026-08-18 via
+  examples/perf_probe.rs (headless timings) + the ⚙ frame-statistics
+  overlay (per-stage frame times, repaint rate). Release-build baseline
+  after the Barnes–Hut sim (flat stress vault; sim = ms per 3-tick frame
+  while settling, was the O(n²) figure in parens):
+  0.5k → scan 8ms · build 2.5ms · sim 1.7ms (was 3.2);
+  2k → scan 28ms · build 5.7ms · sim 5.1ms (was 44);
+  10k → scan 116ms · build 29ms · sim 26ms (was 729).
+  Scan/build run on the reload worker; content scan ~11ms at 2k. The
+  remaining settle cost at 10k (~26ms/frame for a few seconds) is the
+  next lever if vaults ever get there (θ, leaf size, or fewer iterations
+  as alpha decays).
 - License + release packaging (user decision on license first).
 
 **E — Terminals in the graph (done, except the procfs fallback).** Agent TUIs (claude, codex, pi, any harness)

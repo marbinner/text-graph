@@ -107,7 +107,10 @@ fn main() {
     );
     let content_ms = ms(t);
 
-    println!("vault      {} ({raw_files} files walked)", root_path.display());
+    println!(
+        "vault      {} ({raw_files} files walked)",
+        root_path.display()
+    );
     println!(
         "scan     {scan_ms:>9.2} ms   ({} unreadable, {} warnings)",
         g.errors.len(),
@@ -118,7 +121,10 @@ fn main() {
         g.nodes.len(),
         g.links.len()
     );
-    println!("ident map{ident_ms:>9.2} ms   ({} idents — reload carry-over proxy)", idents.len());
+    println!(
+        "ident map{ident_ms:>9.2} ms   ({} idents — reload carry-over proxy)",
+        idents.len()
+    );
     println!("sim seed {seed_ms:>9.2} ms");
     println!(
         "settle   {settle_ms:>9.2} ms   ({ticks} ticks · {:.3} ms per frame while settling{})",
@@ -128,7 +134,15 @@ fn main() {
     println!(
         "content  {content_ms:>9.2} ms   ({query:?} → {hit_lines} lines in {hit_files} of {} files{}{})",
         outcome.files_read,
-        if outcome.truncated { " · truncated" } else { "" },
-        if outcome.cancelled { " · cancelled" } else { "" },
+        if outcome.truncated {
+            " · truncated"
+        } else {
+            ""
+        },
+        if outcome.cancelled {
+            " · cancelled"
+        } else {
+            ""
+        },
     );
 }
