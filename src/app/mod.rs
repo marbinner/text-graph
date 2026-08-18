@@ -373,6 +373,8 @@ struct Viewer {
     /// usable, but must never overwrite a file we did not successfully load.
     config_error: Option<String>,
     diag_open: bool,
+    /// Per-stage frame timing, shown by the ⚙ frame-statistics overlay.
+    frames: diag::FrameStats,
     /// Everything terminal-card related — see terminals::Terminals.
     terms: terminals::Terminals,
     /// Thumbnail decode worker + texture cache for Image nodes.
@@ -524,6 +526,7 @@ impl Viewer {
             reload: reload::Reload::new(),
             config_error: None,
             diag_open: false,
+            frames: diag::FrameStats::new(),
             terms: terminals::Terminals::new(restore_offsets, restore_pins, agent_allowlist),
             thumbs: images::Thumbs::new(),
             previews: previews::Previews::default(),
@@ -855,6 +858,7 @@ impl Viewer {
 
 impl eframe::App for Viewer {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let frame_start = Instant::now();
         if self.apply_visuals {
             self.apply_visuals = false;
             ui.ctx().set_visuals(if self.theme.light {
@@ -895,8 +899,10 @@ impl eframe::App for Viewer {
         self.create_dialog_ui(&ctx);
         self.diag_ui(&ctx);
         self.settings_ui(&ctx);
+        self.frame_stats_ui(&ctx);
         self.release_tab_focus(&ctx);
         self.persist_state(false);
+        self.frames.end_frame(frame_start.elapsed());
         // egui repaints on demand; without a heartbeat the debounced save
         // would never run once the sim settles and input stops
         ctx.request_repaint_after(Duration::from_secs(3));

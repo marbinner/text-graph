@@ -51,6 +51,7 @@ pub struct Config {
     pub editor: String,
     pub terminal: String,
     pub file_manager: String,
+    pub frame_stats: bool,
     // ---- agents ----
     pub default_agent: String,
     pub extra_agents: String,
@@ -82,6 +83,7 @@ impl Default for Config {
             editor: String::new(),
             terminal: String::new(),
             file_manager: String::new(),
+            frame_stats: false,
             default_agent: "pi".into(),
             extra_agents: String::new(),
             unknown: Vec::new(),
@@ -458,6 +460,11 @@ static SPECS: &[Spec] = specs![
         "file_manager", Section::Tools, "file manager",
         "what opening a folder starts; blank uses xdg-open",
         Kind::Text { hint: "xdg-open" }, file_manager, Text;
+
+        "frame_stats", Section::Tools, "frame statistics",
+        "overlay per-stage frame times and the repaint rate, for \
+         performance work",
+        Kind::Flag, frame_stats, Flag;
 
         // ---- agents ----
         "default_agent", Section::Agents, "default agent",

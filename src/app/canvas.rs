@@ -17,6 +17,7 @@ use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Response, Sense, S
 use text_graph::filetype;
 use text_graph::graph::{LinkKind, NodeId, NodeKind};
 
+use super::diag::Stage;
 use super::terminals::{ResizeDrag, resize_handle};
 use super::{GLYPH_MIN_R, ICON_MIN_R, Viewer, icon_font, images, label_lod, shade, terminals};
 
@@ -39,31 +40,47 @@ struct Scene {
 
 impl Viewer {
     pub(super) fn canvas(&mut self, ui: &mut egui::Ui) {
+        // each stage is timed (⚙ frame statistics); `lap` chains marks so
+        // the whole body is attributed with no gaps
+        let mut mark = Instant::now();
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.frame_camera(ui, rect);
+        mark = self.frames.lap(mark, Stage::Camera);
         self.step_sim(ui);
+        mark = self.frames.lap(mark, Stage::Sim);
         self.pump_workers(ui);
+        mark = self.frames.lap(mark, Stage::Workers);
         let over_card = self.pointer_input(ui, rect, &response);
+        mark = self.frames.lap(mark, Stage::Input);
         // the cull margin: nodes just off-screen still paint, so edges to
         // them don't pop while panning
         let view = rect.expand(60.0);
         let visible = self.cull(rect, view);
+        mark = self.frames.lap(mark, Stage::Cull);
         let active = self.hover_and_gestures(ui, rect, &response, &visible, &over_card);
+        mark = self.frames.lap(mark, Stage::Hover);
         let scene = self.scene(active);
+        mark = self.frames.lap(mark, Stage::Scene);
 
         let painter = ui.painter_at(rect);
         let tether_slot = self.paint_edges(&painter, rect, view, &scene);
+        mark = self.frames.lap(mark, Stage::Edges);
         self.paint_nodes(ui, &painter, &visible, &scene);
+        mark = self.frames.lap(mark, Stage::Nodes);
         self.paint_labels(&painter, &response, &visible, &over_card, &scene);
+        mark = self.frames.lap(mark, Stage::Labels);
         // terminal cards, on top of the graph (their tethers fill the
         // reserved under-node slot)
         self.paint_terminals(&painter, rect, view, tether_slot);
+        mark = self.frames.lap(mark, Stage::Cards);
 
         // full-content hover preview (dwell to open; tooltip layer)
         self.hover_preview_ui(ui);
         // terminal peek: dwell on a compact card shows its full screen
         self.hover_peek_ui(ui);
+        mark = self.frames.lap(mark, Stage::Popups);
         self.status_line(&painter, rect, &scene);
+        self.frames.lap(mark, Stage::Status);
     }
 
     /// Camera per-frame step: rect-change compensation, the glide
