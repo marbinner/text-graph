@@ -3,6 +3,20 @@
 
 use super::*;
 
+/// The right-click menu's captured subject and the create flow hanging
+/// off it.
+#[derive(Default)]
+pub(super) struct Menu {
+    /// Node captured at right-click time — the context menu's subject.
+    pub(super) node: Option<NodeId>,
+    /// Card captured at right-click time (lifecycle actions lead the menu).
+    pub(super) card: Option<(String, String)>,
+    /// Open "new note/folder" dialog, if any.
+    pub(super) dialog: Option<CreateDialog>,
+    /// Select and frame this rel path once a reload turns it into a node.
+    pub(super) pending_select: Option<String>,
+}
+
 /// State of the "New note / New folder" dialog (opened via right-click).
 pub(super) struct CreateDialog {
     folder: bool,
@@ -198,7 +212,7 @@ impl Viewer {
     /// The directory the context menu's actions apply to (vault-relative,
     /// "" = root) and a human label for it.
     pub(super) fn ctx_dir(&self) -> (PathBuf, String) {
-        let dir_id = self.ctx_node.map_or(self.g.root, |id| {
+        let dir_id = self.menu.node.map_or(self.g.root, |id| {
             let node = self.g.node(id);
             if node.kind == NodeKind::Dir {
                 id
@@ -224,7 +238,7 @@ impl Viewer {
     /// then creation anchored at the clicked node's directory.
     pub(super) fn context_menu_ui(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(170.0);
-        if let Some((s, p)) = self.ctx_card.clone()
+        if let Some((s, p)) = self.menu.card.clone()
             // only while the pane is still alive
             && self.terms.panes.iter().any(|a| a.session == s && a.pane == p)
         {
@@ -245,7 +259,7 @@ impl Viewer {
             ui.separator();
         }
         // a text file: edit it right in the graph, card tethered to the node
-        if let Some(id) = self.ctx_node
+        if let Some(id) = self.menu.node
             && self.terms.tmux_ok
             && self.editable(id)
         {
@@ -256,7 +270,7 @@ impl Viewer {
             ui.separator();
         }
         // a ghost is a referenced-but-unwritten note: offer to make it real
-        if let Some(id) = self.ctx_node
+        if let Some(id) = self.menu.node
             && self.g.node(id).kind == NodeKind::Ghost
         {
             let target = self.g.node(id).path.clone();
@@ -265,7 +279,7 @@ impl Viewer {
                     .and_then(|rel| create::write_note(&self.root, &rel).map(|_| rel));
                 match res {
                     Ok(rel) => {
-                        self.pending_select = Some(rel.clone());
+                        self.menu.pending_select = Some(rel.clone());
                         self.set_flash(format!("created {rel}"));
                         *self.reload.event_at.lock().unwrap() = Some(Instant::now());
                     }
@@ -315,7 +329,7 @@ impl Viewer {
     pub(super) fn open_create(&mut self, folder: bool, dir: PathBuf, label: String) {
         self.terms.focused = None; // the dialog owns the keyboard now
         self.picker.close();
-        self.create = Some(CreateDialog {
+        self.menu.dialog = Some(CreateDialog {
             folder,
             dir,
             label,
@@ -325,9 +339,9 @@ impl Viewer {
         });
     }
 
-    /// The centered "New note / New folder" window, while `self.create` is on.
+    /// The centered "New note / New folder" window, while `self.menu.dialog` is on.
     pub(super) fn create_dialog_ui(&mut self, ctx: &egui::Context) {
-        let Some(mut dlg) = self.create.take() else {
+        let Some(mut dlg) = self.menu.dialog.take() else {
             return;
         };
         let mut submit = false;
@@ -384,18 +398,18 @@ impl Viewer {
                     ));
                 }
                 Ok(rel) => {
-                    self.pending_select = Some(vault::path_key(&rel));
+                    self.menu.pending_select = Some(vault::path_key(&rel));
                     self.set_flash(format!("created {}", rel.display()));
                     *self.reload.event_at.lock().unwrap() = Some(Instant::now());
                 }
                 Err(e) => {
                     dlg.err = Some(e.to_string());
                     dlg.focus = true;
-                    self.create = Some(dlg); // stay open for a correction
+                    self.menu.dialog = Some(dlg); // stay open for a correction
                 }
             }
         } else if !cancel {
-            self.create = Some(dlg);
+            self.menu.dialog = Some(dlg);
         }
     }
 

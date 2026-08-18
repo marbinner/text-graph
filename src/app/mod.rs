@@ -22,7 +22,6 @@ mod terminals;
 #[cfg(test)]
 mod kb_tests;
 
-use actions::CreateDialog;
 use picker::Picker;
 use terminals::TERM_BG;
 
@@ -387,13 +386,9 @@ struct Viewer {
     nav_scroll: bool,
     /// Cursor into the connections strip (] / [ step it, Enter/l jumps).
     conn_cursor: Option<usize>,
-    // ---- creation (right-click menu) ----
-    /// Node captured at right-click time — the context menu's subject.
-    ctx_node: Option<NodeId>,
-    /// Card captured at right-click time (lifecycle actions lead the menu).
-    ctx_card: Option<(String, String)>,
-    /// Open "new note/folder" dialog, if any.
-    create: Option<CreateDialog>,
+    /// Right-click subject + create dialog + post-create selection — see
+    /// `actions::Menu`.
+    menu: actions::Menu,
     /// Transient status-bar message and its birth time.
     flash: Option<(String, Instant)>,
     /// Tab was ours this frame — take widget focus back at the end of it.
@@ -401,8 +396,6 @@ struct Viewer {
     /// of our code runs, so consuming the event can't stop it; the gear and
     /// health badges would take the keyboard and swallow the next Tab.
     tab_taken: bool,
-    /// Select and frame this rel path once a reload turns it into a node.
-    pending_select: Option<String>,
 }
 
 impl Viewer {
@@ -535,12 +528,9 @@ impl Viewer {
             pending_g: None,
             nav_scroll: false,
             conn_cursor: None,
-            ctx_node: None,
-            ctx_card: None,
-            create: None,
+            menu: actions::Menu::default(),
             flash: None,
             tab_taken: false,
-            pending_select: None,
         }
     }
 
@@ -875,7 +865,7 @@ impl eframe::App for Viewer {
         if release {
             self.release_everything(ui.ctx());
         }
-        if self.terms.focused.is_some() && self.create.is_none() {
+        if self.terms.focused.is_some() && self.menu.dialog.is_none() {
             // keyboard belongs to the terminal; graph keybinds are suspended.
             // The create dialog outranks it — otherwise clicking a card with
             // the dialog open would drain its keystrokes into the pane.

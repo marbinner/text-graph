@@ -467,7 +467,7 @@ fn pressed_fresh(ui: &egui::Ui, key: Key) -> bool {
 
 impl Viewer {
     pub(super) fn handle_keys(&mut self, ui: &egui::Ui) {
-        if self.create.is_some() {
+        if self.menu.dialog.is_some() {
             return; // the create dialog owns the keyboard
         }
         // Tab is consumed, not just read: egui's own Tab focus navigation

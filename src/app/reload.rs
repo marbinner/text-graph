@@ -213,8 +213,9 @@ impl Viewer {
         self.drag_node = self
             .drag_node
             .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
-        self.ctx_node = self
-            .ctx_node
+        self.menu.node = self
+            .menu
+            .node
             .and_then(|id| by_ident.get(&self.g.node(id).ident()).copied());
         // hover and its dwell REMAP like the selection — clearing them made
         // the preview popup unlandable under busy agents (a reload every
@@ -266,14 +267,14 @@ impl Viewer {
         }
 
         // a note we just created: select and frame it the moment it lands
-        if let Some(p) = self.pending_select.clone()
+        if let Some(p) = self.menu.pending_select.clone()
             && let Some(i) = self
                 .g
                 .nodes
                 .iter()
                 .position(|n| n.kind != NodeKind::Ghost && n.ident() == p)
         {
-            self.pending_select = None;
+            self.menu.pending_select = None;
             self.selected = Some(NodeId(i as u32));
             self.frame_node(NodeId(i as u32));
         }
@@ -584,13 +585,13 @@ mod tests {
         let mut v = fixture_viewer();
         v.selected = v.g.by_path("index.md");
         assert!(v.selected.is_some());
-        v.pending_select = Some("empty.md".to_string());
+        v.menu.pending_select = Some("empty.md".to_string());
         let g2 = graph::build(vault::scan(&v.root).unwrap());
         v.apply_graph(g2);
         // pending_select wins the selection; it exists in the new graph
         let sel = v.selected.expect("selection survives");
         assert_eq!(v.g.node(sel).path, "empty.md");
-        assert!(v.pending_select.is_none());
+        assert!(v.menu.pending_select.is_none());
     }
 
     #[test]
