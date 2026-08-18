@@ -24,6 +24,11 @@
   scratch dir (so the run can't touch the real user config), then
   `timeout 6 cargo run --release -- <copy>` → exit 124 means it launched
   and ran fine.
+- Perf: `cargo run --release --example perf_probe <vault>` times the
+  headless pipeline (scan/build/ident-map/seed/settle/content-scan;
+  `fixtures/gen-stress.sh N` makes big vaults); the ⚙ *frame statistics*
+  setting overlays per-stage frame times in the running viewer. Measure
+  BEFORE optimizing — both exist so perf work starts from numbers.
 - tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
   (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
   tmux is absent. Never point tests at the user's default tmux server.

@@ -513,6 +513,12 @@ machine (modal hjkl, Esc ordering, link walking, the picker) is driven
 through a headless egui harness (`egui_kittest`). Process-level CLI tests cover
 help, version, usage errors, fixture statistics, and non-UTF-8 vault paths.
 
+For performance work: `cargo run --release --example perf_probe <vault>`
+times the headless pipeline (scan, build, reload carry-over, simulation
+settle, content search) — `fixtures/gen-stress.sh N` generates large
+synthetic vaults — and the ⚙ *frame statistics* setting overlays
+per-stage frame times and the repaint rate in the running viewer.
+
 House rules: if you touch `fixtures/vault/`, re-count `fixtures/EXPECTED.md`
 and update the tests in the same commit — the numbers are asserted exactly.
 One commit per change. See `CLAUDE.md` for the details that bite.

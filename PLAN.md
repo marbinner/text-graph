@@ -284,7 +284,10 @@ Audit backlog (external audit, 2026-08):
   guards), Derived/Reload/Persist/Menu substructs, kb_tests/ by topic;
   mod.rs ~970 lines, invariants moved from CLAUDE.md prose into module
   docs and tests (CLAUDE.md 434 → ~210 lines).
-- Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
+- Perf budgets against the stress vault (scan/build/settle/reload at
+  0.5k/2k/10k). Instrumentation landed 2026-08-18: examples/perf_probe.rs
+  (headless pipeline timings) + the ⚙ frame-statistics overlay (per-stage
+  frame times, repaint rate). Budgets to be recorded from real measurements.
 - License + release packaging (user decision on license first).
 
 **E — Terminals in the graph (done, except the procfs fallback).** Agent TUIs (claude, codex, pi, any harness)
