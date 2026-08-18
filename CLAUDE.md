@@ -91,48 +91,27 @@
   byte/line caps, best-effort `None`); search hits get a BACKGROUND mark,
   never a recolour — documented on `push_source_line`.
 - Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
-  `create`, `state`, `config`, `graph`, `filetype`, `highlight`, `mdview`,
-  `search`, …) must stay egui-free
-  (headless-testable). `mdview::prepare` rewrites note bodies for display
-  ([[wikilinks]] → `tg://<node>` links, image embeds → `file://` URIs,
-  callout headers → the one `[!UPPERCASE]` spelling the alert parser
-  accepts with the title as a bold line, `==x==` → bold, `%%x%%` and
-  trailing `^block-ids` → gone, `#tags` → code chips) — Obsidian-flavored
-  input, CommonMark output, because the renderer only speaks CommonMark;
-  relative markdown dests resolve against the SOURCE note's directory
-  (standard markdown semantics). Image destinations are untrusted: only
-  `safe_image_url` may mint `file://`, after canonicalizing both target and
-  vault, proving the target is a regular in-vault file, and enforcing the
-  image byte limit. Authored schemes (especially `file://`), absolute or
-  `..`-escaping paths, symlink escapes, non-files and oversized images must
-  be neutralized, never remain active image syntax. Standard Markdown images
-  use the blocked placeholder; an unsafe Obsidian embed may remain inert
-  literal text. The pane's `preview_column`
-  intercepts `tg://` OpenUrl commands and jumps instead of opening a
-  browser — keep that interception where the markdown is rendered, or
-  wikilink clicks leak to the OS.
-  Only the bin's `app/` tree touches egui. `highlight` and `thumb` remain
-  egui-free but are compiled only by the `gui` feature. The app layout:
-  `mod.rs` = the Viewer struct +
-  shared node geometry/icon helpers; `canvas.rs` = the frame pipeline
-  (named stages, order = stacking order); `camera.rs` = the camera
-  substruct; `keymap.rs` = the keybinding table + key dispatch;
-  `picker.rs` = the finder (state,
-  keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
-  `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
-  lifecycle; `navigator.rs` = the side pane (the one previewer: subject
-  header, bodies, connections strip); `actions.rs` = right-click
-  menu, create dialog, editor/terminal spawning; `reload.rs` = the
-  `Reload` substruct (watcher, debounce, scan worker, health — worker
-  bookkeeping private to the module) + apply + persistence glue; `diag.rs` = health badge;
-  `settings.rs` = the ⚙ window (registry-driven) + the key list;
-  `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
-  does the pixel work, headless); `previews.rs` = zoom-in text-excerpt
-  cache + the all-kind hover popup (metadata header, then content). File-backed canvas caches (thumbs, previews) evict by (mtime,
-  len) stamp on reload, never wholesale — a full clear makes every card
-  flicker through its placeholder (reloads are constant when agents
-  write). New GUI code goes into the matching child module, not into
-  mod.rs.
+  `create`, `state`, `config`, `graph`, `filetype`, `highlight`,
+  `mdview`, `search`, …) must stay egui-free (headless-testable); only
+  the bin's `app/` tree touches egui (`highlight`/`thumb` are egui-free
+  but gui-gated). `mdview.rs`'s docs carry the Obsidian→CommonMark
+  rewrite contract and the image-safety rules (`safe_image_url` is the
+  only thing that may mint `file://`; unsafe destinations are
+  neutralized, never left as active image syntax). The one place
+  markdown renders is the pane's `preview_column`, which claims `tg://`
+  clicks — or wikilinks leak to the OS browser. The app layout:
+  `mod.rs` = the Viewer struct + shared node geometry/icon helpers;
+  `canvas.rs` = the frame pipeline (named stages, order = stacking
+  order); `camera.rs` = the camera; `keymap.rs` = key dispatch;
+  `picker.rs` = the finder over lib `search.rs`; `terminals.rs` = the
+  Terminals substruct + sync/paint/forwarding/gestures/lifecycle;
+  `navigator.rs` = the side pane; `actions.rs` = right-click menu,
+  create dialog, spawning; `reload.rs` = the Reload substruct + apply +
+  persistence glue; `diag.rs` = health badge; `settings.rs` = the ⚙
+  window + key list; `images.rs`/`previews.rs`/lib `thumb.rs` = the
+  stamp-evicted canvas caches (their docs carry the
+  never-clear-wholesale rule). New GUI code goes into the matching
+  child module, not into mod.rs.
 - Terminals: the protocol contracts are documented where they live —
   `tmux.rs` (control-mode client, never own a PTY, bounded event queue,
   bytes-not-lines reader, %begin/%end reply correlation), `mirror.rs`
