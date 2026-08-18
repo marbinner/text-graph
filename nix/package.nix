@@ -7,7 +7,8 @@
   makeWrapper,
   tmux,
   xdg-utils,
-  libGL,
+  libglvnd,
+  mesa,
   libxkbcommon,
   wayland,
   libx11,
@@ -17,12 +18,39 @@
 }:
 
 let
-  # dlopen'd, never linked: glow/glutin reach for libGL, winit for
-  # libxkbcommon, libwayland-client and the X11 libs. These go into the
+  # GL loading is two hops: glutin dlopens glvnd's libEGL.so.1 (from this
+  # closure's RUNPATH), and glvnd then reads vendor ICD jsons to find the
+  # real driver. Stock nixpkgs glvnd looks in /run/opengl-driver (NixOS)
+  # and the FHS dirs — but a foreign distro's /usr/share json names its
+  # vendor library by bare soname, which the nix loader cannot resolve, so
+  # EGL came up vendor-less and glutin's GLX fallback died on the Wayland
+  # display handle ("Found no glutin configs … provided display handle is
+  # not supported"). Fix: rebuild glvnd (small, autotools) with one more,
+  # LAST, vendor dir — nix mesa's own, whose json carries an absolute
+  # store path and a self-contained closure. NixOS and host-distro drivers
+  # keep priority; everyone else falls back to nix mesa, which talks
+  # straight to the kernel DRM interface, so it hardware-accelerates any
+  # GPU mesa drives (and software-renders the rest). This stays an rpath
+  # concern, never an env-var wrapper: __EGL_VENDOR_LIBRARY_FILENAMES or
+  # LIBGL_DRIVERS_PATH would leak into the editors, agents and tmux panes
+  # the viewer spawns and break THEIR GL.
+  glvndWithMesaFallback = libglvnd.overrideAttrs (old: {
+    env = (old.env or { }) // {
+      # Appended flags win: -U drops the stock define, -D re-adds it with
+      # the mesa fallback. Mirrors nixpkgs' own define in libglvnd.
+      NIX_CFLAGS_COMPILE =
+        (old.env.NIX_CFLAGS_COMPILE or "")
+        + " -UDEFAULT_EGL_VENDOR_CONFIG_DIRS"
+        + " -DDEFAULT_EGL_VENDOR_CONFIG_DIRS=\"${libglvnd.driverLink}/share/glvnd/egl_vendor.d:/etc/glvnd/egl_vendor.d:/usr/share/glvnd/egl_vendor.d:${mesa}/share/glvnd/egl_vendor.d\"";
+    };
+  });
+
+  # dlopen'd, never linked: glutin reaches for glvnd's libEGL/libGL, winit
+  # for libxkbcommon, libwayland-client and the X11 libs. These go into the
   # binary's RUNPATH rather than an LD_LIBRARY_PATH wrapper, so they are not
   # inherited by the editors, agents and tmux panes the viewer spawns.
   runtimeLibs = [
-    libGL
+    glvndWithMesaFallback
     libxkbcommon
     wayland
     libx11
@@ -100,11 +128,17 @@ rustPlatform.buildRustPackage {
 
   # patchelf first: wrapProgram renames the real ELF to .text-graph-wrapped.
   # This runs after stdenv's --shrink-rpath, so the added rpath survives.
+  # /run/opengl-driver/lib leads, mirroring nixpkgs' addDriverRunpath: on
+  # NixOS the system's vendor GL libraries live there and must win.
   postFixup = ''
-    patchelf --add-rpath ${lib.makeLibraryPath runtimeLibs} $out/bin/text-graph
+    patchelf --add-rpath /run/opengl-driver/lib:${lib.makeLibraryPath runtimeLibs} $out/bin/text-graph
     wrapProgram $out/bin/text-graph \
       --suffix PATH : ${lib.makeBinPath runtimeBins}
   '';
+
+  # The dev shell reuses this exact list for LD_LIBRARY_PATH, glvnd
+  # override included — keep them from drifting apart.
+  passthru = { inherit runtimeLibs; };
 
   meta = {
     description = "Native graph viewer for a folder of markdown notes, with live tmux agent terminals in the graph";

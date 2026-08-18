@@ -55,19 +55,12 @@
             ];
 
             # A dev shell is the one place LD_LIBRARY_PATH is the right tool:
-            # `cargo run` builds a binary nothing has patchelf'd.
-            LD_LIBRARY_PATH = nixpkgs.lib.makeLibraryPath (
-              with pkgs;
-              [
-                libGL
-                libxkbcommon
-                wayland
-                libx11
-                libxcursor
-                libxi
-                libxrandr
-              ]
-            );
+            # `cargo run` builds a binary nothing has patchelf'd. The list is
+            # the package's own runtimeLibs (its glvnd carries the nix-mesa
+            # EGL vendor fallback for non-NixOS hosts), led by NixOS' vendor
+            # GL dir, mirroring the package RUNPATH.
+            LD_LIBRARY_PATH =
+              "/run/opengl-driver/lib:" + nixpkgs.lib.makeLibraryPath self.packages.${system}.default.runtimeLibs;
           };
         }
       );
