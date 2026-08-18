@@ -197,7 +197,7 @@ fn picker_ui_renders_prompt_results_and_preview() {
     );
     // result rows carry file-type glyphs; the real app installs the family
     // in run(), so the harness has to as well
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     h.state_mut().picker.open = true;
     h.state_mut().picker.query = "grafer".into();
     h.step();
@@ -403,7 +403,7 @@ fn the_slash_that_opens_the_picker_does_not_land_in_the_prompt() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     h.step();
     // a real keyboard sends both a Text event and a Key event
     h.input_mut()
@@ -444,7 +444,7 @@ fn tg_links_are_claimed_in_the_search_preview_too() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     // search mode: a name match, so the preview is the shared column
     h.state_mut().picker.open = true;
     h.state_mut().picker.query = "index".into();
@@ -537,7 +537,7 @@ fn the_finder_list_fills_the_window_and_shows_the_empty_prompt_rows() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     // pin the prompt high so the assertion is about the list FILLING what
     // is below it, not about where this build puts the prompt
     h.state_mut().cfg.finder_y = 0.25;
@@ -587,7 +587,7 @@ fn a_narrow_result_set_does_not_shrink_the_finder_for_good() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     press(&mut h, Key::F);
 
     let query = |h: &mut Harness<'_, Viewer>, q: &str| {

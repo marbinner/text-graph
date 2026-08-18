@@ -148,10 +148,13 @@ sources and keeps what you typed: a filter that found nothing here is
 usually what you wanted to search the whole vault for.
 
 The preview is the same one for both, and the same one a selected node
-gets — there is no second place to look at a file. A **content** hit
-shows the file's raw lines with every match highlighted and the hit
-scrolled into view; `r` switches any note between rendered markdown and
-source. A search rides out vault reloads: agents saving notes underneath
+gets — there is no second place to look at a file. Notes render as a
+**reading view**: Obsidian markdown (wikilinks, callouts, tags, embeds)
+drawn in a bundled text face (Inter) with a real heading scale and prose
+wrapped at a book-ish line length, centered when the pane is wider. A
+**content** hit shows the file's raw lines with every match highlighted
+and the hit scrolled into view; `r` switches any note between rendered
+markdown and source. A search rides out vault reloads: agents saving notes underneath
 you re-scan in the background without emptying the list, moving your
 cursor, or blinking the preview. On the canvas, matching nodes stay lit
 and the highlighted result **glides into view** as you arrow down — into
@@ -465,6 +468,9 @@ scripts/
 assets/
   icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
   gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs
+  reading.ttf         bundled Inter subset (OFL-1.1) — the face rendered
+                      markdown reads in; non-Latin falls back to egui's fonts
+  gen-reading-font.sh regenerates it from an Inter release TTF
 examples/
   tmux_debug.rs       raw control-client event dump — the mirror's debug harness
   discovery_probe.rs  what discovery + mirrors see for a vault, headless

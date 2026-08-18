@@ -152,9 +152,13 @@ const ICON_MIN_R: f32 = 6.5;
 /// of a disc — glyphs are unreadable smaller than this.
 const GLYPH_MIN_R: f32 = 4.0;
 
-/// The bundled Nerd Font subset (assets/icons.ttf), registered as the
-/// "icons" family at startup — file-type glyphs render with it.
-fn install_icon_font(ctx: &egui::Context) {
+/// The bundled fonts, registered at startup: the Nerd Font subset
+/// (assets/icons.ttf) as the "icons" family for file-type glyphs, and the
+/// Inter subset (assets/reading.ttf, OFL) as the "reading" family that
+/// rendered markdown bodies use — Latin only, with egui's default
+/// proportional fonts appended so anything outside the subset falls back
+/// instead of tofu-ing.
+fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "tg-icons".into(),
@@ -164,6 +168,17 @@ fn install_icon_font(ctx: &egui::Context) {
         egui::FontFamily::Name("icons".into()),
         vec!["tg-icons".into()],
     );
+    fonts.font_data.insert(
+        "tg-reading".into(),
+        egui::FontData::from_static(include_bytes!("../../assets/reading.ttf")).into(),
+    );
+    let mut reading = vec!["tg-reading".to_string()];
+    if let Some(prop) = fonts.families.get(&egui::FontFamily::Proportional) {
+        reading.extend(prop.iter().cloned());
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Name("reading".into()), reading);
     ctx.set_fonts(fonts);
 }
 
@@ -293,7 +308,7 @@ pub fn run(path: &Path) -> ExitCode {
         // egui quits on Ctrl+Q by default; that key releases terminal focus
         // here. Closing the window still quits.
         cc.egui_ctx.options_mut(|o| o.quit_shortcuts.clear());
-        install_icon_font(&cc.egui_ctx);
+        install_fonts(&cc.egui_ctx);
         // file:// + image-decode loaders — markdown previews render
         // embedded pictures through these
         egui_extras::install_image_loaders(&cc.egui_ctx);

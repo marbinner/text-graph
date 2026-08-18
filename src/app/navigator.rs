@@ -141,10 +141,103 @@ fn clipped_text(text: &str, color: egui::Color32, size: f32, w: f32) -> egui::te
     clipped(job, w)
 }
 
+/// Rendered markdown wraps at a book-ish measure instead of the full
+/// pane — ~66 characters at the reading size. Only ever narrower than
+/// what's available, so the wrap-inside-the-pane rule is untouched.
+const READING_MEASURE: f32 = 620.0;
+
+pub(super) fn reading_width(available: f32) -> f32 {
+    available.min(READING_MEASURE)
+}
+
+/// Typography scope for rendered markdown — the pane body and the hover
+/// popup share it, so a note reads the same everywhere. Inside: the
+/// bundled reading face (Inter) at 15px, a real heading scale (the
+/// renderer interpolates per level between Body and Heading, so these two
+/// styles set the whole hierarchy), roomier block spacing, and the
+/// measure, centered when the surface is wider. The style is scoped to
+/// the child Ui — chrome outside the closure is untouched.
+pub(super) fn reading_frame<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let avail = ui.available_width();
+    let w = reading_width(avail);
+    let lead = ((avail - w) * 0.5).max(0.0);
+    ui.horizontal(|ui| {
+        ui.add_space(lead);
+        ui.vertical(|ui| {
+            ui.set_max_width(w);
+            let reading = egui::FontFamily::Name("reading".into());
+            let styles = &mut ui.style_mut().text_styles;
+            styles.insert(
+                egui::TextStyle::Body,
+                egui::FontId::new(15.0, reading.clone()),
+            );
+            styles.insert(
+                egui::TextStyle::Heading,
+                egui::FontId::new(28.0, reading.clone()),
+            );
+            styles.insert(
+                egui::TextStyle::Small,
+                egui::FontId::new(11.5, reading.clone()),
+            );
+            styles.insert(egui::TextStyle::Button, egui::FontId::new(15.0, reading));
+            styles.insert(
+                egui::TextStyle::Monospace,
+                egui::FontId::new(13.0, egui::FontFamily::Monospace),
+            );
+            // paragraphs breathe — egui's default ~4px block gap reads as
+            // a wall of text at 15px
+            ui.style_mut().spacing.item_spacing.y = 8.0;
+            f(ui)
+        })
+        .inner
+    })
+    .inner
+}
+
+/// The one CommonMark viewer configuration, shared by the pane and the
+/// hover popup so the two renderings can never drift: vault-checked
+/// images only, Obsidian callouts as themed alerts, and fenced code in
+/// the same syntect themes as the source view.
+pub(super) fn markdown_viewer(theme: &Theme) -> CommonMarkViewer<'static> {
+    CommonMarkViewer::new()
+        // mdview emits every allowed image as an explicit, vault-checked
+        // file URL. Never let a leftover absolute/relative destination
+        // become a file URL by renderer convention.
+        .explicit_image_uri_scheme(true)
+        .alerts(callouts(theme))
+        .syntax_theme_dark("base16-ocean.dark")
+        .syntax_theme_light("InspiredGitHub")
+}
+
+/// The renderer re-parses the body every frame (immediate mode), so what
+/// reaches it is bounded well below the 1 MiB read cap — a preview is a
+/// glance, and a megabyte of per-frame Markdown parsing is a hitch.
+const RENDER_CAP: usize = 192 * 1024;
+
+fn cap_for_render(mut body: String) -> String {
+    if body.len() > RENDER_CAP {
+        let mut cut = RENDER_CAP;
+        while !body.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        body.truncate(cut);
+        body.push_str("\n\n*— preview truncated; open in the editor for the rest —*");
+    }
+    body
+}
+
 impl Viewer {
     /// Cap on the raw-text detail read for Asset files — logs can be huge,
     /// and the pane is a glance, not an editor.
     const ASSET_DETAIL_CAP: u64 = 64 * 1024;
+
+    /// A note body, read, bounded, and rewritten for display — the one
+    /// path from disk to rendered markdown (pane and popup both).
+    pub(super) fn read_markdown(&self, id: NodeId, path: &Path) -> String {
+        vault::read_body(path)
+            .map(|b| mdview::prepare(&self.g, &self.root, id, &cap_for_render(b)))
+            .unwrap_or_else(|e| format!("*error reading file:* {e}"))
+    }
 
     pub(super) fn load_body(&self, id: NodeId) -> String {
         let node = self.g.node(id);
@@ -152,9 +245,7 @@ impl Viewer {
             return String::new();
         };
         match node.kind {
-            NodeKind::File => vault::read_body(&path)
-                .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
-                .unwrap_or_else(|e| format!("*error reading file:* {e}")),
+            NodeKind::File => self.read_markdown(id, &path),
             NodeKind::Asset if filetype::is_text(&node.path) => {
                 vault::read_head(&path, Self::ASSET_DETAIL_CAP)
                     .unwrap_or_else(|e| format!("error reading file: {e}"))
@@ -209,25 +300,19 @@ impl Viewer {
                 let theme = self.theme;
                 if let Some((_, body)) = &detail {
                     preview_scroll(ui, "nav-preview", &self.pane_content_w, |ui| {
-                        // images take the pane's width, never a fixed 400:
-                        // that constant set a FLOOR under the markdown Ui,
-                        // so prose wrapped at 400 and ran off a narrower
-                        // pane, clipped at the window edge
-                        let w = ui.available_width().max(80.0) as usize;
-                        CommonMarkViewer::new()
-                            // mdview emits every allowed image as an explicit,
-                            // vault-checked file URL. Never let a leftover
-                            // absolute/relative destination become a file URL
-                            // by renderer convention.
-                            .explicit_image_uri_scheme(true)
-                            .max_image_width(Some(w))
-                            .alerts(callouts(&theme))
-                            // fenced code is highlighted by the same
-                            // syntect themes the source view uses, so a
-                            // snippet reads the same in either
-                            .syntax_theme_dark("base16-ocean.dark")
-                            .syntax_theme_light("InspiredGitHub")
-                            .show(ui, &mut self.md_cache, body);
+                        reading_frame(ui, |ui| {
+                            // images take the reading column's width, never
+                            // a fixed 400: that constant set a FLOOR under
+                            // the markdown Ui, so prose wrapped at 400 and
+                            // ran off a narrower pane, clipped at the
+                            // window edge
+                            let w = ui.available_width().max(80.0) as usize;
+                            markdown_viewer(&theme).max_image_width(Some(w)).show(
+                                ui,
+                                &mut self.md_cache,
+                                body,
+                            );
+                        });
                     });
                 }
                 self.detail = detail;

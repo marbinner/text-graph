@@ -234,11 +234,7 @@ impl Viewer {
                                         vault::read_head(abs_path, ASSET_POPUP_CAP)
                                             .unwrap_or_else(|e| format!("error reading file: {e}"))
                                     } else {
-                                        vault::read_body(abs_path)
-                                            .map(|b| mdview::prepare(&self.g, &self.root, id, &b))
-                                            .unwrap_or_else(|e| {
-                                                format!("*error reading file:* {e}")
-                                            })
+                                        self.read_markdown(id, abs_path)
                                     }
                                 } else {
                                     "*error reading file:* missing filesystem path".to_string()
@@ -272,10 +268,13 @@ impl Viewer {
                                                 .wrap(),
                                             );
                                         } else {
-                                            CommonMarkViewer::new()
-                                                .explicit_image_uri_scheme(true)
-                                                .max_image_width(Some(POPUP_W as usize - 30))
-                                                .show(ui, &mut self.md_cache, body);
+                                            let theme = self.theme;
+                                            navigator::reading_frame(ui, |ui| {
+                                                let w = ui.available_width().max(80.0) as usize;
+                                                navigator::markdown_viewer(&theme)
+                                                    .max_image_width(Some(w))
+                                                    .show(ui, &mut self.md_cache, body);
+                                            });
                                         }
                                     });
                             }

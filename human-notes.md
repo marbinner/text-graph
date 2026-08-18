@@ -34,6 +34,7 @@
 - make it so that the mouse cursor only highlights things if it was moved, if the user is doing other thigns to moev the camera around or etc then the mouse should not highlight stuff that it's pointing at. 
 - when a folder node is higlighted, the names of all the nodes in that folder should be visible by default so that we can see which one we want to visit potentially.
 - when a text file in a folder is selected, we still want to highlight and see the names of siblings that are in the same folder by default.
+- at some point fix the agent/terminal panes so that they look nice on the screen and behave correctly when I zoom in/out and pin them etc.
 
 # todo next
 

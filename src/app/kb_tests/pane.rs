@@ -93,7 +93,7 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     let id = h.state().g.by_path("wide.md").expect("the wide note");
     h.state_mut().selected = Some(id);
     // several frames: the ratchet needed a stored rect to grow from
@@ -115,6 +115,24 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
         None,
         "and nothing was written back: only a DRAG owns the width"
     );
+}
+
+/// Rendered markdown draws in the bundled reading face — the "reading"
+/// family must be bound (a missing assets/reading.ttf or a dropped
+/// install_fonts call panics epaint the moment a note renders), and the
+/// measure only ever narrows.
+#[test]
+fn the_reading_family_is_bound_and_the_measure_only_narrows() {
+    let h = harness();
+    let height = h.ctx.fonts(|f| {
+        f.row_height(&eframe::egui::FontId::new(
+            15.0,
+            eframe::egui::FontFamily::Name("reading".into()),
+        ))
+    });
+    assert!(height > 10.0, "reading family resolves to a real font");
+    assert_eq!(super::navigator::reading_width(300.0), 300.0);
+    assert_eq!(super::navigator::reading_width(1000.0), 620.0);
 }
 
 /// `r` reads the same file the other way: source with line numbers
@@ -185,7 +203,7 @@ fn the_preview_wraps_inside_the_pane_and_the_default_is_not_persisted() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     let id = h.state().g.by_path("note.md").expect("note");
     h.state_mut().selected = Some(id);
     for _ in 0..4 {
@@ -233,7 +251,7 @@ fn the_pane_recovers_its_width_after_the_window_narrows() {
             },
             viewer,
         );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     let id = h.state().g.by_path("index.md").expect("index");
     h.state_mut().selected = Some(id);
     h.run();
@@ -339,7 +357,7 @@ fn obsidian_flavored_markdown_renders() {
         },
         viewer,
     );
-    super::install_icon_font(&h.ctx);
+    super::install_fonts(&h.ctx);
     let id = h.state().g.by_path("note.md").expect("note");
     h.state_mut().selected = Some(id);
     h.run();

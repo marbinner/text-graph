@@ -10,6 +10,7 @@ fn hover_dwell_renders_a_popup_with_the_file_body() {
     let scan = vault::scan(&root).expect("fixture scans");
     let viewer = Viewer::new(graph::build(scan), root, config::Config::default());
     let mut h = Harness::new_ui_state(|ui, v: &mut Viewer| v.hover_preview_ui(ui), viewer);
+    super::install_fonts(&h.ctx); // markdown resolves the "reading" family
     let id = h.state().g.by_path("index.md").expect("index exists");
     let since = Instant::now()
         .checked_sub(Duration::from_secs(1))

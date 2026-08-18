@@ -37,6 +37,9 @@ fn harness() -> Harness<'static, Viewer> {
         },
         viewer,
     );
+    // the bundled fonts, like run() installs them — rendered markdown
+    // resolves the "reading" family, which must exist in tests too
+    super::install_fonts(&h.ctx);
     h.step();
     h
 }
