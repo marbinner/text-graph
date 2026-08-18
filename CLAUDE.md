@@ -153,8 +153,9 @@
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
   lifecycle; `navigator.rs` = the side pane (the one previewer: subject
   header, bodies, connections strip); `actions.rs` = right-click
-  menu, create dialog, editor/terminal spawning; `reload.rs` = watcher +
-  worker pump + apply + persistence glue; `diag.rs` = health badge;
+  menu, create dialog, editor/terminal spawning; `reload.rs` = the
+  `Reload` substruct (watcher, debounce, scan worker, health — worker
+  bookkeeping private to the module) + apply + persistence glue; `diag.rs` = health badge;
   `settings.rs` = the ⚙ window (registry-driven) + the key list;
   `images.rs` = thumbnail decode worker + texture cache (lib `thumb.rs`
   does the pixel work, headless); `previews.rs` = zoom-in text-excerpt

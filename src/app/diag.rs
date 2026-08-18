@@ -14,8 +14,10 @@ impl Viewer {
         self.g.errors.len()
             + self.g.warnings.len()
             + self.g.ambiguities.len()
-            + usize::from(self._watcher.is_none() || self.watch_error.lock().unwrap().is_some())
-            + usize::from(self.reload_error.is_some())
+            + usize::from(
+                self.reload._watcher.is_none() || self.reload.watch_error.lock().unwrap().is_some(),
+            )
+            + usize::from(self.reload.error.is_some())
             + usize::from(self.config_error.is_some())
             + usize::from(self.terms.discovery_error.lock().unwrap().is_some())
             + self.terms.attach_backoff.len()
@@ -45,7 +47,7 @@ impl Viewer {
         }
 
         let mut jump = None;
-        let watch_error = self.watch_error.lock().unwrap().clone();
+        let watch_error = self.reload.watch_error.lock().unwrap().clone();
         let discovery_error = self.terms.discovery_error.lock().unwrap().clone();
         egui::Window::new("vault health")
             .anchor(Align2::LEFT_BOTTOM, Vec2::new(10.0, -44.0))
@@ -58,7 +60,7 @@ impl Viewer {
                 egui::ScrollArea::vertical()
                     .max_height(360.0)
                     .show(ui, |ui| {
-                        if self._watcher.is_none() {
+                        if self.reload._watcher.is_none() {
                             let detail = watch_error
                                 .as_deref()
                                 .unwrap_or("the file watcher failed to start");
@@ -73,7 +75,7 @@ impl Viewer {
                                 .color(self.theme.text),
                             );
                         }
-                        if let Some(e) = &self.reload_error {
+                        if let Some(e) = &self.reload.error {
                             ui.colored_label(BAD, format!("last reload failed: {e}"));
                             ui.label(
                                 RichText::new("showing the previous graph until a save succeeds")
@@ -152,7 +154,7 @@ impl Viewer {
                                 }
                             }
                         }
-                        if let Some(t) = self.last_reload {
+                        if let Some(t) = self.reload.last_done {
                             ui.separator();
                             ui.label(
                                 RichText::new(format!(

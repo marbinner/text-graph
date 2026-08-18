@@ -24,7 +24,6 @@ mod kb_tests;
 
 use actions::CreateDialog;
 use picker::Picker;
-use reload::ReloadMsg;
 use terminals::TERM_BG;
 
 use std::collections::{HashMap, HashSet};
@@ -365,28 +364,9 @@ struct Viewer {
     /// …with the (mtime, len) it was read at, so a reload re-reads only
     /// when that file actually changed.
     detail_stamp: Option<images::Stamp>,
-    // ---- live reload ----
-    /// Kept alive for the watcher thread; None if watching failed.
-    _watcher: Option<notify::RecommendedWatcher>,
-    /// Timestamp of the last relevant filesystem event (debounce state).
-    reload_at: Arc<Mutex<Option<Instant>>>,
-    /// Startup or callback failure from notify, separate from scan/build
-    /// failures so a successful recovery scan cannot erase the warning.
-    watch_error: Arc<Mutex<Option<String>>>,
-    /// Monotonic reload request counter — results from superseded requests
-    /// are discarded on arrival.
-    reload_gen: u64,
-    /// A scan+build worker is running — at most ONE at a time (a slow scan
-    /// under a fast save cadence must not stack concurrent full walks).
-    scan_inflight: bool,
-    /// A debounce expired while a scan was in flight; run one trailing
-    /// rescan when it lands.
-    rescan_queued: bool,
-    reload_tx: std::sync::mpsc::Sender<ReloadMsg>,
-    reload_rx: std::sync::mpsc::Receiver<ReloadMsg>,
-    /// Health state, surfaced by the diagnostics badge.
-    last_reload: Option<Instant>,
-    reload_error: Option<String>,
+    /// Live reload: watcher, debounce, scan worker, health — see
+    /// `reload::Reload`.
+    reload: reload::Reload,
     /// A startup config read failure blocks saves: defaults keep the viewer
     /// usable, but must never overwrite a file we did not successfully load.
     config_error: Option<String>,
@@ -506,7 +486,6 @@ impl Viewer {
             n_webs,
             dir_by_path,
         } = Self::derived(&g, cfg.node_scale);
-        let (reload_tx, reload_rx) = std::sync::mpsc::channel();
         let vs = state::load(&root);
         let saved_cam = vs.camera;
         let show_web = !vs.hide_web;
@@ -569,16 +548,7 @@ impl Viewer {
             pane_preview: None,
             detail: None,
             detail_stamp: None,
-            _watcher: None,
-            reload_at: Arc::new(Mutex::new(None)),
-            watch_error: Arc::new(Mutex::new(None)),
-            reload_gen: 0,
-            scan_inflight: false,
-            rescan_queued: false,
-            reload_tx,
-            reload_rx,
-            last_reload: None,
-            reload_error: None,
+            reload: reload::Reload::new(),
             config_error: None,
             diag_open: false,
             dir_by_path,

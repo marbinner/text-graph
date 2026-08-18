@@ -6,6 +6,54 @@ use super::*;
 
 pub(super) type ReloadMsg = (u64, anyhow::Result<Graph>);
 
+/// The live-reload machinery: the filesystem watcher, its debounce clock,
+/// the scan-worker channel, and reload health. One scan+build runs at a
+/// time; a debounce that expires mid-scan queues exactly one trailing
+/// rescan; results from superseded generations are discarded on arrival.
+/// The worker bookkeeping is private to this module — the rest of the app
+/// sees only the debounce clock (`event_at`) and the health fields.
+pub(super) struct Reload {
+    /// Kept alive for the watcher thread; None if watching failed.
+    pub(super) _watcher: Option<notify::RecommendedWatcher>,
+    /// Timestamp of the last relevant filesystem event (debounce state).
+    pub(super) event_at: Arc<Mutex<Option<Instant>>>,
+    /// Startup or callback failure from notify, separate from scan/build
+    /// failures so a successful recovery scan cannot erase the warning.
+    pub(super) watch_error: Arc<Mutex<Option<String>>>,
+    /// Monotonic reload request counter — results from superseded requests
+    /// are discarded on arrival.
+    generation: u64,
+    /// A scan+build worker is running — at most ONE at a time (a slow scan
+    /// under a fast save cadence must not stack concurrent full walks).
+    scan_inflight: bool,
+    /// A debounce expired while a scan was in flight; run one trailing
+    /// rescan when it lands.
+    rescan_queued: bool,
+    tx: std::sync::mpsc::Sender<ReloadMsg>,
+    rx: std::sync::mpsc::Receiver<ReloadMsg>,
+    /// Health state, surfaced by the diagnostics badge.
+    pub(super) last_done: Option<Instant>,
+    pub(super) error: Option<String>,
+}
+
+impl Reload {
+    pub(super) fn new() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Reload {
+            _watcher: None,
+            event_at: Arc::new(Mutex::new(None)),
+            watch_error: Arc::new(Mutex::new(None)),
+            generation: 0,
+            scan_inflight: false,
+            rescan_queued: false,
+            tx,
+            rx,
+            last_done: None,
+            error: None,
+        }
+    }
+}
+
 /// Should this watcher callback schedule a rebuild? A kernel queue
 /// overflow arrives as a Rescan-flagged event with NO paths — the one
 /// signal that says events were LOST — and a watch error can mean the
@@ -47,10 +95,10 @@ impl Viewer {
     /// the health window instead of being reduced to a generic OFF state.
     pub(super) fn start_watcher(&mut self, ctx: egui::Context) {
         use notify::Watcher as _;
-        self._watcher = None;
-        *self.watch_error.lock().unwrap() = None;
-        let state = self.reload_at.clone();
-        let watch_error = self.watch_error.clone();
+        self.reload._watcher = None;
+        *self.reload.watch_error.lock().unwrap() = None;
+        let state = self.reload.event_at.clone();
+        let watch_error = self.reload.watch_error.clone();
         let handler_error = watch_error.clone();
         let root = self.root.clone();
         let handler = move |res: Result<notify::Event, notify::Error>| {
@@ -66,7 +114,7 @@ impl Viewer {
                         self.root.display()
                     ));
                 } else {
-                    self._watcher = Some(watcher);
+                    self.reload._watcher = Some(watcher);
                 }
             }
             Err(error) => {
@@ -81,8 +129,8 @@ impl Viewer {
     /// namespaced — see graph.rs). The expensive scan+build happens on a
     /// worker thread (see `ui`); only this cheap carry-over runs here.
     pub(super) fn apply_graph(&mut self, g: Graph) {
-        self.last_reload = Some(Instant::now());
-        self.reload_error = None;
+        self.reload.last_done = Some(Instant::now());
+        self.reload.error = None;
 
         // A reload that changes no node identities and no link endpoints
         // (an agent streaming text into existing notes — the common case)
@@ -298,7 +346,7 @@ impl Viewer {
     /// discarding any superseded by a newer save. Called once per frame.
     pub(super) fn pump_reload(&mut self, ctx: &egui::Context) {
         let due = {
-            let mut at = self.reload_at.lock().unwrap();
+            let mut at = self.reload.event_at.lock().unwrap();
             match *at {
                 Some(t) if t.elapsed() >= Duration::from_millis(300) => {
                     *at = None;
@@ -312,17 +360,17 @@ impl Viewer {
             }
         };
         if due {
-            if self.scan_inflight {
+            if self.reload.scan_inflight {
                 // single-flight: a slow scan under a fast save cadence must
                 // not stack concurrent full walks — remember and re-fire
                 // one trailing rescan when the running one lands
-                self.rescan_queued = true;
+                self.reload.rescan_queued = true;
             } else {
-                self.scan_inflight = true;
-                self.reload_gen += 1;
-                let generation = self.reload_gen;
+                self.reload.scan_inflight = true;
+                self.reload.generation += 1;
+                let generation = self.reload.generation;
                 let root = self.root.clone();
-                let tx = self.reload_tx.clone();
+                let tx = self.reload.tx.clone();
                 let ctx = ctx.clone();
                 std::thread::spawn(move || {
                     let res = vault::scan(&root).map(graph::build);
@@ -331,24 +379,24 @@ impl Viewer {
                 });
             }
         }
-        while let Ok((generation, res)) = self.reload_rx.try_recv() {
-            self.scan_inflight = false;
-            if self.rescan_queued {
-                self.rescan_queued = false;
+        while let Ok((generation, res)) = self.reload.rx.try_recv() {
+            self.reload.scan_inflight = false;
+            if self.reload.rescan_queued {
+                self.reload.rescan_queued = false;
                 // already past its debounce — due again on the next frame
-                *self.reload_at.lock().unwrap() = Some(
+                *self.reload.event_at.lock().unwrap() = Some(
                     Instant::now()
                         .checked_sub(Duration::from_millis(300))
                         .unwrap_or_else(Instant::now),
                 );
                 ctx.request_repaint();
             }
-            if generation != self.reload_gen {
+            if generation != self.reload.generation {
                 continue; // superseded by a newer save — discard stale build
             }
             match res {
                 Ok(g) => self.apply_graph(g),
-                Err(e) => self.reload_error = Some(format!("{e:#}")),
+                Err(e) => self.reload.error = Some(format!("{e:#}")),
             }
         }
     }
@@ -439,12 +487,13 @@ mod tests {
     fn stale_reload_results_are_discarded() {
         let mut v = fixture_viewer();
         let fixture_nodes = v.g.nodes.len();
-        v.reload_gen = 2;
+        v.reload.generation = 2;
         // gen 1 (superseded) arrives first with a different graph; gen 2
         // rebuilds the fixture. Only gen 2 may apply.
-        v.reload_tx.send((1, Ok(tiny_graph()))).unwrap();
+        v.reload.tx.send((1, Ok(tiny_graph()))).unwrap();
         let root = v.root.clone();
-        v.reload_tx
+        v.reload
+            .tx
             .send((2, Ok(graph::build(vault::scan(&root).unwrap()))))
             .unwrap();
         v.pump_reload(&egui::Context::default());
@@ -453,21 +502,22 @@ mod tests {
             fixture_nodes,
             "stale gen-1 graph must not apply"
         );
-        assert!(v.last_reload.is_some());
-        assert!(v.reload_error.is_none());
+        assert!(v.reload.last_done.is_some());
+        assert!(v.reload.error.is_none());
     }
 
     #[test]
     fn reload_errors_are_captured_not_applied() {
         let mut v = fixture_viewer();
         let before = v.g.nodes.len();
-        v.reload_gen = 1;
-        v.reload_tx
+        v.reload.generation = 1;
+        v.reload
+            .tx
             .send((1, Err(anyhow::anyhow!("disk on fire"))))
             .unwrap();
         v.pump_reload(&egui::Context::default());
         assert_eq!(v.g.nodes.len(), before, "old graph stays on error");
-        assert!(v.reload_error.as_deref().unwrap().contains("disk on fire"));
+        assert!(v.reload.error.as_deref().unwrap().contains("disk on fire"));
     }
 
     /// A debounce expiring while a scan runs must not stack a second
@@ -476,24 +526,28 @@ mod tests {
     fn scans_are_single_flight_with_a_trailing_rescan() {
         let mut v = fixture_viewer();
         let ctx = egui::Context::default();
-        v.scan_inflight = true;
-        *v.reload_at.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
-        let gen_before = v.reload_gen;
+        v.reload.scan_inflight = true;
+        *v.reload.event_at.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
+        let gen_before = v.reload.generation;
         v.pump_reload(&ctx);
-        assert_eq!(v.reload_gen, gen_before, "no second worker while one runs");
-        assert!(v.rescan_queued, "the expired debounce is remembered");
+        assert_eq!(
+            v.reload.generation, gen_before,
+            "no second worker while one runs"
+        );
+        assert!(v.reload.rescan_queued, "the expired debounce is remembered");
 
         // the in-flight scan lands -> applied, and the trailing rescan is
         // re-armed as an already-due debounce
         let root = v.root.clone();
-        v.reload_tx
+        v.reload
+            .tx
             .send((gen_before, Ok(graph::build(vault::scan(&root).unwrap()))))
             .unwrap();
         v.pump_reload(&ctx);
-        assert!(!v.scan_inflight);
-        assert!(!v.rescan_queued);
+        assert!(!v.reload.scan_inflight);
+        assert!(!v.reload.rescan_queued);
         assert!(
-            v.reload_at.lock().unwrap().is_some(),
+            v.reload.event_at.lock().unwrap().is_some(),
             "trailing rescan re-armed as an already-due debounce"
         );
     }

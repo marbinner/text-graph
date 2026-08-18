@@ -267,7 +267,7 @@ impl Viewer {
                     Ok(rel) => {
                         self.pending_select = Some(rel.clone());
                         self.set_flash(format!("created {rel}"));
-                        *self.reload_at.lock().unwrap() = Some(Instant::now());
+                        *self.reload.event_at.lock().unwrap() = Some(Instant::now());
                     }
                     Err(e) => self.set_flash(format!("can't create: {e}")),
                 }
@@ -386,7 +386,7 @@ impl Viewer {
                 Ok(rel) => {
                     self.pending_select = Some(vault::path_key(&rel));
                     self.set_flash(format!("created {}", rel.display()));
-                    *self.reload_at.lock().unwrap() = Some(Instant::now());
+                    *self.reload.event_at.lock().unwrap() = Some(Instant::now());
                 }
                 Err(e) => {
                     dlg.err = Some(e.to_string());
