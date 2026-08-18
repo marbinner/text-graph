@@ -23,7 +23,8 @@
 - tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
   (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
   tmux is absent. Never point tests at the user's default tmux server.
-- Viewer state machine: `src/app/kb_tests.rs` drives handle_keys, the
+- Viewer state machine: `src/app/kb_tests/` (topic modules — keybinds,
+  finder, settings_window, pane, cards…) drives handle_keys, the
   hover popup, and apply_graph through egui_kittest (headless, no
   renderer). Its harness deliberately does NOT run canvas —
   sync_terminals would attach mirrors against the user's default tmux
