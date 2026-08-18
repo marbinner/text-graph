@@ -229,6 +229,48 @@ pub(super) fn markdown_viewer(theme: &Theme) -> CommonMarkViewer<'static> {
         .render_math_fn(Some(RENDER_MATH))
 }
 
+/// The one place a note body reaches the CommonMark viewer, shared by
+/// the pane and the hover popup: prose segments flow at the measure,
+/// and each table renders inside its own horizontal scroll region
+/// (`mdview::split_tables` finds them). Split because one wide table
+/// used to poison every paragraph after it — egui re-expands a Ui's
+/// max_rect to its min_rect after each widget, so the table's width
+/// became the new wrap width and the prose ran off the pane, clipped at
+/// the window edge. The viewer re-reads its wrap width per `show()`
+/// call, so restarting it per segment restores the measure, and the
+/// scroll region makes a wide table's far columns reachable instead of
+/// clipped away. Guarded by `a_wide_table_neither_widens_the_prose_
+/// after_it_nor_hides_its_columns`.
+pub(super) fn render_markdown(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    cache: &mut CommonMarkCache,
+    body: &str,
+) {
+    // images take the reading column's width, never a fixed 400: that
+    // constant set a FLOOR under the markdown Ui, so prose wrapped at
+    // 400 and ran off a narrower pane, clipped at the window edge
+    let w = ui.available_width().max(80.0) as usize;
+    for (i, seg) in mdview::split_tables(body).into_iter().enumerate() {
+        match seg {
+            mdview::Segment::Prose(text) => {
+                markdown_viewer(theme)
+                    .max_image_width(Some(w))
+                    .show(ui, cache, text);
+            }
+            mdview::Segment::Table(text) => {
+                egui::ScrollArea::horizontal()
+                    .id_salt(("md-table", i))
+                    .show(ui, |ui| {
+                        markdown_viewer(theme)
+                            .max_image_width(Some(w))
+                            .show(ui, cache, text);
+                    });
+            }
+        }
+    }
+}
+
 /// The renderer re-parses the body every frame (immediate mode), so what
 /// reaches it is bounded well below the 1 MiB read cap — a preview is a
 /// glance, and a megabyte of per-frame Markdown parsing is a hitch.
@@ -340,17 +382,7 @@ impl Viewer {
                 if let Some((_, body)) = &detail {
                     preview_scroll(ui, "nav-preview", &self.pane_content_w, |ui| {
                         reading_frame(ui, |ui| {
-                            // images take the reading column's width, never
-                            // a fixed 400: that constant set a FLOOR under
-                            // the markdown Ui, so prose wrapped at 400 and
-                            // ran off a narrower pane, clipped at the
-                            // window edge
-                            let w = ui.available_width().max(80.0) as usize;
-                            markdown_viewer(&theme).max_image_width(Some(w)).show(
-                                ui,
-                                &mut self.md_cache,
-                                body,
-                            );
+                            render_markdown(ui, &theme, &mut self.md_cache, body);
                         });
                     });
                 }

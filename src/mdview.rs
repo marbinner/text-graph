@@ -468,6 +468,85 @@ fn block_id_spans(body: &str, in_code: &dyn Fn(usize) -> bool) -> Vec<(usize, us
     out
 }
 
+/// One stretch of a prepared body: prose that flows at the reading
+/// measure, or a table that gets its own horizontally scrollable region.
+#[derive(Debug, PartialEq)]
+pub enum Segment<'a> {
+    Prose(&'a str),
+    Table(&'a str),
+}
+
+/// Split a prepared body at GFM table blocks, so the renderer can
+/// restart per segment (the renderer-side WHY lives on
+/// `navigator::render_markdown`: egui re-expands a Ui's max_rect to its
+/// min_rect, so one wide table teaches every paragraph after it to wrap
+/// at the table's width).
+///
+/// A table is what pulldown will treat as one: a delimiter row — only
+/// `|`, `-`, `:` and spaces, with at least one dash and one pipe —
+/// directly under a non-blank header line containing `|`, plus every
+/// following non-blank line containing `|`. Fenced code is never a
+/// table. Best-effort by design: a missed table renders exactly as the
+/// unsplit body always did.
+pub fn split_tables(body: &str) -> Vec<Segment<'_>> {
+    let excluded = vault::excluded_ranges(body);
+    let in_code = |at: usize| excluded.iter().any(|r| r.contains(&at));
+    let mut lines: Vec<(usize, &str)> = Vec::new(); // (byte offset, with \n)
+    let mut at = 0;
+    for line in body.split_inclusive('\n') {
+        lines.push((at, line));
+        at += line.len();
+    }
+    let is_delim = |s: &str| {
+        let t = s.trim();
+        !t.is_empty()
+            && t.contains('|')
+            && t.contains('-')
+            && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+    };
+    let row_like = |s: &str| s.contains('|') && !s.trim().is_empty();
+
+    // table blocks as line ranges [header, last row]
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    let mut i = 1;
+    while i < lines.len() {
+        let (off, text) = lines[i];
+        let header_free = blocks.last().is_none_or(|&(_, e)| e < i - 1);
+        if !in_code(off) && is_delim(text) && header_free && row_like(lines[i - 1].1) {
+            let start = i - 1;
+            let mut end = i;
+            while end + 1 < lines.len() && row_like(lines[end + 1].1) {
+                end += 1;
+            }
+            blocks.push((start, end));
+            i = end + 2;
+        } else {
+            i += 1;
+        }
+    }
+
+    fn push_prose<'a>(body: &'a str, from: usize, to: usize, out: &mut Vec<Segment<'a>>) {
+        let s = &body[from..to];
+        if !s.trim().is_empty() {
+            out.push(Segment::Prose(s));
+        }
+    }
+    let mut out = Vec::new();
+    let mut prev = 0;
+    for (start, end) in blocks {
+        let from = lines[start].0;
+        let to = lines[end].0 + lines[end].1.len();
+        push_prose(body, prev, from, &mut out);
+        out.push(Segment::Table(&body[from..to]));
+        prev = to;
+    }
+    push_prose(body, prev, body.len(), &mut out);
+    if out.is_empty() {
+        out.push(Segment::Prose(body));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,5 +894,50 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_body_without_tables_is_one_prose_segment() {
+        let body = "# t\n\nprose with | a pipe\nand ---\n";
+        assert_eq!(split_tables(body), vec![Segment::Prose(body)]);
+        assert_eq!(split_tables(""), vec![Segment::Prose("")]);
+    }
+
+    #[test]
+    fn tables_split_out_and_the_prose_around_them_survives_exactly() {
+        let body = "before\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nafter\n";
+        assert_eq!(
+            split_tables(body),
+            vec![
+                Segment::Prose("before\n\n"),
+                Segment::Table("| a | b |\n|---|---|\n| 1 | 2 |\n"),
+                Segment::Prose("\nafter\n"),
+            ]
+        );
+    }
+
+    #[test]
+    fn tables_at_the_edges_and_in_multiples() {
+        let body = "|h|\n|-|\n|1|\n\nmid\n\na | b\n--- | ---\n1 | 2";
+        assert_eq!(
+            split_tables(body),
+            vec![
+                Segment::Table("|h|\n|-|\n|1|\n"),
+                Segment::Prose("\nmid\n\n"),
+                Segment::Table("a | b\n--- | ---\n1 | 2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn fenced_pipes_are_code_not_tables() {
+        let body = "x\n\n```\n| a |\n|---|\n```\ny\n";
+        assert_eq!(split_tables(body), vec![Segment::Prose(body)]);
+    }
+
+    #[test]
+    fn a_delimiter_needs_a_header_row_above_it() {
+        let body = "text\n\n|---|\nmore\n";
+        assert_eq!(split_tables(body), vec![Segment::Prose(body)]);
     }
 }

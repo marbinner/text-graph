@@ -270,10 +270,12 @@ impl Viewer {
                                         } else {
                                             let theme = self.theme;
                                             navigator::reading_frame(ui, |ui| {
-                                                let w = ui.available_width().max(80.0) as usize;
-                                                navigator::markdown_viewer(&theme)
-                                                    .max_image_width(Some(w))
-                                                    .show(ui, &mut self.md_cache, body);
+                                                navigator::render_markdown(
+                                                    ui,
+                                                    &theme,
+                                                    &mut self.md_cache,
+                                                    body,
+                                                );
                                             });
                                         }
                                     });

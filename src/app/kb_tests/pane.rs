@@ -117,6 +117,57 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
     );
 }
 
+/// One wide table must not poison the prose after it: egui re-expands a
+/// Ui's max_rect to its min_rect after each widget, so the table's width
+/// used to become the wrap width for every paragraph that followed —
+/// text ran off the pane and was clipped at the window edge, while the
+/// table's own far columns were clipped outright. Tables render in their
+/// own horizontal scroll regions now (`render_markdown` over
+/// `mdview::split_tables`), so the whole body lays out inside the pane.
+#[test]
+fn a_wide_table_neither_widens_the_prose_after_it_nor_hides_its_columns() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let d = std::env::temp_dir().join(format!("tg-tablewrap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let row = format!("| {} |\n", "wide-cell-that-never-wraps ".repeat(40));
+    std::fs::write(
+        d.join("note.md"),
+        format!(
+            "before\n\n|h|\n|---|\n{row}\n\n{}\n",
+            "prose after the table that must wrap at the measure ".repeat(40)
+        ),
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let seen = Arc::new(AtomicU32::new(0));
+    let probe = seen.clone();
+    let mut h = Harness::new_ui_state(
+        move |ui, v: &mut Viewer| {
+            v.pump_picker(ui.ctx());
+            let w = v.side_panel(ui);
+            probe.store(w.round() as u32, Ordering::Relaxed);
+        },
+        viewer,
+    );
+    super::install_fonts(&h.ctx);
+    let id = h.state().g.by_path("note.md").expect("note");
+    h.state_mut().selected = Some(id);
+    for _ in 0..4 {
+        h.step();
+    }
+    let pane = seen.load(Ordering::Relaxed) as f32;
+    let content = h.state().pane_content_w.get();
+    let _ = std::fs::remove_dir_all(&d);
+    assert!(
+        content <= pane + 1.0,
+        "the body laid out {content} wide in a {pane} pane — a wide table \
+         is poisoning the layout again"
+    );
+}
+
 /// Rendered markdown draws in the bundled reading face — the "reading"
 /// family must be bound (a missing assets/reading.ttf or a dropped
 /// install_fonts call panics epaint the moment a note renders), and the
