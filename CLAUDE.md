@@ -186,74 +186,18 @@
   ⚙ key-list row that documents it (tested). The module docs carry the
   whys (Esc's guard exemption, Tab's consumption, what deliberately
   isn't a row).
-- The overlay is the ONE list surface, and navigation is centered on it.
-  It has SOURCES, never siblings: `f`/`/`/`Ctrl+F` = find (fuzzy over the
-  whole vault), `b` = browse (one folder's entries, tree order, typing
-  filters them — the scoped search that was always meant to be a query
-  mode rather than a second keybind), and an empty find prompt = the 30
-  most recently edited files (agents rewrite notes all day; "what
-  changed" is the useful default). Tab swaps source keeping the query;
-  browsing descends on Enter, ascends on Backspace-with-empty-filter,
-  takes the folder ITSELF on Shift+Enter, and never reads a file. The
-  browsed folder is held as a PATH — reloads renumber the arena under an
-  open overlay. Adding a third source means adding a source, NOT a second
-  surface with its own preview and its own keys; that is exactly how the
-  ranger drifted. Find mode's engine: names/aliases/paths
-  fuzzy (nucleo, scored per FIELD — one concatenated haystack manufactured
-  subsequence matches straddling name and path), file CONTENT literal (all
-  terms on one line, smart case). Content is NEVER indexed: `search::
-  scan_files` streams from disk per query on a worker thread, generation-
-  cancelled between files, batched back so the list fills progressively —
-  bodies stay out of memory and nothing goes stale under agents that
-  rewrite notes. A query that only GREW may rescan just the previous
-  scan's hit FILES (`Query::narrows`), but only when that scan finished
-  un-truncated. Rows are nodes, at most one each (a name match keeps its
-  class and gains the matching line), ranked class → score → key, so a
-  streaming scan never reorders under the cursor; the cursor rides its
-  row's IDENTITY, since reloads renumber the arena. Content lines are
-  matched against the RAW file, frontmatter included — that is what makes
-  the line number the one `$EDITOR +N` wants (Ctrl+Enter). Browsing
-  results must NOT set the selection — that is what Enter COMMITS to, so
-  Esc can leave you where you were. Taking a TERMINAL result recenters
-  without touching zoom (`fly_to_card_at(.., false)`): a focused card is
-  readable at any zoom, and only the double-click gesture means "take me
-  INTO this terminal". Editing a query immediately retires the previous scan,
-  before debounce; live terminal generation changes invalidate terminal rows
-  so an open finder never displays stale screen matches.
-- A live search must survive vault RELOADS, which land every few seconds
-  under working agents. Content hits are therefore keyed by PATH, never
-  by node index (reloads renumber the arena); a reload re-scores the name
-  tier, keeps the hits, and lets the rescan replace them in place. The
-  preview re-reads only when its OWN file's (mtime, len) moved, and
-  `detail` survives too — except across a STRUCTURAL reload, where its
-  cached body must go: the body carries `tg://` links built from node
-  INDEXES, and stale ones jump somewhere else. The "scanning…" hint waits
-  `SCAN_HINT_DELAY` before showing, or it strobes once per keystroke and
-  once per agent save. Anything that resets per reload will be SEEN.
-- Finder layout: the prompt + result list FLOAT (an egui Area, order
-  Foreground) centered on the WINDOW — Foreground means it draws over the
-  side pane, so it sits in the same place whether the pane is open or not
-  — with the prompt `cfg.finder_y` down it and the list filling
-  everything from there to the bottom margin. Never cap the list at a
-  fraction: prompt height and visible rows trade against each other, and
-  a cap turned a laptop screen into three visible results. Three rules
-  there are load-bearing, and all three exist because egui REMEMBERS
-  sizes: the list height is measured against the SCREEN, never
-  `ui.available_height()` (an Area sizes its Ui from last frame's
-  content, so that feeds the list its own previous height); the Area is
-  `constrain(false)` (constraining lifts an overflowing overlay and drops
-  it back when it fits, and the lower position caps the next list, which
-  prevents the overflow that would lift it — a deadlock); and the list
-  RESERVES its height rather than shrinking to its rows (a shrunk Area Ui
-  is too short to hold a bigger list next frame). Together they are why
-  the finder can't ratchet down, guarded by
-  `a_narrow_result_set_does_not_shrink_the_finder_for_good`. The list is
-  drawn whenever there are ROWS, not only while a query is live (an empty
-  prompt has the recently-edited ones). Previews never live there: the side pane is the
-  one place a file previews, searched-to or walked-to. Framing
-  compensates (`frame_target` lifts a followed node by `FRAME_LIFT_FRAC`
-  of the canvas height) — without it, following a result parks it behind
-  the overlay, the one place you can't see.
+- The finder: `app/picker.rs`'s module doc is the contract (the ONE
+  list surface, SOURCES — find/browse/recent — never a sibling surface;
+  float layout; reload survival; browse mechanics), and `search.rs`'s
+  is the engine's (fuzzy fields vs literal same-line content, never
+  indexed, generation-cancelled streaming scans, `Query::narrows`). The
+  three egui-remembers layout rules are commented where they bite
+  (`picker_overlay_ui`, `picker_list`) and guarded by
+  `a_narrow_result_set_does_not_shrink_the_finder_for_good`.
+  Cross-module: content hits are keyed by PATH and the cursor rides row
+  IDENTITY (reloads renumber the arena); `frame_target` (mod.rs) lifts
+  a followed node above the overlay; a STRUCTURAL reload must drop the
+  cached pane body — its `tg://` links carry node indexes.
 - NOTHING inside the side pane may ask for more width than the pane has.
   egui STORES a panel's content-driven rect, so one wide markdown table,
   one unwrappable code line, one long filename or a terminal screen used

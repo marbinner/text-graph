@@ -20,6 +20,12 @@
 //! keyed by PATH, the preview re-reads only when its own file changed, and
 //! the cursor rides its row's identity. Agents save files every few
 //! seconds — a search that blinked on each would be unusable.
+//!
+//! Browsing descends on Enter, ascends on Backspace-with-an-empty-filter,
+//! takes the folder ITSELF on Shift+Enter, and never reads a file; the
+//! browsed folder is held as a PATH, because reloads renumber the arena
+//! under an open overlay. Walking results only aims the preview — the
+//! SELECTION is what Enter commits to, so Esc leaves you where you were.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -1407,6 +1413,11 @@ impl Viewer {
         egui::Area::new(egui::Id::new("tg-picker"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
+            // constrain(true) would LIFT an overflowing overlay to fit the
+            // screen and drop it back once it fits — but the lifted
+            // position caps the next frame's list shorter, which prevents
+            // the overflow that lifted it: a two-frame oscillation lock.
+            // The list already sizes itself against the screen bottom.
             .constrain(false)
             .show(ctx, |ui| {
                 ui.set_width(w);
