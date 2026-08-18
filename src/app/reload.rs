@@ -157,7 +157,7 @@ impl Viewer {
         // the glide REMAPS too: cancelling parked the camera mid-flight
         // whenever a reload landed inside the 180ms window (hjkl walking
         // while an agent saves), leaving the new selection off-center
-        self.cam_anim = self.cam_anim.take().and_then(|(from, id, t)| {
+        self.cam.anim = self.cam.anim.take().and_then(|(from, id, t)| {
             by_ident
                 .get(&self.g.node(id).ident())
                 .map(|&nid| (from, nid, t))
@@ -255,7 +255,7 @@ impl Viewer {
         }
         pins.sort();
         state::ViewState {
-            camera: Some((self.center.x, self.center.y, self.zoom)),
+            camera: Some((self.cam.center.x, self.cam.center.y, self.cam.zoom)),
             cards,
             pins,
             pane_width: self.pane_width,
@@ -505,10 +505,10 @@ mod tests {
         let mut v = fixture_viewer();
         let id = v.g.by_path("index.md").expect("index exists");
         v.frame_node(id);
-        assert!(v.cam_anim.is_some());
+        assert!(v.cam.anim.is_some());
         let g2 = graph::build(vault::scan(&v.root).unwrap());
         v.apply_graph(g2);
-        let target = v.cam_anim.map(|(_, i, _)| v.g.node(i).path.clone());
+        let target = v.cam.anim.map(|(_, i, _)| v.g.node(i).path.clone());
         assert_eq!(
             target.as_deref(),
             Some("index.md"),

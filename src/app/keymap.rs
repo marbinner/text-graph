@@ -323,12 +323,10 @@ const BINDINGS: &[Binding] = &[
         doc: "0  Home",
         when: always,
         act: |v, ui| {
-            let rect = v
-                .last_canvas_rect
-                .unwrap_or_else(|| ui.ctx().content_rect());
+            let rect = v.cam.last_rect.unwrap_or_else(|| ui.ctx().content_rect());
             if let Some((_, zoom)) = v.whole_graph_view(rect) {
-                v.cam_anim = None;
-                v.zoom = zoom;
+                v.cam.cancel_glide();
+                v.cam.zoom = zoom;
             }
         },
     },
@@ -345,8 +343,8 @@ const BINDINGS: &[Binding] = &[
                 .is_some_and(|t| t.elapsed() < Duration::from_millis(600))
             {
                 v.pending_g = None;
-                v.cam_anim = None;
-                v.fitted = false; // canvas re-fits on the next frame
+                v.cam.cancel_glide();
+                v.cam.fitted = false; // canvas re-fits on the next frame
             } else {
                 v.pending_g = Some(Instant::now());
             }
@@ -362,10 +360,8 @@ const BINDINGS: &[Binding] = &[
         when: |v| v.selected.is_some(),
         act: |v, ui| {
             let Some(sel) = v.selected else { return };
-            let rect = v
-                .last_canvas_rect
-                .unwrap_or_else(|| ui.ctx().content_rect());
-            v.zoom = v.neighborhood_zoom(sel, rect);
+            let rect = v.cam.last_rect.unwrap_or_else(|| ui.ctx().content_rect());
+            v.cam.zoom = v.neighborhood_zoom(sel, rect);
             v.frame_node(sel);
         },
     },
@@ -575,13 +571,13 @@ impl Viewer {
             )
         });
         if h || j || k || l || zoom_in || zoom_out {
-            self.cam_anim = None; // manual camera input wins
+            self.cam.cancel_glide(); // manual camera input wins
             let axis = |pos: bool, neg: bool| (pos as i8 - neg as i8) as f32;
-            let pan = 2200.0 * dt / self.zoom; // constant screen-space speed
-            self.center.x += pan * axis(l, h);
-            self.center.y += pan * axis(j, k);
+            let pan = 2200.0 * dt / self.cam.zoom; // constant screen-space speed
+            self.cam.center.x += pan * axis(l, h);
+            self.cam.center.y += pan * axis(j, k);
             let zf = 6.0f32.powf(dt * axis(zoom_in, zoom_out));
-            self.zoom = (self.zoom * zf).clamp(0.02, 50.0);
+            self.cam.zoom = (self.cam.zoom * zf).clamp(0.02, 50.0);
             ui.ctx().request_repaint();
         }
     }

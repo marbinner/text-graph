@@ -996,7 +996,7 @@ impl Viewer {
         if self.terms.panes.is_empty() {
             return;
         }
-        let f_base = (6.0 * self.zoom).clamp(2.5, 16.0);
+        let f_base = (6.0 * self.cam.zoom).clamp(2.5, 16.0);
         let compact_base = f_base < 5.0;
         let font_base = FontId::monospace(f_base);
         // measured monospace advance keeps columns honest at any zoom
@@ -1047,7 +1047,7 @@ impl Viewer {
             let compact = compact_base && !expanded;
             let anchor = self.card_anchor(a);
             let anchor_w = self.world_pos(anchor.0 as usize);
-            let anchor_s = self.to_screen(rect, anchor_w);
+            let anchor_s = self.cam.to_screen(rect, anchor_w);
             let size = if compact {
                 Vec2::new(260.0, 82.0)
             } else {
@@ -1076,7 +1076,7 @@ impl Viewer {
             // points inward and the card never sits on top of the cluster
             // it's attached to.
             let (mut card, mut tether_to) = if let Some(off) = self.terms.offsets.get(&key) {
-                let card = Rect::from_center_size(anchor_s + *off * self.zoom, size);
+                let card = Rect::from_center_size(anchor_s + *off * self.cam.zoom, size);
                 (card, card.center())
             } else {
                 let jitter = (hash_angle(&a.session, &a.pane, i) - std::f32::consts::PI) * 0.25;
@@ -1086,7 +1086,7 @@ impl Viewer {
                     hash_angle(&a.session, &a.pane, i)
                 };
                 let dir = Vec2::angled(base + jitter);
-                let anchor_r = (self.radius[anchor.0 as usize] * self.zoom).clamp(1.5, 16.0);
+                let anchor_r = (self.radius[anchor.0 as usize] * self.cam.zoom).clamp(1.5, 16.0);
                 let p = anchor_s + dir * (anchor_r + 22.0);
                 let min = Pos2::new(
                     if dir.x >= 0.0 { p.x } else { p.x - base_size.x },
@@ -1106,9 +1106,10 @@ impl Viewer {
             if self.terms.place_pending.as_ref() == Some(&key) {
                 self.terms.place_pending = None;
                 if let Some(shift) = offscreen_shift(card, rect) {
-                    self.terms
-                        .offsets
-                        .insert(key.clone(), (card.center() + shift - anchor_s) / self.zoom);
+                    self.terms.offsets.insert(
+                        key.clone(),
+                        (card.center() + shift - anchor_s) / self.cam.zoom,
+                    );
                     card = card.translate(shift);
                     tether_to = card.center();
                 }
@@ -1117,7 +1118,7 @@ impl Viewer {
             // input pass; now that the card's rect is known at the new zoom,
             // shift the view so the card sits centered.
             if recenter.as_ref() == Some(&key) {
-                self.center += (card.center() - rect.center()) / self.zoom;
+                self.cam.center += (card.center() - rect.center()) / self.cam.zoom;
                 painter.ctx().request_repaint();
             }
             if !view.intersects(card) {
@@ -1263,7 +1264,7 @@ impl Viewer {
         let Some((key, since, anchor)) = self.terms.hover_since.clone() else {
             return;
         };
-        let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0 && !self.terms.is_expanded(&key);
+        let compact = (6.0 * self.cam.zoom).clamp(2.5, 16.0) < 5.0 && !self.terms.is_expanded(&key);
         if !compact {
             return;
         }
@@ -1352,10 +1353,10 @@ impl Viewer {
             .find(|a| a.session == t.0 && a.pane == t.1)
             .map(|a| self.card_anchor(a))
         {
-            self.center = self.world_pos(id.0 as usize);
+            self.cam.center = self.world_pos(id.0 as usize);
         }
         if zoom_in {
-            self.zoom = CARD_ZOOM;
+            self.cam.zoom = CARD_ZOOM;
         }
         self.terms.fly_to = Some(t);
     }

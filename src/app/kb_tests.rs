@@ -122,13 +122,13 @@ fn w_toggles_web_nodes() {
 fn hjkl_pan_and_sd_zoom_whatever_is_selected() {
     let mut h = harness();
     select(&mut h, "topics/grafér.md");
-    let x0 = h.state().center.x;
+    let x0 = h.state().cam.center.x;
     h.key_down(Key::H);
     h.run_steps(3);
     h.key_up(Key::H);
     h.step();
     assert!(
-        h.state().center.x < x0,
+        h.state().cam.center.x < x0,
         "h pans left even with a node selected"
     );
     assert_eq!(
@@ -137,17 +137,17 @@ fn hjkl_pan_and_sd_zoom_whatever_is_selected() {
         "and panning never moves the selection"
     );
 
-    let z0 = h.state().zoom;
+    let z0 = h.state().cam.zoom;
     h.key_down(Key::D);
     h.run_steps(3);
     h.key_up(Key::D);
     h.step();
-    assert!(h.state().zoom > z0, "d zooms in");
+    assert!(h.state().cam.zoom > z0, "d zooms in");
     h.key_down(Key::S);
     h.run_steps(6);
     h.key_up(Key::S);
     h.step();
-    assert!(h.state().zoom < z0, "s zooms out");
+    assert!(h.state().cam.zoom < z0, "s zooms out");
 
     press(&mut h, Key::P);
     assert_eq!(
@@ -170,20 +170,23 @@ fn hjkl_pan_and_sd_zoom_whatever_is_selected() {
 #[test]
 fn gg_refits_the_camera_and_zero_resets_only_the_zoom() {
     let mut h = harness();
-    h.state_mut().fitted = true;
-    h.state_mut().zoom = 9.0;
-    let center = h.state().center;
+    h.state_mut().cam.fitted = true;
+    h.state_mut().cam.zoom = 9.0;
+    let center = h.state().cam.center;
     press(&mut h, Key::Num0);
     assert!(
-        h.state().zoom < 9.0,
+        h.state().cam.zoom < 9.0,
         "0 pulls the zoom back to a whole view"
     );
-    assert_eq!(h.state().center, center, "…without moving the camera");
+    assert_eq!(h.state().cam.center, center, "…without moving the camera");
 
     press(&mut h, Key::G);
-    assert!(h.state().fitted, "one g is half a chord — nothing yet");
+    assert!(h.state().cam.fitted, "one g is half a chord — nothing yet");
     press(&mut h, Key::G);
-    assert!(!h.state().fitted, "gg refits the whole graph next frame");
+    assert!(
+        !h.state().cam.fitted,
+        "gg refits the whole graph next frame"
+    );
 }
 
 #[test]
@@ -285,12 +288,12 @@ fn corrupt_view_state_camera_is_clamped_on_restore() {
     let v = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
     let _ = std::fs::remove_dir_all(&d);
     assert!(
-        v.center.x.abs() <= 1e6 && v.center.y.abs() <= 1e6,
+        v.cam.center.x.abs() <= 1e6 && v.cam.center.y.abs() <= 1e6,
         "center clamped: was ({}, {})",
-        v.center.x,
-        v.center.y
+        v.cam.center.x,
+        v.cam.center.y
     );
-    assert_eq!(v.zoom, 50.0, "the sane part of the restore survives");
+    assert_eq!(v.cam.zoom, 50.0, "the sane part of the restore survives");
     let off = v.terms.parked["tg_x"][0].1;
     assert!(off.x.abs() <= 1e5, "card offsets clamped too: {}", off.x);
 }
@@ -316,12 +319,12 @@ fn global_keys_do_not_fire_while_a_text_field_has_focus() {
     );
     h.step();
     select(&mut h, "index.md");
-    h.state_mut().fitted = true;
+    h.state_mut().cam.fitted = true;
     h.step();
 
     press(&mut h, Key::Num0);
     assert!(
-        h.state().fitted,
+        h.state().cam.fitted,
         "'0' while typing must not re-fit the camera"
     );
     press(&mut h, Key::Slash);
@@ -331,7 +334,7 @@ fn global_keys_do_not_fire_while_a_text_field_has_focus() {
     );
     press(&mut h, Key::Z);
     assert!(
-        h.state().cam_anim.is_none(),
+        h.state().cam.anim.is_none(),
         "'z' while typing must not start a camera glide"
     );
     press(&mut h, Key::F);
@@ -444,8 +447,8 @@ fn arrows_walk_results_and_the_camera_follows_after_a_dwell() {
     assert!(h.state().selected.is_none(), "browsing selects nothing");
 
     // the glide starts only once the cursor has settled on a row
-    h.state_mut().cam_anim = None;
-    wait_for(&mut h, "the camera glide", |v| v.cam_anim.is_some());
+    h.state_mut().cam.anim = None;
+    wait_for(&mut h, "the camera glide", |v| v.cam.anim.is_some());
 }
 
 #[test]
@@ -812,15 +815,15 @@ fn tg_links_are_claimed_in_the_search_preview_too() {
 #[test]
 fn the_finder_recenters_on_a_card_without_zooming() {
     let mut h = harness();
-    h.state_mut().zoom = 0.4;
+    h.state_mut().cam.zoom = 0.4;
     let key = ("tg_claude".to_string(), "%3".to_string());
     h.state_mut().fly_to_card_at(key.clone(), false);
-    assert_eq!(h.state().zoom, 0.4, "the finder keeps your zoom");
+    assert_eq!(h.state().cam.zoom, 0.4, "the finder keeps your zoom");
     assert_eq!(h.state().terms.fly_to, Some(key.clone()), "but recenters");
 
     h.state_mut().fly_to_card(key);
     assert_eq!(
-        h.state().zoom,
+        h.state().cam.zoom,
         super::terminals::CARD_ZOOM,
         "double-click still flies in"
     );
@@ -1695,7 +1698,7 @@ fn tab_walks_the_cards_in_order_and_expands_them() {
         ]
     );
 
-    let zoom = h.state().zoom;
+    let zoom = h.state().cam.zoom;
     press(&mut h, Key::Tab);
     assert_eq!(
         h.state().terms.cursor.as_ref(),
@@ -1706,7 +1709,7 @@ fn tab_walks_the_cards_in_order_and_expands_them() {
         h.state().terms.is_expanded(&order[0]),
         "the card under the cursor is open"
     );
-    assert_eq!(h.state().zoom, zoom, "and the zoom is left alone");
+    assert_eq!(h.state().cam.zoom, zoom, "and the zoom is left alone");
     press(&mut h, Key::Tab);
     assert_eq!(h.state().terms.cursor.as_ref(), Some(&order[1]));
     h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::Tab);
@@ -1744,7 +1747,7 @@ fn the_finders_highlight_opens_the_node_on_the_canvas() {
         "the highlighted row is the highlighted node"
     );
     // zoomed far out, where it would otherwise be a dot
-    h.state_mut().zoom = 0.05;
+    h.state_mut().cam.zoom = 0.05;
     h.step();
     let rect = h
         .state()
@@ -1901,22 +1904,22 @@ fn shift_g_zooms_to_the_selections_neighbourhood() {
         }
         h.state_mut().sim.tick(16);
     }
-    h.state_mut().zoom = 0.05;
+    h.state_mut().cam.zoom = 0.05;
 
     // the vault root has every top-level entry around it
     select(&mut h, "");
     h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::G);
     h.step();
-    let wide = h.state().zoom;
+    let wide = h.state().cam.zoom;
     assert!(wide > 0.05, "G zooms in from a far-out view: {wide}");
-    assert!(h.state().cam_anim.is_some(), "and glides onto the node");
+    assert!(h.state().cam.anim.is_some(), "and glides onto the node");
 
     // a leaf with a couple of links sits tighter than the whole root
-    h.state_mut().zoom = 0.05;
+    h.state_mut().cam.zoom = 0.05;
     select(&mut h, "topics/grafér.md");
     h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::G);
     h.step();
-    let tight = h.state().zoom;
+    let tight = h.state().cam.zoom;
     assert!(
         tight > wide,
         "a small neighbourhood frames closer than a big one: {tight} vs {wide}"
@@ -1982,11 +1985,11 @@ fn a_launched_card_is_placed_inside_the_view() {
         viewer.terms.cursor = Some(key.clone());
         viewer.terms.place_pending = Some(key.clone());
         let anchor = viewer.g.by_path("index.md").expect("index exists");
-        viewer.zoom = 1.0;
-        viewer.center = viewer.world_pos(anchor.0 as usize);
+        viewer.cam.zoom = 1.0;
+        viewer.cam.center = viewer.world_pos(anchor.0 as usize);
         if away {
             // the camera is three screens away from where the card tethers
-            viewer.center.x += 3000.0;
+            viewer.cam.center.x += 3000.0;
         }
         let mut h = Harness::new_ui_state(
             |ui, v: &mut Viewer| {

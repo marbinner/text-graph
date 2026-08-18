@@ -7,6 +7,7 @@
 //! pins it and reheats the simulation; dragging empty space pans.
 
 mod actions;
+mod camera;
 mod diag;
 mod images;
 mod keymap;
@@ -449,10 +450,8 @@ struct Viewer {
     radius: Vec<f32>,
     /// Tree depth per node (0 = root; ghosts/web nodes are 0).
     depths: Vec<u8>,
-    /// World point currently at the viewport center.
-    center: Pos2,
-    /// Screen pixels per world unit.
-    zoom: f32,
+    /// The view: center/zoom, glide, rect compensation — see `camera.rs`.
+    cam: camera::Camera,
     hover: Option<NodeId>,
     /// (node, dwell start, screen anchor) — drives the full hover preview.
     hover_since: Option<(NodeId, Instant, Pos2)>,
@@ -461,9 +460,6 @@ struct Viewer {
     hover_body: Option<(NodeId, String)>,
     selected: Option<NodeId>,
     drag_node: Option<NodeId>,
-    fitted: bool,
-    /// Canvas rect of the previous frame — camera compensation on change.
-    last_canvas_rect: Option<Rect>,
     /// Active palette (dark/light) — swapped from the ⚙ settings window.
     theme: Theme,
     /// egui visuals need (re)applying (startup, theme toggle).
@@ -473,10 +469,6 @@ struct Viewer {
     /// User preferences (per user, not per vault) — see `config.rs`. The
     /// canvas reads it live, so every change shows on the next frame.
     cfg: Config,
-    /// In-flight camera glide: (start center, target node, start time).
-    /// The target is a NODE so a settling sim can't make the glide land
-    /// beside it. Manual pan/zoom input cancels it.
-    cam_anim: Option<(Pos2, NodeId, Instant)>,
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
@@ -654,7 +646,7 @@ impl Viewer {
         } = Self::derived(&g, cfg.node_scale);
         let (reload_tx, reload_rx) = std::sync::mpsc::channel();
         let vs = state::load(&root);
-        let cam = vs.camera;
+        let saved_cam = vs.camera;
         let show_web = !vs.hide_web;
         let theme = Theme::get(cfg.light);
         let agent_allowlist = cfg.agent_choices();
@@ -677,26 +669,29 @@ impl Viewer {
             sim,
             radius,
             depths,
-            // center is clamped like zoom: a huge-but-finite restored value
-            // (corrupt/hand-edited view file) overflows world_to_screen to
-            // ±inf — nothing paints, nothing hit-tests, and fitted=true
-            // suppresses the auto-fit that would recover
-            center: cam.map_or(Pos2::ZERO, |(x, y, _)| {
-                Pos2::new(x.clamp(-1e6, 1e6), y.clamp(-1e6, 1e6))
-            }),
-            zoom: cam.map_or(1.0, |(_, _, z)| z.clamp(0.02, 50.0)),
+            cam: camera::Camera {
+                // center is clamped like zoom: a huge-but-finite restored
+                // value (corrupt/hand-edited view file) overflows
+                // world_to_screen to ±inf — nothing paints, nothing
+                // hit-tests, and fitted=true suppresses the auto-fit that
+                // would recover
+                center: saved_cam.map_or(Pos2::ZERO, |(x, y, _)| {
+                    Pos2::new(x.clamp(-1e6, 1e6), y.clamp(-1e6, 1e6))
+                }),
+                zoom: saved_cam.map_or(1.0, |(_, _, z)| z.clamp(0.02, 50.0)),
+                // a restored camera must not be re-fit away
+                fitted: saved_cam.is_some(),
+                ..camera::Camera::new()
+            },
             hover: None,
             hover_since: None,
             hover_body: None,
             selected: None,
             drag_node: None,
-            fitted: cam.is_some(), // a restored camera must not be re-fit away
-            last_canvas_rect: None,
             theme,
             apply_visuals: true,
             settings: settings::SettingsUi::default(),
             cfg,
-            cam_anim: None,
             n_files,
             n_dirs,
             n_images,
@@ -801,11 +796,9 @@ impl Viewer {
         }
     }
 
-    /// Glide the camera to center on `id` — zoom stays exactly as it is,
-    /// and the quick movement (instead of a snap) shows where the jump
-    /// came from and where it lands.
+    /// Glide the camera to center on `id` — see `Camera::start_glide`.
     fn frame_node(&mut self, id: NodeId) {
-        self.cam_anim = Some((self.center, id, Instant::now()));
+        self.cam.start_glide(id);
     }
 
     /// Ctrl+Q is the way BACK: whatever has the keyboard gives it up, and
@@ -890,7 +883,7 @@ impl Viewer {
     fn frame_target(&self, i: usize, rect: Rect) -> Pos2 {
         let mut p = self.world_pos(i);
         if self.picker.open {
-            p.y += rect.height() * picker::frame_lift_frac(self.cfg.finder_y) / self.zoom;
+            p.y += rect.height() * picker::frame_lift_frac(self.cfg.finder_y) / self.cam.zoom;
         }
         p
     }
@@ -919,17 +912,9 @@ impl Viewer {
 
     fn fit(&mut self, rect: Rect) {
         if let Some((center, zoom)) = self.whole_graph_view(rect) {
-            self.center = center;
-            self.zoom = zoom;
+            self.cam.center = center;
+            self.cam.zoom = zoom;
         }
-    }
-
-    fn to_screen(&self, rect: Rect, w: Pos2) -> Pos2 {
-        rect.center() + (w - self.center) * self.zoom
-    }
-
-    fn to_world(&self, rect: Rect, s: Pos2) -> Pos2 {
-        self.center + (s - rect.center()) / self.zoom
     }
 
     /// Screen radius above which an Image node paints as a thumbnail box
@@ -961,7 +946,7 @@ impl Viewer {
     /// node the reader is looking at into a card too small to read would
     /// be a worse answer than the dot it replaced.
     fn preview_box(&self, id: NodeId, s: Pos2, opened: bool) -> Rect {
-        let mut ur = self.radius[id.0 as usize] * self.zoom;
+        let mut ur = self.radius[id.0 as usize] * self.cam.zoom;
         if opened {
             ur = ur.max(Self::OPENED_MIN_R);
         }
@@ -1016,7 +1001,7 @@ impl Viewer {
         match self.g.node(id).kind {
             NodeKind::Image if r >= Self::IMG_BOX_MIN_R => Some(self.image_box(id, s, r)),
             NodeKind::File | NodeKind::Asset
-                if (self.radius[id.0 as usize] * self.zoom >= Self::PREVIEW_MIN_R || open)
+                if (self.radius[id.0 as usize] * self.cam.zoom >= Self::PREVIEW_MIN_R || open)
                     && self.previewable(id) =>
             {
                 Some(self.preview_box(id, s, open))
@@ -1027,19 +1012,10 @@ impl Viewer {
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        // The world is anchored to the rect CENTER, so the side panel
-        // opening/closing (or resizing, or a window resize) would slide the
-        // whole scene sideways — the node just clicked escapes the cursor
-        // and the second click of a double-click misses. Shift the camera by
-        // the same amount so every world point keeps its screen position;
-        // only the visible clip changes.
-        if let Some(last) = self.last_canvas_rect
-            && last.center() != rect.center()
-        {
-            self.center += (rect.center() - last.center()) / self.zoom;
-        }
-        self.last_canvas_rect = Some(rect);
-        if let Some((from, id, t0)) = self.cam_anim {
+        // rect moved (panel toggled, window resized) → keep every world
+        // point at its screen position; the no-slide rule lives in camera.rs
+        self.cam.compensate(rect);
+        if let Some((from, id, t0)) = self.cam.anim {
             if (id.0 as usize) < self.g.nodes.len() {
                 // glide duration is a setting; 0 means jump
                 let t = if self.cfg.glide <= 0.0 {
@@ -1048,18 +1024,18 @@ impl Viewer {
                     (t0.elapsed().as_secs_f32() / self.cfg.glide).min(1.0)
                 };
                 let e = 1.0 - (1.0 - t) * (1.0 - t); // ease-out
-                self.center = from.lerp(self.frame_target(id.0 as usize, rect), e);
+                self.cam.center = from.lerp(self.frame_target(id.0 as usize, rect), e);
                 if t >= 1.0 {
-                    self.cam_anim = None;
+                    self.cam.anim = None;
                 }
                 ui.ctx().request_repaint();
             } else {
-                self.cam_anim = None; // graph swapped underneath
+                self.cam.anim = None; // graph swapped underneath
             }
         }
-        if !self.fitted {
+        if !self.cam.fitted {
             self.fit(rect);
-            self.fitted = true;
+            self.cam.fitted = true;
         }
 
         // ---- simulation ----
@@ -1115,7 +1091,7 @@ impl Viewer {
                 // the real session by dozens of columns. Cursor/focused cards
                 // render expanded at any zoom, so they're never compact.
                 let expanded = self.terms.is_expanded(&t);
-                let compact = (6.0 * self.zoom).clamp(2.5, 16.0) < 5.0 && !expanded;
+                let compact = (6.0 * self.cam.zoom).clamp(2.5, 16.0) < 5.0 && !expanded;
                 if on_handle
                     && ours
                     && !compact
@@ -1123,7 +1099,7 @@ impl Viewer {
                     && let Some(pos) = response.hover_pos()
                 {
                     // cell metrics must match what the card is rendered at
-                    let mut f = (6.0 * self.zoom).clamp(2.5, 16.0);
+                    let mut f = (6.0 * self.cam.zoom).clamp(2.5, 16.0);
                     if expanded {
                         f = f.max(terminals::EXPAND_FONT);
                     }
@@ -1160,12 +1136,12 @@ impl Viewer {
                         .find(|a| a.session == t.0 && a.pane == t.1)
                         .map(|a| {
                             let id = self.card_anchor(a);
-                            self.to_screen(rect, self.world_pos(id.0 as usize))
+                            self.cam.to_screen(rect, self.world_pos(id.0 as usize))
                         });
                     if let (Some(center), Some(anchor_s)) = (cur_center, anchor_s) {
                         self.terms
                             .offsets
-                            .insert(t.clone(), (center - anchor_s) / self.zoom);
+                            .insert(t.clone(), (center - anchor_s) / self.cam.zoom);
                     }
                     self.terms.drag_card = Some(t);
                 }
@@ -1195,17 +1171,17 @@ impl Viewer {
                 ui.ctx().request_repaint();
             } else if let Some(t) = self.terms.drag_card.clone() {
                 if let Some(off) = self.terms.offsets.get_mut(&t) {
-                    *off += response.drag_delta() / self.zoom;
+                    *off += response.drag_delta() / self.cam.zoom;
                 }
                 ui.ctx().request_repaint();
             } else if let (Some(id), Some(cur)) = (self.drag_node, response.interact_pointer_pos())
             {
-                let w = self.to_world(rect, cur);
+                let w = self.cam.to_world(rect, cur);
                 self.sim.pin(id.0, w.x, w.y);
                 ui.ctx().request_repaint();
             } else {
-                self.cam_anim = None; // manual pan wins over a glide
-                self.center -= response.drag_delta() / self.zoom;
+                self.cam.cancel_glide(); // manual pan wins over a glide
+                self.cam.center -= response.drag_delta() / self.cam.zoom;
             }
         }
         if response.drag_stopped() {
@@ -1229,10 +1205,10 @@ impl Viewer {
             && let Some(cursor) = response.hover_pos()
         {
             // keep the world point under the cursor fixed while zooming
-            self.cam_anim = None;
-            let anchor = self.to_world(rect, cursor);
-            self.zoom = (self.zoom * factor).clamp(0.02, 50.0);
-            self.center = anchor - (cursor - rect.center()) / self.zoom;
+            self.cam.cancel_glide();
+            let anchor = self.cam.to_world(rect, cursor);
+            self.cam.zoom = (self.cam.zoom * factor).clamp(0.02, 50.0);
+            self.cam.center = anchor - (cursor - rect.center()) / self.cam.zoom;
         }
 
         // ---- cull to viewport ----
@@ -1244,14 +1220,14 @@ impl Viewer {
             if !self.show_web && self.g.nodes[i].kind == NodeKind::Web {
                 continue;
             }
-            let s = self.to_screen(rect, self.world_pos(i));
+            let s = self.cam.to_screen(rect, self.world_pos(i));
             // images render as thumbnails, so their "radius" is the box
             // half-height with a much larger cap — hover targets, rings, and
             // label anchors all follow it. Their cull test must cover the
             // box extent (half-width ≤ 1.5r), or a picture straddling the
             // viewport edge pops in and out while panning.
             let r = if self.g.nodes[i].kind == NodeKind::Image {
-                let r = (self.radius[i] * 2.0 * self.zoom).clamp(1.5, 110.0);
+                let r = (self.radius[i] * 2.0 * self.cam.zoom).clamp(1.5, 110.0);
                 if !view.expand2(Vec2::new(r * 1.5, r)).contains(s) {
                     continue;
                 }
@@ -1260,7 +1236,7 @@ impl Viewer {
                 if !view.contains(s) {
                     continue;
                 }
-                (self.radius[i] * self.zoom).clamp(1.5, 16.0)
+                (self.radius[i] * self.cam.zoom).clamp(1.5, 16.0)
             };
             visible.push((NodeId(i as u32), s, r));
         }
@@ -1420,8 +1396,8 @@ impl Viewer {
         // contains edges (under everything)
         for (i, node) in self.g.nodes.iter().enumerate() {
             let Some(parent) = node.parent else { continue };
-            let sa = self.to_screen(rect, self.world_pos(i));
-            let sb = self.to_screen(rect, self.world_pos(parent.0 as usize));
+            let sa = self.cam.to_screen(rect, self.world_pos(i));
+            let sb = self.cam.to_screen(rect, self.world_pos(parent.0 as usize));
             // bbox test, not endpoint containment: a long edge crossing the
             // viewport must not vanish when both ends are off-screen
             if !view.intersects(Rect::from_two_pos(sa, sb)) {
@@ -1443,8 +1419,8 @@ impl Viewer {
             if l.kind == LinkKind::External && !self.show_web {
                 continue;
             }
-            let sa = self.to_screen(rect, self.world_pos(l.from.0 as usize));
-            let sb = self.to_screen(rect, self.world_pos(l.to.0 as usize));
+            let sa = self.cam.to_screen(rect, self.world_pos(l.from.0 as usize));
+            let sb = self.cam.to_screen(rect, self.world_pos(l.to.0 as usize));
             if !view.intersects(Rect::from_two_pos(sa, sb)) {
                 continue;
             }
@@ -1474,7 +1450,7 @@ impl Viewer {
             ));
             // arrowhead at the target end, pulled back to the node's rim so
             // the icon painted on top doesn't swallow it
-            let tr = (self.radius[l.to.0 as usize] * self.zoom).clamp(1.5, 16.0) + 4.0;
+            let tr = (self.radius[l.to.0 as usize] * self.cam.zoom).clamp(1.5, 16.0) + 4.0;
             let tangent = sb - ctrl;
             if (sb - sa).length() > tr + 14.0 && tangent.length() > 0.5 {
                 let tip = sb - tangent.normalized() * tr;
@@ -1551,7 +1527,7 @@ impl Viewer {
                     // preview card (the canvas sibling of the detail pane);
                     // presence fades so the disc↔card flip never pops.
                     // Binary assets stay discs at every zoom.
-                    let ur = self.radius[id.0 as usize] * self.zoom;
+                    let ur = self.radius[id.0 as usize] * self.cam.zoom;
                     let open_here = opened == Some(id);
                     let want = self.cfg.canvas_previews
                         && (ur >= Self::PREVIEW_MIN_R || open_here)

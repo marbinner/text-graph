@@ -69,10 +69,12 @@
   `self.theme.*`, while terminal-card INTERNALS keep the module consts —
   terminals are dark in either theme. New paint code must not reach for
   the bare consts unless it draws inside a card.
-- The camera is anchored to the canvas-rect CENTER, and `canvas()`
-  compensates `center` whenever the rect changes (panel open/close/resize)
-  — without that, the world slides out from under the cursor and
-  double-clicks miss. Don't reintroduce the slide.
+- The camera is `app/camera.rs`: center/zoom, the world⇄screen
+  transform, rect-change compensation, the frame glide. Its two
+  invariants — no-slide (world anchored to the canvas-rect CENTER,
+  compensated on rect change) and glides move only the CENTER (no snap,
+  no zoom floor; manual input cancels via `cancel_glide`, the greppable
+  rule) — are documented and unit-tested there.
 - Settings are declared ONCE, in `config.rs`: a field plus a `Spec` row
   (key, section, label, help, kind, get/set fn pointers). The file format,
   the ⚙ window's widgets, reset-to-default and the load-time clamp are all
@@ -143,8 +145,8 @@
   Only the bin's `app/` tree touches egui. `highlight` and `thumb` remain
   egui-free but are compiled only by the `gui` feature. The app layout:
   `mod.rs` = Viewer +
-  camera/canvas painting; `keymap.rs` = the keybinding table + key
-  dispatch; `picker.rs` = the finder (state,
+  canvas painting; `camera.rs` = the camera substruct; `keymap.rs` = the
+  keybinding table + key dispatch; `picker.rs` = the finder (state,
   keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
   lifecycle; `navigator.rs` = the side pane (the one previewer: subject
@@ -235,9 +237,6 @@
   shut. Deselect-on-empty-click applies only when no terminal was focused.
   Cards win pointer contention over nodes beneath them via last-frame
   `terms.rects`.
-- `frame_node` GLIDES (180ms ease-out toward the node, cancelled by any
-  manual camera input) and never touches zoom — don't reintroduce the
-  snap or the 0.9 zoom floor.
 - Card tethers fill a reserved shape slot among the edges (under node
   icons); the hovered node's label paints last, on a backdrop.
 - Agent launches (`agents::launch`) wrap the command as
