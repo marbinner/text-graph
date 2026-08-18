@@ -85,6 +85,12 @@ pub fn to_text(s: &ViewState) -> String {
     out
 }
 
+/// Parse a view file. The file is UNTRUSTED input (a shared vault can
+/// plant one): duplicate card/pin records are deduped here with hash
+/// sets, unknown line kinds are retained verbatim, and numeric ranges are
+/// clamped by the RESTORE paths in the app (camera and offsets alike) —
+/// a huge-but-finite coordinate would otherwise park state outside every
+/// possible view forever.
 pub fn from_text(text: &str) -> ViewState {
     let mut s = ViewState::default();
     // Borrow keys from `text`: the sets exist only while parsing, and avoid

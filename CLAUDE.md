@@ -198,26 +198,17 @@
   `vault::path_key`, while ghosts and web nodes use distinct NUL-prefixed
   namespaces. The identity string is opaque; never reconstruct an OS path from
   a display path or an identity key.
-- View state persists to `<vault>/.text-graph/view` (state.rs). The dot-dir
-  is hidden, so the walker and the reload watcher are blind to it — saves
-  can never cause reload loops; keep it that way. Card arrangements are
-  keyed by SESSION NAME and parked in `terms.parked` when a session is
-  absent (pane ids change across tmux restarts) — never hard-drop an
-  arrangement. Saves are debounced (3s heartbeat repaint keeps them running
-  once the sim settles) and the file is sorted for determinism. The file is
-  UNTRUSTED input: restores clamp (center/offsets like zoom), dedup
-  (card/pin lines), reject files over 1 MiB, parse duplicate records with hash
-  sets rather than quadratic scans, allowlist-validate the migrated default agent (it runs
-  through `sh -c` on one keypress — that check now lives in
-  `config::migrate`), and carry unknown line KINDS through
-  load→save verbatim (`ViewState::unknown`) — the first save lands ~3s
-  after open, so anything from_text drops, a newer version loses; for the
-  same reason saves use a private create-only temporary file and rename. Unix
-  mutations are relative to an `O_NOFOLLOW` directory descriptor, so a hostile
-  vault cannot win a check/use symlink race and redirect the write. Concurrent
-  viewers may race only at the final rename: the last complete snapshot wins.
-  Unpinning purges the session's
-  `parked_pins` surplus, or claim() re-pins it next frame.
+- View state: `state.rs`'s module doc is the contract (hidden dot-dir so
+  saves can never cause reload loops — keep it that way; tab-separated,
+  session name last; unknown kinds carried verbatim), `from_text` and
+  `save` carry the untrusted-input and write-path rules (dedup, 1 MiB
+  cap, create-only temp + rename, `O_NOFOLLOW` dir fd, last complete
+  snapshot wins). Cross-module: restores CLAMP in the app's restore
+  paths; card arrangements are keyed by SESSION NAME and parked in
+  `terms.parked` when absent — never hard-drop one (unpinning purges the
+  `parked_pins` surplus or `claim()` re-pins next frame); saves debounce
+  3s with a heartbeat repaint; the migrated default agent is
+  allowlist-checked in `config::migrate`.
 
 ## egui 0.36 gotchas (cost us compile time already)
 
