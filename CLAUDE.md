@@ -165,101 +165,19 @@
   flicker through its placeholder (reloads are constant when agents
   write). New GUI code goes into the matching child module, not into
   mod.rs.
-- Terminals: the viewer is a tmux **control-mode client** — never own a PTY,
-  never send size hints (`set_size`) or `resize-window` to sessions we
-  didn't create (it would reflow the user's real terminal view). The corner
-  resize grip exists only on `ours` (`@tg_owner=text-graph`) cards for exactly
-  this reason. The reader-to-UI event channel is bounded and
-  `SessionMirror::pump` has a fixed event budget; reaching the budget schedules
-  another frame rather than draining forever. A full queue backpressures the
-  reader instead of growing memory without bound. `TermCell.text` retains the
-  cell's complete contents, including combining characters; wide continuations
-  are empty cells and are skipped only while painting. Special keys go as tmux key NAMES
-  (tmux applies pane modes); text/Ctrl-chords go as `send-keys -H` hex
-  (quoting-proof); PASTES go through tmux's buffer machinery
-  (`keys::paste_cmds`: octal-escaped `set-buffer` + `paste-buffer -p`) so
-  the SERVER decides bracketing from the pane's live mode — never decide
-  it client-side, because capture replays rebuild the parser from screen
-  content and wipe every mode flag (that's also why TermGrid exposes no
-  modes, and why cursor VISIBILITY rides the post-replay cursor query as
-  `#{cursor_flag}`); Ctrl+C/X arrive from egui as Copy/Cut events, not Key
-  events. While a terminal is focused, keyboard events are DRAINED from
-  egui's input (not just read) so widget focus/shortcuts never fire. After
-  a capture replay the pane cursor MUST be restored via the queried
-  position — the replay parks it at the bottom row (regression-guarded by
-  `typed_input_round_trips` and the headless mirror pump test). Reply
-  blocks terminate only on the %end/%error matching their %begin's command
-  number — protocol-shaped screen text is data. Agent identity is sticky
-  for a pane's lifetime (tool calls flip pane_current_command to bash for
-  arbitrarily long) and pinned to the pane's root pid (pane ids restart at
-  %0 on a new tmux server); GRACE only governs remembering vanished panes.
-  The control-mode reader must consume BYTES (`read_until` + `parse_bytes`),
-  never `read_line` — panes emit raw >=0x80 bytes and an Err would kill the
-  mirror; `%output` payloads stay bytes until the vt100 parser receives them.
-  tmux octal-escapes non-printables in FORMAT output (`-F` with a 0x1f
-  separator comes back as literal "\037" text; tab passes raw) — any scan
-  format change must be verified against a real server, e.g. with
-  `cargo run --example discovery_probe <vault>`. Cards tether via
-  `card_anchor`: the session's `@tg_anchor` tmux user option (a
-  vault-relative path — edit sessions pin to their FILE node; the binding
-  lives in tmux so it survives viewer restarts) when it resolves, else the
-  nearest dir at the pane's cwd. Discovery owns a stop channel and join handle;
-  destroying a viewer must stop and join its polling thread. Failed mirrors
-  back off before reattach, including failures reported asynchronously by an
-  `Exit` event.
-- Card interaction contract: Tab / Shift+Tab step the terminal CURSOR
-  through `terms.cards_in_order()` (session, then pane NUMBER — `%10`
-  sorts before `%2` as a string, and discovery order isn't sorted),
-  centering without touching zoom; the cursor is what expands the card,
-  and Enter enters it. Tab is consumed (`input_mut::consume_key`) so
-  egui's focus navigation can't eat the next one — but never while the
-  overlay is open, where Tab swaps its source, and Shift+Tab must be
-  consumed FIRST because a bare-modifier match isn't exact. Consuming is
-  NOT enough on its own: egui picks its Tab focus target in
-  `Memory::begin_pass`, before any of our code runs, so
-  `release_tab_focus` surrenders whatever took focus at the END of the
-  frame — otherwise the corner badges hold the keyboard and the next Tab
-  goes to egui's navigation instead of the next card. Anything the
-  finder highlights is drawn OPENED (`terms.best` for cards,
-  `highlighted_node()` for the rest, with an `OPENED_MIN_R` floor so it
-  is readable at any zoom); `node_box` uses the same rule, or rings and
-  clicks would follow a shape the reader can't see. Also: click = focus
-  (keyboard → pane, graph keybinds suspend), Ctrl+click = toggle pin (📌 expanded at any zoom, several at
-  once, never touches focus; persisted and parked/claimed by session like
-  arrangements), drag = arrange (world-space offset from anchor in
-  `terms.offsets`; offsets reference the card CENTER, so expansion grows
-  symmetrically around it), Ctrl+Q or click-away = release, dwell on a
-  COMPACT card = full-screen peek popup (same 350ms dwell as node
-  previews; expanded cards never peek). Paint order IS stacking order:
-  plain → pinned → cursor → focused last, and hit-testing follows
-  (last rect wins), so the visible top card is the clickable one.
-  tg_edit panes run under `env COLORFGBG='15;0'` — clientless tmux
-  answers no background query and vim would guess light. A click-away onto
-  a node also selects it in the same gesture (release must never cost a
-  second click), but a release-click on empty space ONLY releases — it
-  must not deselect, or leaving a terminal would slam the navigator pane
-  shut. Deselect-on-empty-click applies only when no terminal was focused.
-  Cards win pointer contention over nodes beneath them via last-frame
-  `terms.rects`.
-- Card tethers fill a reserved shape slot among the edges (under node
-  icons); the hovered node's label paints last, on a backdrop.
-- Agent launches (`agents::launch`) wrap the command as
-  `PATH='<merged>' exec <agent>`, where merged = server global PATH +
-  client PATH + well-known user bin dirs that exist on disk (the rescue
-  for a FRESH server started by an IDE-launched viewer — there is no
-  healthy PATH to borrow then). Without this the pane dies unfindable in
-  ~25ms and the session vanishes before discovery's scan (`-e PATH=` does
-  NOT reach the initial pane — tested). A 2.5s watchdog flashes when a
-  launched session is already gone. Launched sessions auto-focus via
-  `terms.focus_pending` (deadline-guarded) when discovery first shows
-  them, and land IN VIEW: `terms.place_pending` carries the new card into
-  `paint_terminals` (the only place its rect at this zoom is known), where
-  `offscreen_shift` centers it on the canvas unless it is already visible.
-  A launched card takes the keyboard, so one parked off the edge — its
-  anchor can be anywhere in the graph — is a keyboard trap. The CARD
-  moves, never the camera (the view is the user's), and the move is
-  written as an ordinary `offsets` entry, so it drags, persists and parks
-  like any arrangement instead of being re-decided every frame.
+- Terminals: the protocol contracts are documented where they live —
+  `tmux.rs` (control-mode client, never own a PTY, bounded event queue,
+  bytes-not-lines reader, %begin/%end reply correlation), `mirror.rs`
+  (capture replay + cursor restore, pump budget, the TermGrid facade —
+  no mode flags, cursor visibility rides `#{cursor_flag}`), `keys.rs`
+  (hex/names/buffer channels; the SERVER decides paste bracketing),
+  `agents.rs` (discovery, sticky pid-pinned identity, GRACE, the
+  PATH-merged `exec` launch + watchdog) — and the card interaction
+  contract at the top of `app/terminals.rs` (cursor/gestures, paint
+  order = stacking order, the foreign-session resize ban, launched-card
+  placement). Verify any scan-format change against a real server
+  (`cargo run --example discovery_probe <vault>` — tmux octal-escapes
+  `-F` output; tab passes raw).
 - Keybinds are ROWS in `app/keymap.rs`'s `BINDINGS` table — chords,
   guard, press kind, ⚙ doc row, precondition, action — dispatched
   first-match in table order, with `widget_free` and key-repeat applied

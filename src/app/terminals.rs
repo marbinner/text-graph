@@ -2,6 +2,39 @@
 //! compact summaries, the hover peek popup), keyboard forwarding, gestures
 //! (fly-to, native resize), and session lifecycle (launch / kill /
 //! external attach).
+//!
+//! The interaction contract, in one place (details on the named items):
+//!
+//! - Tab / Shift+Tab step the CURSOR through [`Terminals::cards_in_order`]
+//!   (stable session + pane-number order), centering without touching
+//!   zoom; the cursor is what expands a card, and Enter enters it. The
+//!   dispatch side — Tab consumption, end-of-frame focus surrender —
+//!   lives in `keymap.rs` and `Viewer::release_tab_focus`.
+//! - click = focus (keyboard → pane, graph keybinds suspend); Ctrl+click
+//!   = toggle pin (expanded at any zoom, several at once, never touches
+//!   focus; persisted, parked/claimed by session like arrangements);
+//!   drag = arrange (world-space offset from the anchor in `offsets`,
+//!   referencing the card CENTER so expansion grows symmetrically);
+//!   Ctrl+Q or click-away = release; dwell on a COMPACT card = the
+//!   full-screen peek (expanded cards never peek). The click-away rules
+//!   (select in the same gesture; a release-click on empty space never
+//!   deselects) sit on `hover_and_gestures` in `canvas.rs`.
+//! - Paint order IS stacking order — plain → pinned → cursor → focused
+//!   last — and hit-testing follows it (last rect wins, via last-frame
+//!   `rects`), so the visible top card is the clickable one. Anything
+//!   the finder highlights is drawn OPENED (`best`), with the same
+//!   readable floor `node_box` applies, or rings and clicks would follow
+//!   a shape the reader can't see.
+//! - Never `resize-window` or size-hint a session the graph didn't
+//!   create (`@tg_owner`): it would reflow the user's real terminal
+//!   view. The corner grip exists only on `ours` cards for this reason.
+//! - A launched card auto-focuses (deadline-guarded `focus_pending`) and
+//!   must land IN VIEW: `place_pending` → `offscreen_shift` moves the
+//!   CARD, never the camera (the view is the user's), written as an
+//!   ordinary `offsets` entry so it drags, persists and parks like any
+//!   arrangement. tg_edit panes run under `COLORFGBG='15;0'` —
+//!   clientless tmux answers no background query and vim would guess
+//!   light.
 
 use super::actions::{detached, new_terminal_window};
 use super::*;
