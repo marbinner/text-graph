@@ -443,13 +443,25 @@ src/
   highlight.rs [gui feature] syntect source colouring as plain RGB spans
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
               scanning (streamed from disk, never indexed), ranked rows
-  app/        egui shell: transform, input, painting, reload worker,
-              terminal cards + focus; navigator.rs = the side pane (THE
-              previewer: header, bodies, connections strip), picker.rs =
-              the list overlay and its sources (find / browse / recent),
-              images.rs = thumbnail textures, previews.rs =
-              canvas text previews + hover popup, diag.rs = health badge,
-              settings.rs = the ⚙ window + the key list
+  app/        egui shell, split by concern:
+              mod.rs = the Viewer struct, theme, shared node geometry,
+              side panel; canvas.rs = the frame as a pipeline of named
+              stages (paint order = stacking order); camera.rs = the
+              world⇄screen transform, rect compensation, glide;
+              keymap.rs = the keybinding table + dispatcher (guards and
+              key-repeat rules applied centrally); picker.rs = the list
+              overlay and its sources (find / browse / recent) over lib
+              search.rs; navigator.rs = the side pane (THE previewer:
+              header, bodies, connections strip); terminals.rs = card
+              state + sync/paint/forwarding/gestures/lifecycle;
+              actions.rs = right-click menu, create dialog, spawning;
+              reload.rs = watcher/scan-worker substruct + apply +
+              persistence; images.rs = thumbnail textures, previews.rs =
+              canvas text previews + hover popup, diag.rs = health
+              badge, settings.rs = the ⚙ window + the key list;
+              kb_tests/ = the headless state-machine tests, by topic
+scripts/
+  check.sh    the full local gate chain (mirrors CI), exit-code gated
 assets/
   icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
   gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs

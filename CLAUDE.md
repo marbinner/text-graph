@@ -18,8 +18,12 @@
   when it MATCHES error lines, which once let a broken commit through.
 - `cargo fmt` before committing — CI gates on `cargo fmt -- --check`.
 - `cargo run --release -- <vault>` opens the GUI; `-- stats <vault>` is headless.
-- GUI smoke test without interaction: `timeout 6 cargo run --release -- fixtures/vault`
-  → exit 124 means it launched and ran fine.
+- GUI smoke test without interaction: COPY `fixtures/vault` to a scratch
+  dir first (a running viewer writes `.text-graph/` into its vault ~3s
+  in — never smoke the fixture itself) and set `XDG_CONFIG_HOME` to a
+  scratch dir (so the run can't touch the real user config), then
+  `timeout 6 cargo run --release -- <copy>` → exit 124 means it launched
+  and ran fine.
 - tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
   (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
   tmux is absent. Never point tests at the user's default tmux server.

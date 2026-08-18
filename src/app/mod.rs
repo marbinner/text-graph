@@ -1,10 +1,13 @@
-//! The egui shell: viewport transform, input, painting. Geometry comes from
-//! `sim` (force-directed, seeded by the pure radial layout); this module owns
-//! presentation and interaction only.
+//! The egui shell. Geometry comes from `sim` (force-directed, seeded by
+//! the pure radial layout); the `app` tree owns presentation and
+//! interaction only, split by concern into the child modules (see
+//! CLAUDE.md's layout map): `canvas` paints the frame, `camera` owns the
+//! one world⇄screen transform every input handler and paint call goes
+//! through, `keymap` dispatches the keys.
 //!
-//! One world→screen transform (`to_screen`/`to_world`) — every input handler
-//! and paint call goes through it. Zoom is toward the cursor. Dragging a node
-//! pins it and reheats the simulation; dragging empty space pans.
+//! This file holds what the children share: the `Viewer` struct and its
+//! construction, the theme/palette, node geometry (`node_box` and
+//! friends), icon plumbing, the side panel, and the eframe `App` impl.
 
 mod actions;
 mod camera;

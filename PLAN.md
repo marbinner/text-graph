@@ -164,11 +164,11 @@ add it if the CLI grows.
 
 ## Repo layout
 
-README's *Project layout* section is the maintained map of `src/`
-(fifteen modules now — the original five-module sketch lived here until
-it drifted hopelessly). The invariant that outlasts any listing: every
-lib module stays egui-free and headless-testable; only the bin's `app/`
-tree touches egui.
+README's *Project layout* section is the maintained map of `src/` (the
+original five-module sketch lived here until it drifted hopelessly).
+The invariant that outlasts any listing: every lib module stays
+egui-free and headless-testable; only the bin's `app/` tree touches
+egui.
 
 **Fixture vault is the first commit of milestone A.** It covers: every wikilink variant,
 a `[[link]]` inside a code fence (must not edge), unresolved targets, CRLF/BOM/unicode
@@ -279,7 +279,11 @@ Audit backlog (external audit, 2026-08):
   Link.offset preserved) — JSON/headless output still deferred to Phase 2.
 - app decomposition ✓ done: app/{mod,terminals,navigator,actions,reload,diag}.rs,
   terminal state grouped in terminals::Terminals, the finder in app/picker.rs
-  over lib search.rs. mod.rs ~2,000 lines (canvas + keys).
+  over lib search.rs. Deepened 2026-08-18: canvas.rs (the frame as named
+  stages), camera.rs, keymap.rs (declarative binding table with central
+  guards), Derived/Reload/Persist/Menu substructs, kb_tests/ by topic;
+  mod.rs ~970 lines, invariants moved from CLAUDE.md prose into module
+  docs and tests (CLAUDE.md 434 → ~210 lines).
 - Perf budgets against the stress vault (scan/build/settle/reload at 0.5k/2k/10k).
 - License + release packaging (user decision on license first).
 

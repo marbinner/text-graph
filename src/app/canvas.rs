@@ -418,7 +418,7 @@ impl Viewer {
         }
         if response.secondary_clicked() {
             // right-click on a card targets its anchor dir; on a node, that
-            // node; on empty space, the vault root (ctx_node = None)
+            // node; on empty space, the vault root (menu.node = None)
             self.menu.card = over_card.clone();
             self.menu.node = if let Some(t) = over_card {
                 self.terms

@@ -7,7 +7,7 @@
 //! structure and calls [`resolve`] to turn wikilink strings into typed edges
 //! → [`stats`] reports on the result. For the viewer, [`layout`] computes the
 //! deterministic radial seed and [`sim`] relaxes it force-directed; the egui
-//! shell lives in the binary (`src/app.rs`), keeping this library headless.
+//! shell lives in the binary (`src/app/`), keeping this library headless.
 
 pub mod agents;
 pub mod config;
