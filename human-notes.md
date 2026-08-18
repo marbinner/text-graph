@@ -34,16 +34,16 @@
 - make it so that the mouse cursor only highlights things if it was moved, if the user is doing other thigns to moev the camera around or etc then the mouse should not highlight stuff that it's pointing at. 
 - when a folder node is higlighted, the names of all the nodes in that folder should be visible by default so that we can see which one we want to visit potentially.
 - when a text file in a folder is selected, we still want to highlight and see the names of siblings that are in the same folder by default.
-- scan the repo for ways to make it more efficient
 
 # todo next
 
 # in progress
-- when opening a new terminal aor agent pane etc, it should open inside the current camera view so that we can see it.
-
+- make it so that when we preview markdown files, we see rendred markdown that reads nicely. How do you think we can best do this so that it looks pretty, works with obsidian markdown and is efficient?
 
 
 # done
+- scan the repo for ways to make it more efficient
+- when opening a new terminal aor agent pane etc, it should open inside the current camera view so that we can see it.
 - ctrl+q should always deselect/unfocus everything. So when I'm in an active terminal for example it should deselect it completely so that i can for example press f to start searching.
 - shift+g shoudl zoom into the currently selected node. The zoom shoudl be appropriate to show the local neighbourhood of that node.
 
