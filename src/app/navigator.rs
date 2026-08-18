@@ -75,12 +75,13 @@ fn callouts(theme: &Theme) -> egui_commonmark::AlertBundle {
     )
 }
 
-/// A preview body scrolls in BOTH directions with its layout width pinned
-/// to the pane. Prose still wraps where the pane ends, while a wide
-/// markdown table or an unwrappable code line scrolls inside the pane
-/// instead of pushing it out over the canvas: egui stores a panel's
-/// CONTENT-driven rect, so "too wide to fit" used to mean "wider pane",
-/// ratcheting further open with every note you walked onto.
+/// A preview body scrolls vertically with its layout width pinned to
+/// the pane. Prose wraps where the pane ends, and anything wider (a
+/// markdown table gets its own horizontal scroll region in
+/// `render_markdown`) is clipped at the pane instead of pushing it out
+/// over the canvas: egui stores a panel's CONTENT-driven rect, so "too
+/// wide to fit" used to mean "wider pane", ratcheting further open with
+/// every note you walked onto.
 pub(super) fn preview_scroll<R>(
     ui: &mut egui::Ui,
     salt: &str,
@@ -103,7 +104,7 @@ pub(super) fn preview_scroll<R>(
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(
                 egui::Rect::from_min_size(full.min, egui::vec2(w, full.height())),
             ));
-            child.set_clip_rect(full.intersect(ui.clip_rect()));
+            child.set_clip_rect(pane_clip(full, ui.clip_rect()));
             let r = add(&mut child);
             // what the body ACTUALLY laid out at — the wrap-width
             // regression test watches this
@@ -116,6 +117,20 @@ pub(super) fn preview_scroll<R>(
             r
         })
         .inner
+}
+
+/// The contained child's clip: X pinned to the pane (overflow must not
+/// paint over the canvas), Y left to the scroll viewport's own clip.
+/// `full` is the scroll area's inner max_rect, and egui sizes that to
+/// the VIEWPORT, origin shifted by the scroll offset — its bottom sits
+/// at (viewport bottom − offset), so intersecting Y froze the paint at
+/// whatever was visible before the first scroll: scrolling down revealed
+/// blank pane instead of the rest of the note.
+fn pane_clip(full: egui::Rect, viewport: egui::Rect) -> egui::Rect {
+    egui::Rect::from_x_y_ranges(
+        full.min.x.max(viewport.min.x)..=full.max.x.min(viewport.max.x),
+        viewport.y_range(),
+    )
 }
 
 /// One line, ellipsized at `w` — every NAME in the pane's columns goes
@@ -800,5 +815,32 @@ impl Viewer {
         }
         self.nav_scroll = false;
         jump
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{egui, pane_clip};
+
+    /// Scrolled down, the inner max_rect's origin has moved up by the
+    /// offset while its height stays the viewport's — the old
+    /// full∩viewport clip ended (offset) short of the viewport bottom,
+    /// so everything below the first screenful painted as blank pane.
+    #[test]
+    fn the_scrolled_pane_clip_keeps_the_viewport_bottom() {
+        let viewport =
+            egui::Rect::from_min_max(egui::Pos2::new(100.0, 50.0), egui::Pos2::new(500.0, 950.0));
+        let full = egui::Rect::from_min_max(
+            egui::Pos2::new(100.0, -350.0),
+            egui::Pos2::new(480.0, 550.0),
+        );
+        let clip = pane_clip(full, viewport);
+        assert_eq!(
+            clip.max.y, viewport.max.y,
+            "content below the first screenful must paint"
+        );
+        assert_eq!(clip.min.y, viewport.min.y);
+        assert_eq!(clip.min.x, 100.0);
+        assert_eq!(clip.max.x, 480.0, "the pane edge still clips X");
     }
 }
