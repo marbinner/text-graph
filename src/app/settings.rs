@@ -527,6 +527,15 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     ),
 ];
 
+/// Is any key-list row labelled exactly `label`? The dispatch table
+/// (`keymap::BINDINGS`) cites its documenting row, and a test holds the
+/// two lists together.
+#[cfg(test)]
+pub(super) fn key_list_has(label: &str) -> bool {
+    KEYS.iter()
+        .any(|(_, rows)| rows.iter().any(|(keys, _)| *keys == label))
+}
+
 fn keys_pane(ui: &mut egui::Ui) {
     for (group, rows) in KEYS {
         ui.label(RichText::new(*group).strong());

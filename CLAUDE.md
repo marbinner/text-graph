@@ -143,7 +143,8 @@
   Only the bin's `app/` tree touches egui. `highlight` and `thumb` remain
   egui-free but are compiled only by the `gui` feature. The app layout:
   `mod.rs` = Viewer +
-  camera/canvas painting + key dispatch; `picker.rs` = the finder (state,
+  camera/canvas painting; `keymap.rs` = the keybinding table + key
+  dispatch; `picker.rs` = the finder (state,
   keys, scan worker, preview) over lib `search.rs`; `terminals.rs` = the
   `Terminals` substruct (all card state) + sync/paint/forwarding/gestures/
   lifecycle; `navigator.rs` = the side pane (the one previewer: subject
@@ -256,19 +257,14 @@
   moves, never the camera (the view is the user's), and the move is
   written as an ordinary `offsets` entry, so it drags, persists and parks
   like any arrangement instead of being re-decided every frame.
-- Launch-style keybinds (e/t/a — and l's and Enter's editor open) must
-  exclude key REPEAT (`pressed_fresh`): a held key would otherwise spawn
-  a session/editor per repeat tick. Anything that ultimately spawns a
-  process belongs in this list.
-- EVERY graph-action keybind branch in handle_keys must check
-  `widget_free` — egui widgets read key events without consuming them, so
-  an unguarded branch fires while the user types into a text field
-  (regression: '0' in the find prompt re-fit the camera). Esc is special:
-  egui surrenders widget focus at frame START on Escape, so
-  guard-by-focus can't see the prompt — a transient text input must be
-  its OWN first stage of the Esc dismiss chain (the search prompt is,
-  via the picker branch, which is also the one deliberate exception to
-  the guard: its Enter/Esc/arrows act while its own field is focused).
+- Keybinds are ROWS in `app/keymap.rs`'s `BINDINGS` table — chords,
+  guard, press kind, ⚙ doc row, precondition, action — dispatched
+  first-match in table order, with `widget_free` and key-repeat applied
+  centrally. Never read a graph-action key ad hoc: add a row, mark
+  anything that ultimately spawns a process `Press::Fresh`, and cite the
+  ⚙ key-list row that documents it (tested). The module docs carry the
+  whys (Esc's guard exemption, Tab's consumption, what deliberately
+  isn't a row).
 - The overlay is the ONE list surface, and navigation is centered on it.
   It has SOURCES, never siblings: `f`/`/`/`Ctrl+F` = find (fuzzy over the
   whole vault), `b` = browse (one folder's entries, tree order, typing
@@ -388,7 +384,7 @@
   to choose a node is exactly what the ranger was. `]`/`[` walk
   `conn_cursor` over the connections strip —
   `navigator::connections()` is the single source of its entry order
-  (children, outs, backs); Enter/l follow, Esc dismisses it FIRST, tree
+  (children, outs, backs); Enter follows, Esc dismisses it FIRST, tree
   moves and reloads clear it (stale indexes point into the old graph).
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
