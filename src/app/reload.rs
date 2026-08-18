@@ -36,6 +36,32 @@ pub(super) struct Reload {
     pub(super) error: Option<String>,
 }
 
+/// View-state persistence bookkeeping: what was last written, the save
+/// debounce clock, the write-failure warning latch, and the unknown line
+/// kinds carried through load→save verbatim (forward compatibility).
+/// Every field is private to this module — the save path is the only
+/// code that may touch them.
+pub(super) struct Persist {
+    /// View state as last written to `.text-graph/view` (skip no-op saves).
+    saved: Option<state::ViewState>,
+    /// Line kinds the loaded view file had that this version doesn't know —
+    /// written back verbatim on every save.
+    unknown: Vec<String>,
+    last_save: Instant,
+    warned: bool,
+}
+
+impl Persist {
+    pub(super) fn new(unknown: Vec<String>) -> Self {
+        Persist {
+            saved: None,
+            unknown,
+            last_save: Instant::now(),
+            warned: false,
+        }
+    }
+}
+
 impl Reload {
     pub(super) fn new() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -295,27 +321,27 @@ impl Viewer {
             // these two are migration-only fields (see state.rs)
             light: None,
             default_agent: None,
-            unknown: self.view_unknown.clone(),
+            unknown: self.persist.unknown.clone(),
         }
     }
 
     /// Debounced view-state save; `force` (exit) skips the debounce. Errors
     /// warn once and go quiet (read-only vaults stay usable).
     pub(super) fn persist_state(&mut self, force: bool) {
-        if !force && self.last_save.elapsed() < Duration::from_secs(3) {
+        if !force && self.persist.last_save.elapsed() < Duration::from_secs(3) {
             return;
         }
         let s = self.snapshot_state();
-        if self.saved_state.as_ref() == Some(&s) {
+        if self.persist.saved.as_ref() == Some(&s) {
             return;
         }
-        self.last_save = Instant::now();
+        self.persist.last_save = Instant::now();
         match state::save(&self.root, &s) {
-            Ok(()) => self.saved_state = Some(s),
+            Ok(()) => self.persist.saved = Some(s),
             Err(e) => {
-                if !self.save_warned {
+                if !self.persist.warned {
                     eprintln!("couldn't save view state: {e}");
-                    self.save_warned = true;
+                    self.persist.warned = true;
                 }
             }
         }

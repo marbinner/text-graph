@@ -377,14 +377,9 @@ struct Viewer {
     thumbs: images::Thumbs,
     /// Excerpt cache for zoomed-in File previews.
     previews: previews::Previews,
-    // ---- view-state persistence ----
-    /// View state as last written to `.text-graph/view` (skip no-op saves).
-    saved_state: Option<state::ViewState>,
-    /// Line kinds the loaded view file had that this version doesn't know —
-    /// written back verbatim on every save (forward compatibility).
-    view_unknown: Vec<String>,
-    last_save: Instant,
-    save_warned: bool,
+    /// View-state persistence bookkeeping — private to `reload.rs`, where
+    /// the one save path lives.
+    persist: reload::Persist,
     // ---- tree navigation ----
     /// First `g` of a `gg` chord, with its press time.
     pending_g: Option<Instant>,
@@ -536,10 +531,7 @@ impl Viewer {
             terms: terminals::Terminals::new(restore_offsets, restore_pins, agent_allowlist),
             thumbs: images::Thumbs::new(),
             previews: previews::Previews::default(),
-            saved_state: None,
-            view_unknown: vs.unknown,
-            last_save: Instant::now(),
-            save_warned: false,
+            persist: reload::Persist::new(vs.unknown),
             pending_g: None,
             nav_scroll: false,
             conn_cursor: None,
