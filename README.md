@@ -210,6 +210,9 @@ Note previews render **Obsidian-flavored**: callouts (`> [!warning]`, any
 case, title and fold marker included) get their own colour and icon,
 `==highlights==` read as emphasis, `%%comments%%` stay hidden, `#tags`
 render as chips, and trailing `^block-ids` don't clutter the text.
+Inline `$\delta = 2$` and display `$$…$$` math render as Unicode text —
+greek, operators, scripts, simple fractions; no TeX engine, so anything
+unrecognized stays verbatim rather than vanishing.
 `[[wikilinks]]` are real links that jump to their node (ghosts included),
 `![[image embeds]]` and relative image paths render inline, relative
 markdown links to vault files jump too, footnote-style citations

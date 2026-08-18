@@ -194,10 +194,29 @@ pub(super) fn reading_frame<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) 
     .inner
 }
 
+/// Math spans (`$…$` / `$$…$$`), drawn as Unicode-substituted text —
+/// `mathtext` carries the conversion contract (best-effort by design,
+/// unknown TeX stays verbatim). Without a math renderer the parser
+/// swallows the span entirely, so a note's `$\delta = 2$` would simply
+/// vanish from the reading view. Inline math flows italic in the
+/// reading face; display math gets its own centered line.
+const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
+    let text = text_graph::mathtext::to_unicode(tex);
+    if inline {
+        ui.label(egui::RichText::new(text).italics());
+    } else {
+        ui.add_space(4.0);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(text).italics().size(17.0));
+        });
+        ui.add_space(4.0);
+    }
+};
+
 /// The one CommonMark viewer configuration, shared by the pane and the
 /// hover popup so the two renderings can never drift: vault-checked
-/// images only, Obsidian callouts as themed alerts, and fenced code in
-/// the same syntect themes as the source view.
+/// images only, Obsidian callouts as themed alerts, fenced code in the
+/// same syntect themes as the source view, and math as Unicode text.
 pub(super) fn markdown_viewer(theme: &Theme) -> CommonMarkViewer<'static> {
     CommonMarkViewer::new()
         // mdview emits every allowed image as an explicit, vault-checked
@@ -207,6 +226,7 @@ pub(super) fn markdown_viewer(theme: &Theme) -> CommonMarkViewer<'static> {
         .alerts(callouts(theme))
         .syntax_theme_dark("base16-ocean.dark")
         .syntax_theme_light("InspiredGitHub")
+        .render_math_fn(Some(RENDER_MATH))
 }
 
 /// The renderer re-parses the body every frame (immediate mode), so what

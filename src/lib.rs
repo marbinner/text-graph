@@ -18,6 +18,7 @@ pub mod graph;
 pub mod highlight;
 pub mod keys;
 pub mod layout;
+pub mod mathtext;
 pub mod mdview;
 pub mod mirror;
 pub mod resolve;
