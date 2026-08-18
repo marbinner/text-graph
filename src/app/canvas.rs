@@ -941,7 +941,7 @@ impl Viewer {
                     }
                 }
                 None => format!(
-                    "{} files · {} dirs{}{}{} · {} links{}   |   / find anything · hjkl move · d/u zoom · f find here · z center · w web · 0 reset  |  on selection: e edit · t terminal · a agent",
+                    "{} files · {} dirs{}{}{} · {} links{}   |   f find · b browse · hjkl move · s/d zoom · z center · w web · 0 reset  |  on selection: e edit · t terminal · a agent",
                     self.n_files,
                     self.n_dirs,
                     if self.n_images > 0 {
