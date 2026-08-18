@@ -76,52 +76,20 @@
   compensated on rect change) and glides move only the CENTER (no snap,
   no zoom floor; manual input cancels via `cancel_glide`, the greppable
   rule) — are documented and unit-tested there.
-- Settings are declared ONCE, in `config.rs`: a field plus a `Spec` row
-  (key, section, label, help, kind, get/set fn pointers). The file format,
-  the ⚙ window's widgets, reset-to-default and the load-time clamp are all
-  derived from that table — adding a setting must never mean editing a
-  second list, and `Spec::apply` is the only way a value is written, so the
-  UI and a hand-edited file are validated identically (`default_agent`
-  reaches `sh -c`; it is allowlist-checked, and re-checked at USE, because
-  editing `extra_agents` can strip the choice out from under it). The
-  accessor table is fn pointers, so a copy-pasted row would silently read
-  one field and write another — `every_spec_reads_and_writes_its_own_field`
-  is what catches that. The file holds what the user PICKED, not what
-  exists: `to_text` skips settings still at their default, because writing
-  every key froze this build's defaults into it and no later version could
-  improve one for anyone who had opened the app once. PER-USER (`~/.config/text-graph/config`, XDG-aware)
-  vs per-vault is the dividing line: preferences follow the person, camera/
-  cards/pins/web-toggle stay in `state.rs`. Saves resolve symlinks (config
-  files get linked into dotfiles repos) but do NOT refuse them the way the
-  view file does — different trust level, different rule. `state.rs` still
-  PARSES the old per-vault `light`/`agent` lines and never writes them;
-  `light` is `Option<bool>` because absent ≠ dark, and `load_or_migrate`
-  writes the config only when it actually carried something over, or the
-  first vault opened would lock every other vault's migration out.
-  A config read error is NOT a missing config: propagate/report it and never
-  migrate or save defaults over unreadable user data.
-  `save_config` no-ops under `cfg!(test)`: headless tests must never write
-  the real user config.
-- `app/settings.rs` renders the registry, not the individual settings — the
-  only per-setting knowledge there is `after_change` (the handful that need
-  something recomputed: theme visuals, node radii). Its `KEYS` table is the
-  ONE keybinding list; the README's key rows are written from it. Free text
-  commits on focus loss, never per keystroke (`Spec::apply` trims, which
-  makes "code --wait" untypable otherwise), and closing the window commits
-  a pending edit. Esc dismisses the pending edit first, then the window —
-  and like the picker that branch is deliberately NOT `widget_free`-guarded
-  (egui drops focus at frame START on Escape). A click OUTSIDE the window
-  closes it (committing a pending edit) but is never consumed — clicking
-  a node closes and selects in one gesture, like the card release —
-  while the gear itself and an open combo-box popup are excluded, since
-  a popup lives on its own layer outside the window rect.
-- `highlight.rs` colours the source view: syntect spans as plain RGB (the
-  lib stays egui-free), scanned from line ONE because a highlighter's
-  state is what knows whether line 400 is inside a string, and capped by
-  bytes and lines because a preview is a glance. Unknown type / too big /
-  broken line = `None` and the pane draws plain text. Search matches are
-  marked with a BACKGROUND there, never a colour — recolouring the hit
-  erases the colouring the view exists for.
+- Settings: `config.rs`'s module doc is the contract — one field + one
+  `Spec` row per setting, everything derived, `Spec::apply` the only
+  write path, per-USER vs per-vault split, unknown keys carried through
+  (`every_spec_reads_and_writes_its_own_field` catches copy-pasted
+  accessor rows). `app/settings.rs` renders the registry; per-setting
+  knowledge stops at `after_change`, and its `KEYS` const is the ONE
+  keybinding list (each `keymap` row must cite one — tested). Commit/
+  dismiss subtleties are documented on `SettingsUi.editing`,
+  `settings_escape` and the click-away site. Cross-module rule: a config
+  READ error is not a missing config — it blocks saves (`save_config`)
+  and migration, and headless tests never write the real user config.
+- `highlight.rs` colours the source view (module doc: scan-from-line-one,
+  byte/line caps, best-effort `None`); search hits get a BACKGROUND mark,
+  never a recolour — documented on `push_source_line`.
 - Every lib module (`layout`, `sim`, `tmux`, `mirror`, `agents`, `keys`,
   `create`, `state`, `config`, `graph`, `filetype`, `highlight`, `mdview`,
   `search`, …) must stay egui-free
