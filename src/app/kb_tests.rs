@@ -1028,7 +1028,7 @@ fn restore_defaults_reapplies_cached_settings() {
         "egui visuals are scheduled for the restored palette"
     );
     assert_eq!(
-        h.state().radius,
+        h.state().derived.radius,
         Viewer::derived(&h.state().g, 1.0).radius,
         "hit-testing radii follow the restored node scale"
     );

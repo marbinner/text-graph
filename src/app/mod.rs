@@ -251,15 +251,20 @@ fn shade(c: Color32, f: f32) -> Color32 {
     )
 }
 
-/// Everything `derived()` recomputes from a fresh graph.
+/// Everything `derived()` recomputes from a fresh graph. Held whole on
+/// the Viewer (`self.derived`) so build and reload refresh it in one
+/// assignment.
 struct Derived {
+    /// World-space radius per node (degree-scaled, Obsidian-style).
     radius: Vec<f32>,
+    /// Tree depth per node (0 = root; ghosts/web nodes are 0).
     depths: Vec<u8>,
     n_files: usize,
     n_dirs: usize,
     n_images: usize,
     n_assets: usize,
     n_webs: usize,
+    /// Dir path → node, for anchoring agent panes at their cwd.
     dir_by_path: HashMap<String, NodeId>,
 }
 
@@ -307,10 +312,10 @@ pub fn run(path: &Path) -> ExitCode {
 struct Viewer {
     g: Graph,
     sim: Sim,
-    /// World-space radius per node (degree-scaled, Obsidian-style).
-    radius: Vec<f32>,
-    /// Tree depth per node (0 = root; ghosts/web nodes are 0).
-    depths: Vec<u8>,
+    /// Everything recomputed from the graph on build/reload — radii,
+    /// depths, kind counts, dir index. One field so a reload can't
+    /// refresh half of it.
+    derived: Derived,
     /// The view: center/zoom, glide, rect compensation — see `camera.rs`.
     cam: camera::Camera,
     hover: Option<NodeId>,
@@ -330,11 +335,6 @@ struct Viewer {
     /// User preferences (per user, not per vault) — see `config.rs`. The
     /// canvas reads it live, so every change shows on the next frame.
     cfg: Config,
-    n_files: usize,
-    n_dirs: usize,
-    n_images: usize,
-    n_assets: usize,
-    n_webs: usize,
     /// Web nodes visible (the `w` toggle; persisted inverted as hide_web).
     show_web: bool,
     /// Side-pane width the user dragged to, persisted per vault. `None`
@@ -371,9 +371,6 @@ struct Viewer {
     /// usable, but must never overwrite a file we did not successfully load.
     config_error: Option<String>,
     diag_open: bool,
-    // ---- terminals in the graph ----
-    /// Dir path → node, for anchoring agent panes at their cwd.
-    dir_by_path: HashMap<String, NodeId>,
     /// Everything terminal-card related — see terminals::Terminals.
     terms: terminals::Terminals,
     /// Thumbnail decode worker + texture cache for Image nodes.
@@ -476,16 +473,7 @@ impl Viewer {
 
     fn new(g: Graph, root: PathBuf, cfg: Config) -> Self {
         let sim = Sim::new(&g);
-        let Derived {
-            radius,
-            depths,
-            n_files,
-            n_dirs,
-            n_images,
-            n_assets,
-            n_webs,
-            dir_by_path,
-        } = Self::derived(&g, cfg.node_scale);
+        let derived = Self::derived(&g, cfg.node_scale);
         let vs = state::load(&root);
         let saved_cam = vs.camera;
         let show_web = !vs.hide_web;
@@ -508,8 +496,7 @@ impl Viewer {
         Self {
             g,
             sim,
-            radius,
-            depths,
+            derived,
             cam: camera::Camera {
                 // center is clamped like zoom: a huge-but-finite restored
                 // value (corrupt/hand-edited view file) overflows
@@ -533,11 +520,6 @@ impl Viewer {
             apply_visuals: true,
             settings: settings::SettingsUi::default(),
             cfg,
-            n_files,
-            n_dirs,
-            n_images,
-            n_assets,
-            n_webs,
             show_web,
             pane_width: vs.pane_width,
             matcher: Matcher::new(MatcherConfig::DEFAULT),
@@ -551,7 +533,6 @@ impl Viewer {
             reload: reload::Reload::new(),
             config_error: None,
             diag_open: false,
-            dir_by_path,
             terms: terminals::Terminals::new(restore_offsets, restore_pins, agent_allowlist),
             thumbs: images::Thumbs::new(),
             previews: previews::Previews::default(),
@@ -578,7 +559,7 @@ impl Viewer {
             .unwrap_or(Path::new(""))
             .to_path_buf();
         loop {
-            if let Some(&id) = self.dir_by_path.get(&vault::path_key(&rel)) {
+            if let Some(&id) = self.derived.dir_by_path.get(&vault::path_key(&rel)) {
                 return id;
             }
             if !rel.pop() {
@@ -675,7 +656,7 @@ impl Viewer {
             dx = dx.max((p.x - here.x).abs());
             dy = dy.max((p.y - here.y).abs());
         }
-        let r = self.radius[id.0 as usize].max(0.5);
+        let r = self.derived.radius[id.0 as usize].max(0.5);
         // nothing around it: frame the node itself at a readable size
         let zoom = if dx <= 1.0 && dy <= 1.0 {
             LONE_NODE_R / r
@@ -778,7 +759,7 @@ impl Viewer {
     /// node the reader is looking at into a card too small to read would
     /// be a worse answer than the dot it replaced.
     fn preview_box(&self, id: NodeId, s: Pos2, opened: bool) -> Rect {
-        let mut ur = self.radius[id.0 as usize] * self.cam.zoom;
+        let mut ur = self.derived.radius[id.0 as usize] * self.cam.zoom;
         if opened {
             ur = ur.max(Self::OPENED_MIN_R);
         }
@@ -833,7 +814,8 @@ impl Viewer {
         match self.g.node(id).kind {
             NodeKind::Image if r >= Self::IMG_BOX_MIN_R => Some(self.image_box(id, s, r)),
             NodeKind::File | NodeKind::Asset
-                if (self.radius[id.0 as usize] * self.cam.zoom >= Self::PREVIEW_MIN_R || open)
+                if (self.derived.radius[id.0 as usize] * self.cam.zoom >= Self::PREVIEW_MIN_R
+                    || open)
                     && self.previewable(id) =>
             {
                 Some(self.preview_box(id, s, open))

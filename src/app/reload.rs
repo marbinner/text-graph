@@ -212,24 +212,7 @@ impl Viewer {
         });
         self.conn_cursor = None; // indexes the old graph's link lists
 
-        let Derived {
-            radius,
-            depths,
-            n_files,
-            n_dirs,
-            n_images,
-            n_assets,
-            n_webs,
-            dir_by_path,
-        } = Self::derived(&g, self.cfg.node_scale);
-        self.radius = radius;
-        self.depths = depths;
-        self.n_files = n_files;
-        self.n_dirs = n_dirs;
-        self.n_images = n_images;
-        self.n_assets = n_assets;
-        self.n_webs = n_webs;
-        self.dir_by_path = dir_by_path;
+        self.derived = Self::derived(&g, self.cfg.node_scale);
         // rows and content hits index the OLD arena — the picker re-derives
         // them (keeping its query and its cursor's identity)
         self.picker.on_reload(g.nodes.len());

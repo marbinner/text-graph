@@ -1086,7 +1086,8 @@ impl Viewer {
                     hash_angle(&a.session, &a.pane, i)
                 };
                 let dir = Vec2::angled(base + jitter);
-                let anchor_r = (self.radius[anchor.0 as usize] * self.cam.zoom).clamp(1.5, 16.0);
+                let anchor_r =
+                    (self.derived.radius[anchor.0 as usize] * self.cam.zoom).clamp(1.5, 16.0);
                 let p = anchor_s + dir * (anchor_r + 22.0);
                 let min = Pos2::new(
                     if dir.x >= 0.0 { p.x } else { p.x - base_size.x },

@@ -113,8 +113,7 @@ impl Viewer {
             // radii are derived once per graph, not per frame (they feed
             // hit-testing and the LOD ramps as well as the paint)
             "node_scale" => {
-                let radius = Viewer::derived(&self.g, self.cfg.node_scale).radius;
-                self.radius = radius;
+                self.derived.radius = Viewer::derived(&self.g, self.cfg.node_scale).radius;
             }
             "content_search" | "search_max_kb" => {
                 self.picker.search_config_changed(self.cfg.content_search)

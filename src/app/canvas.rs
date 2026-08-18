@@ -301,7 +301,7 @@ impl Viewer {
             // box extent (half-width ≤ 1.5r), or a picture straddling the
             // viewport edge pops in and out while panning.
             let r = if self.g.nodes[i].kind == NodeKind::Image {
-                let r = (self.radius[i] * 2.0 * self.cam.zoom).clamp(1.5, 110.0);
+                let r = (self.derived.radius[i] * 2.0 * self.cam.zoom).clamp(1.5, 110.0);
                 if !view.expand2(Vec2::new(r * 1.5, r)).contains(s) {
                     continue;
                 }
@@ -310,7 +310,7 @@ impl Viewer {
                 if !view.contains(s) {
                     continue;
                 }
-                (self.radius[i] * self.cam.zoom).clamp(1.5, 16.0)
+                (self.derived.radius[i] * self.cam.zoom).clamp(1.5, 16.0)
             };
             visible.push((NodeId(i as u32), s, r));
         }
@@ -551,7 +551,7 @@ impl Viewer {
             ));
             // arrowhead at the target end, pulled back to the node's rim so
             // the icon painted on top doesn't swallow it
-            let tr = (self.radius[l.to.0 as usize] * self.cam.zoom).clamp(1.5, 16.0) + 4.0;
+            let tr = (self.derived.radius[l.to.0 as usize] * self.cam.zoom).clamp(1.5, 16.0) + 4.0;
             let tangent = sb - ctrl;
             if (sb - sa).length() > tr + 14.0 && tangent.length() > 0.5 {
                 let tip = sb - tangent.normalized() * tr;
@@ -615,7 +615,7 @@ impl Viewer {
                     }
                 }
                 NodeKind::Dir => {
-                    let col = dir_depth_color(self.theme.dir, self.depths[id.0 as usize]);
+                    let col = dir_depth_color(self.theme.dir, self.derived.depths[id.0 as usize]);
                     if glyph {
                         paint_glyph_node(
                             painter,
@@ -639,7 +639,7 @@ impl Viewer {
                     // preview card (the canvas sibling of the detail pane);
                     // presence fades so the disc↔card flip never pops.
                     // Binary assets stay discs at every zoom.
-                    let ur = self.radius[id.0 as usize] * self.cam.zoom;
+                    let ur = self.derived.radius[id.0 as usize] * self.cam.zoom;
                     let open_here = opened == Some(id);
                     let want = self.cfg.canvas_previews
                         && (ur >= Self::PREVIEW_MIN_R || open_here)
@@ -849,7 +849,7 @@ impl Viewer {
             let color = if scene.active == Some(id) {
                 self.theme.hover
             } else if is_dir {
-                dir_depth_color(self.theme.dir, self.depths[id.0 as usize])
+                dir_depth_color(self.theme.dir, self.derived.depths[id.0 as usize])
                     .gamma_multiply(0.45 + 0.55 * strength)
             } else {
                 self.theme.text.gamma_multiply(0.35 + 0.65 * strength)
@@ -942,20 +942,20 @@ impl Viewer {
                 }
                 None => format!(
                     "{} files · {} dirs{}{}{} · {} links{}   |   f find · b browse · hjkl move · s/d zoom · z center · w web · 0 reset  |  on selection: e edit · t terminal · a agent",
-                    self.n_files,
-                    self.n_dirs,
-                    if self.n_images > 0 {
-                        format!(" · {} images", self.n_images)
+                    self.derived.n_files,
+                    self.derived.n_dirs,
+                    if self.derived.n_images > 0 {
+                        format!(" · {} images", self.derived.n_images)
                     } else {
                         String::new()
                     },
-                    if self.n_assets > 0 {
-                        format!(" · {} assets", self.n_assets)
+                    if self.derived.n_assets > 0 {
+                        format!(" · {} assets", self.derived.n_assets)
                     } else {
                         String::new()
                     },
-                    if self.n_webs > 0 {
-                        format!(" · {} web", self.n_webs)
+                    if self.derived.n_webs > 0 {
+                        format!(" · {} web", self.derived.n_webs)
                     } else {
                         String::new()
                     },
