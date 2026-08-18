@@ -261,6 +261,39 @@ pub(super) const CARD_ZOOM: f32 = 2.2;
 /// Font a cursor-selected/focused card expands to regardless of zoom.
 pub(super) const EXPAND_FONT: f32 = 13.0;
 
+/// Horizontal room an expanded card may take inside the canvas: full
+/// width minus card padding, border and a small margin. Shared by the
+/// paint pass and the grip-drag baseline in canvas.rs — the two must
+/// agree or the drag's column mapping drifts off the rendered cells.
+pub(super) fn expand_avail_w(canvas_w: f32) -> f32 {
+    (canvas_w - 24.0).max(40.0)
+}
+
+/// Font an expanded card renders at: the readable floor [`EXPAND_FONT`]
+/// (or the zoom-derived size when the camera is already closer), shrunk
+/// until the pane's full width fits `avail_w`. Expanded is the automatic
+/// "readable regardless of zoom" state, so it must never produce a card
+/// wider than the canvas that shows it — a session a real terminal
+/// resized to 200 columns otherwise paints as a strip running past both
+/// screen edges. `probe` maps a font size to its measured
+/// (advance, line height); the scale-to-fit is applied once, like the
+/// hover peek's, because a monospace advance is near-linear in the size.
+pub(super) fn expand_font(
+    f_base: f32,
+    cols: u16,
+    avail_w: f32,
+    probe: impl Fn(f32) -> (f32, f32),
+) -> (f32, f32, f32) {
+    let mut f = f_base.max(EXPAND_FONT);
+    let (mut adv, mut line_h) = probe(f);
+    let need = cols as f32 * adv;
+    if need > avail_w {
+        f = (f * avail_w / need).max(2.5);
+        (adv, line_h) = probe(f);
+    }
+    (f, adv, line_h)
+}
+
 /// Border/title color for the card that owns the keyboard.
 const TERM_FOCUS: Color32 = Color32::from_rgb(0x56, 0xd4, 0xdd);
 
@@ -1070,10 +1103,17 @@ impl Viewer {
             // — click through the cards while zoomed out to inspect agents,
             // Ctrl+click to keep several open at once.
             let expanded = self.terms.is_expanded(&key);
-            let (font, adv, line_h) = if expanded && f_base < EXPAND_FONT {
-                let font = FontId::monospace(EXPAND_FONT);
-                let p = painter.layout_no_wrap("M".into(), font.clone(), Color32::WHITE);
-                (font, p.size().x, p.size().y)
+            let (font, adv, line_h) = if expanded {
+                let (f, adv, line_h) =
+                    expand_font(f_base, c.cols, expand_avail_w(rect.width()), |f| {
+                        let g = painter.layout_no_wrap(
+                            "M".into(),
+                            FontId::monospace(f),
+                            Color32::WHITE,
+                        );
+                        (g.size().x, g.size().y)
+                    });
+                (FontId::monospace(f), adv, line_h)
             } else {
                 (font_base.clone(), adv_base, line_h_base)
             };
@@ -1081,12 +1121,17 @@ impl Viewer {
             let anchor = self.card_anchor(a);
             let anchor_w = self.world_pos(anchor.0 as usize);
             let anchor_s = self.cam.to_screen(rect, anchor_w);
+            // A full card is the whole screen rectangle (total_rows, blank
+            // tail included): a pane idling at a prompt must look like the
+            // terminal it is, not collapse into a cols-wide strip two rows
+            // tall. Only the cached rows are painted; the rest stays card
+            // background.
             let size = if compact {
                 Vec2::new(260.0, 82.0)
             } else {
                 Vec2::new(
                     c.cols as f32 * adv + pad * 2.0,
-                    c.rows.len() as f32 * line_h + title_h + pad * 2.0,
+                    c.total_rows as f32 * line_h + title_h + pad * 2.0,
                 )
             };
             // The card's UNEXPANDED footprint at this zoom — placement is
@@ -1099,7 +1144,7 @@ impl Viewer {
             } else {
                 Vec2::new(
                     c.cols as f32 * adv_base + pad * 2.0,
-                    c.rows.len() as f32 * line_h_base + title_h + pad * 2.0,
+                    c.total_rows as f32 * line_h_base + title_h + pad * 2.0,
                 )
             };
             // User-arranged cards keep their CENTER's world-space offset
@@ -1741,6 +1786,27 @@ mod tests {
         t.cursor = None;
         t.focused = Some(key.clone());
         assert!(t.is_expanded(&key));
+    }
+
+    #[test]
+    fn expanded_cards_never_exceed_the_canvas_width() {
+        // linear fake metrics: advance 0.6×size, line height 1.3×size
+        let probe = |f: f32| (f * 0.6, f * 1.3);
+        // a 90-col launch fits easily: the readable floor applies as-is
+        let (f, adv, _) = expand_font(2.5, 90, expand_avail_w(1000.0), probe);
+        assert_eq!(f, EXPAND_FONT);
+        assert!(90.0 * adv <= expand_avail_w(1000.0));
+        // zoomed past the floor, the zoom-derived size wins while it fits
+        let (f, _, _) = expand_font(16.0, 90, expand_avail_w(2000.0), probe);
+        assert_eq!(f, 16.0);
+        // a session a real terminal resized to 200 columns shrinks to fit
+        let avail = expand_avail_w(800.0);
+        let (f, adv, _) = expand_font(2.5, 200, avail, probe);
+        assert!(f < EXPAND_FONT);
+        assert!(200.0 * adv <= avail + 0.5, "width fits the canvas");
+        // pathological narrowness still bottoms out at a readable-ish floor
+        let (f, _, _) = expand_font(2.5, 500, expand_avail_w(0.0), probe);
+        assert_eq!(f, 2.5);
     }
 
     #[test]

@@ -188,23 +188,34 @@ impl Viewer {
                     && let Some(pos) = response.hover_pos()
                 {
                     // cell metrics must match what the card is rendered at
-                    let mut f = (6.0 * self.cam.zoom).clamp(2.5, 16.0);
-                    if expanded {
-                        f = f.max(terminals::EXPAND_FONT);
-                    }
-                    let probe = ui.painter().layout_no_wrap(
-                        "M".into(),
-                        FontId::monospace(f),
-                        Color32::WHITE,
-                    );
+                    let f_base = (6.0 * self.cam.zoom).clamp(2.5, 16.0);
+                    let probe = |f: f32| {
+                        let g = ui.painter().layout_no_wrap(
+                            "M".into(),
+                            FontId::monospace(f),
+                            Color32::WHITE,
+                        );
+                        (g.size().x, g.size().y)
+                    };
+                    let (adv, line_h) = if expanded {
+                        let (_, adv, line_h) = terminals::expand_font(
+                            f_base,
+                            c.cols,
+                            terminals::expand_avail_w(rect.width()),
+                            probe,
+                        );
+                        (adv, line_h)
+                    } else {
+                        probe(f_base)
+                    };
                     let cur = (c.cols, c.total_rows);
                     self.terms.resize = Some(ResizeDrag {
                         key: t,
                         cols0: cur.0 as f32,
                         rows0: cur.1 as f32,
                         start: pos,
-                        adv: probe.size().x.max(1.0),
-                        line_h: probe.size().y.max(1.0),
+                        adv: adv.max(1.0),
+                        line_h: line_h.max(1.0),
                         want: cur,
                         sent: cur,
                         last_sent: Instant::now(),
