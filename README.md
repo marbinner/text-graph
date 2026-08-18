@@ -14,6 +14,33 @@ cargo run --release -- ~/notes          # open the graph window
 cargo run --release -- stats ~/notes    # headless statistics
 ```
 
+## Install
+
+There is a flake, so on NixOS — or anywhere with nix flakes — nothing needs to
+be built by hand:
+
+```
+nix run github:marbinner/text-graph -- ~/notes
+```
+
+Declaratively, add the flake as an input and its overlay to your NixOS config:
+
+```nix
+inputs.text-graph.url = "github:marbinner/text-graph";
+# ...
+nixpkgs.overlays = [ inputs.text-graph.overlays.default ];
+environment.systemPackages = [ pkgs.text-graph ];
+```
+
+`nix develop` gives you a shell with the toolchain, tmux and the GUI libraries,
+where `scripts/check.sh` runs as-is.
+
+Building it yourself instead, the binary wants a GL-capable session (Wayland or
+X11) and `tmux` on `PATH` for the terminal cards — without tmux everything else
+still works and the cards are simply absent. `pkg-config` and the Xorg client
+headers must be present at build time even for a Wayland-only session, because
+winit's `x11-dl` probes for them.
+
 The vault is the database: nodes are your `.md` files and directories, edges
 come from the directory structure and `[[wikilinks]]`. text-graph never
 edits your notes — it writes only the empty file or folder you explicitly
