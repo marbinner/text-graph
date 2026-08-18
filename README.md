@@ -472,6 +472,19 @@ The statistics CLI can be built without the native GUI stack:
 
 ```
 cargo run --no-default-features -- stats <vault-path>
+```
+
+`scripts/check.sh` runs the whole gate chain CI runs — formatting, the
+GUI-free layering check, clippy at zero warnings, all tests, and (when the
+toolchains are installed) the MSRV build and dependency audit:
+
+```
+scripts/check.sh
+```
+
+The individual gates, for selective runs:
+
+```
 cargo fmt -- --check
 cargo check --locked --no-default-features --lib --bin text-graph
 cargo +1.95.0 check --locked --all-targets

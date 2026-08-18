@@ -2,6 +2,10 @@
 
 ## Commands
 
+- `scripts/check.sh` — the whole gate chain (fmt, GUI-free layering check,
+  clippy, tests, plus MSRV/audit when those toolchains are installed),
+  exit-code gated, mirroring CI. Run it before every commit; the bullets
+  below are the individual gates for selective runs.
 - `cargo test --locked --all-targets` — unit + integration + examples (plain
   `cargo test` skips example builds and has shipped a broken one; CI
   gates on --all-targets). Integration (`tests/fixture_vault.rs`)
