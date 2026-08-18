@@ -124,7 +124,7 @@ fn wide_content_scrolls_inside_the_pane_instead_of_widening_it() {
 #[test]
 fn the_reading_family_is_bound_and_the_measure_only_narrows() {
     let h = harness();
-    let height = h.ctx.fonts(|f| {
+    let height = h.ctx.fonts_mut(|f| {
         f.row_height(&eframe::egui::FontId::new(
             15.0,
             eframe::egui::FontFamily::Name("reading".into()),
