@@ -40,7 +40,6 @@ pub struct Config {
     pub glide: f32,
     pub zoom_speed: f32,
     // ---- previews ----
-    pub preview_raw: bool,
     pub hover_previews: bool,
     pub hover_delay: f32,
     pub follow_delay: f32,
@@ -74,7 +73,6 @@ impl Default for Config {
             freeze: false,
             glide: 0.18,
             zoom_speed: 1.0,
-            preview_raw: false,
             hover_previews: true,
             hover_delay: 0.35,
             follow_delay: 0.12,
@@ -130,7 +128,8 @@ impl Config {
     }
 
     /// Set a setting from its wire form, sanitizing per its spec. Unknown
-    /// keys are kept verbatim for the next save.
+    /// keys are kept verbatim for the next save — except retired ones,
+    /// which are dropped for good.
     fn set_raw(&mut self, key: &str, raw: &str, line: &str) {
         match spec(key) {
             Some(s) => {
@@ -138,10 +137,20 @@ impl Config {
                     s.apply(self, v);
                 }
             }
+            None if RETIRED.contains(&key) => {}
             None => self.unknown.push(line.to_string()),
         }
     }
 }
+
+/// Keys a past version persisted as settings that no longer exist.
+/// Dropped on load instead of carried as unknown — the unknown-key
+/// carry is for FUTURE versions' keys, and carrying a retired one
+/// forward would keep resurrecting its state in every config it ever
+/// reached. `preview_raw` was the `r` reading-mode toggle stored as a
+/// preference: one press silently pinned every note preview to source
+/// across restarts, so it became session state (2026-08-18).
+const RETIRED: &[&str] = &["preview_raw"];
 
 // ---- the registry ----
 
@@ -420,11 +429,6 @@ static SPECS: &[Spec] = specs![
         num(0.3, 3.0, 0.05, "×", 2), zoom_speed, Num;
 
         // ---- previews ----
-        "preview_raw", Section::Previews, "source previews",
-        "show notes as source with line numbers instead of rendered \
-         markdown; the `r` key toggles it",
-        Kind::Flag, preview_raw, Flag;
-
         "hover_previews", Section::Previews, "hover previews",
         "dwelling on a node (or a compact card) opens a popup",
         Kind::Flag, hover_previews, Flag;
@@ -725,6 +729,18 @@ mod tests {
             out.contains("future_thing\t7"),
             "a newer version's setting was dropped: {out}"
         );
+    }
+
+    #[test]
+    fn retired_keys_are_dropped_not_carried() {
+        let text = "text-graph config v1\npreview_raw\t1\nfuture_thing\t7\n";
+        let c = from_text(text);
+        let out = to_text(&c);
+        assert!(
+            !out.contains("preview_raw"),
+            "a retired key must not ride along forever: {out}"
+        );
+        assert!(out.contains("future_thing\t7"), "unknown carry intact");
     }
 
     #[test]

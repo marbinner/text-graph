@@ -222,14 +222,16 @@ const BINDINGS: &[Binding] = &[
         act: |v, _| v.open_key_help(),
     },
     // r = read this as source, or back to rendered markdown. One
-    // previewer, two ways of reading — not two previewers.
+    // previewer, two ways of reading — not two previewers. Session
+    // state, not a setting: persisted, one press pinned every note
+    // preview to source across restarts.
     Binding {
         trigger: Trigger::Chords(&[bare(Key::R)]),
         press: Press::Fresh,
         guard: Guard::WidgetFree,
         doc: "r",
         when: always,
-        act: |v, _| v.toggle_setting("preview_raw"),
+        act: |v, _| v.toggle_pane_raw(),
     },
     // The ⚙ window dismisses before the graph does: a pending text edit
     // first, then the window — settings_escape does both stages. The

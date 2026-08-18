@@ -1289,7 +1289,7 @@ impl Viewer {
         // a line is what matters (a content hit has to be shown where it
         // lives) or the reader asked for source with `r`.
         let code = textual && kind != NodeKind::File;
-        let raw = textual && (code || hit.is_some() || self.cfg.preview_raw);
+        let raw = textual && (code || hit.is_some() || self.pane_raw);
         let body = if !raw {
             PreviewBody::Node(id)
         } else {

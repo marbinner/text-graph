@@ -137,8 +137,8 @@ fn the_reading_family_is_bound_and_the_measure_only_narrows() {
 
 /// `r` reads the same file the other way: source with line numbers
 /// instead of rendered markdown. One previewer with two readings — the
-/// toggle is a setting, so it is the same act as the checkbox and it
-/// survives a restart.
+/// toggle is session state, not a setting: persisted, one press pinned
+/// every note preview to source across restarts (user-reported bug).
 #[test]
 fn r_switches_the_preview_between_markdown_and_source() {
     let mut h = harness();
@@ -152,7 +152,7 @@ fn r_switches_the_preview_between_markdown_and_source() {
         "a note reads as rendered markdown by default"
     );
     press(&mut h, Key::R);
-    assert!(h.state().cfg.preview_raw, "r flips the setting");
+    assert!(h.state().pane_raw, "r flips the session toggle");
     assert!(
         matches!(
             h.state().pane_preview.as_ref().map(|p| &p.body),
@@ -308,7 +308,7 @@ fn the_source_view_is_syntax_coloured_and_keeps_its_match_marks() {
     // no `r`, no search hit: code previews as source BECAUSE it is code —
     // there is nothing to render in a .rs, and markdown rendering of it
     // strips exactly the structure a reader is looking for
-    assert!(!h.state().cfg.preview_raw, "the default settings");
+    assert!(!h.state().pane_raw, "no r pressed");
 
     let lines = match h.state().pane_preview.as_ref().map(|p| &p.body) {
         Some(super::picker::PreviewBody::Text(lines)) => lines.clone(),

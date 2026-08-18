@@ -80,17 +80,6 @@ impl Viewer {
         }
     }
 
-    /// Flip a boolean setting from a keybind, saving it like the window
-    /// would — a key and a checkbox must be the same act.
-    pub(super) fn toggle_setting(&mut self, key: &str) {
-        if let Some(s) = config::spec(key) {
-            let on = (s.get)(&self.cfg).as_flag();
-            self.set_setting(s, Value::Flag(!on));
-            let state = if on { "off" } else { "on" };
-            self.flash = Some((format!("{} {state}", s.label), Instant::now()));
-        }
-    }
-
     /// Write one setting, do whatever it invalidates, and save.
     fn set_setting(&mut self, s: &'static Spec, v: Value) {
         s.apply(&mut self.cfg, v);
@@ -103,9 +92,6 @@ impl Viewer {
     /// while it paints.
     pub(super) fn after_change(&mut self, key: &str) {
         match key {
-            // the pane caches its preview by subject, and the subject
-            // hasn't changed — only the way it should be read
-            "preview_raw" => self.pane_preview = None,
             "theme_light" => {
                 self.theme = Theme::get(self.cfg.light);
                 self.apply_visuals = true;

@@ -152,7 +152,6 @@ fn restore_defaults_reapplies_cached_settings() {
     h.step();
     assert!(h.state().pane_preview.is_some());
 
-    h.state_mut().cfg.preview_raw = true;
     h.state_mut().cfg.light = true;
     h.state_mut().after_change("theme_light");
     h.state_mut().cfg.node_scale = 1.8;
@@ -162,7 +161,6 @@ fn restore_defaults_reapplies_cached_settings() {
 
     h.state_mut().restore_default_settings();
 
-    assert!(!h.state().cfg.preview_raw);
     assert!(
         !h.state().theme.light,
         "the default dark palette is restored"
@@ -175,10 +173,6 @@ fn restore_defaults_reapplies_cached_settings() {
         h.state().derived.radius,
         Viewer::derived(&h.state().g, 1.0).radius,
         "hit-testing radii follow the restored node scale"
-    );
-    assert!(
-        h.state().pane_preview.is_none(),
-        "the cached preview is invalidated when preview mode resets"
     );
     assert_eq!(
         h.state().cfg.unknown,

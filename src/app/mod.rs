@@ -376,6 +376,11 @@ struct Viewer {
     /// while it is open, else the selection. Built by `sync_pane_preview`,
     /// drawn by `preview_pane`: one subject, one previewer.
     pane_preview: Option<picker::Preview>,
+    /// Read notes as source instead of rendered markdown — the `r`
+    /// toggle. Session state, deliberately NOT a persisted setting: as
+    /// one, a single press silently pinned every note preview to source
+    /// across restarts and vaults (user-reported as a rendering bug).
+    pane_raw: bool,
     /// Body of the previewed file, read on demand and cached per node…
     detail: Option<(NodeId, String)>,
     /// …with the (mtime, len) it was read at, so a reload re-reads only
@@ -536,6 +541,7 @@ impl Viewer {
             md_cache: CommonMarkCache::default(),
             pane_content_w: std::cell::Cell::new(0.0),
             pane_preview: None,
+            pane_raw: false,
             detail: None,
             detail_stamp: None,
             reload: reload::Reload::new(),

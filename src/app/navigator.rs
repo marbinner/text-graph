@@ -239,6 +239,25 @@ impl Viewer {
             .unwrap_or_else(|e| format!("*error reading file:* {e}"))
     }
 
+    /// `r`: read the previewed note as source (numbered lines) instead of
+    /// rendered markdown, and back. Session state, deliberately not
+    /// persisted — as a saved setting, one press silently pinned every
+    /// note preview to source across restarts.
+    pub(super) fn toggle_pane_raw(&mut self) {
+        self.pane_raw = !self.pane_raw;
+        // the pane caches its preview by subject, and the subject hasn't
+        // changed — only the way it should be read
+        self.pane_preview = None;
+        self.set_flash(
+            if self.pane_raw {
+                "reading as source"
+            } else {
+                "reading as markdown"
+            }
+            .to_string(),
+        );
+    }
+
     pub(super) fn load_body(&self, id: NodeId) -> String {
         let node = self.g.node(id);
         let Some(path) = node.absolute_path(&self.root) else {
