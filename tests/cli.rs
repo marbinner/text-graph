@@ -138,13 +138,14 @@ fn an_empty_roster_is_success_not_an_error() {
 #[test]
 fn malformed_messaging_commands_exit_two() {
     let dir = scratch("usage");
-    let cases: [&[&str]; 6] = [
+    let cases: [&[&str]; 7] = [
         &["peek"],
         &["peek", "someone", "-n", "zero"],
         &["peek", "someone", "-n"],
         &["roster", "--bogus"],
         &["send"],
         &["send", "someone"],
+        &["protocol", "--user"],
     ];
     for case in cases {
         let out = output(text_graph().current_dir(&dir).args(case));
@@ -157,4 +158,62 @@ fn malformed_messaging_commands_exit_two() {
         assert!(out.stdout.is_empty(), "{case:?} printed to stdout");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn installing_the_skill_puts_it_where_a_harness_looks() {
+    let dir = scratch("install");
+    let run = || {
+        output(
+            text_graph()
+                .current_dir(&dir)
+                .args(["protocol", "--install"]),
+        )
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let skill = dir.join(".claude/skills/text-graph/SKILL.md");
+    let installed = std::fs::read_to_string(&skill).expect("installed skill");
+    assert!(
+        installed.starts_with("---\nname: text-graph\n"),
+        "no frontmatter"
+    );
+    assert!(installed.contains("text-graph roster"));
+
+    // harnesses without skills read AGENTS.md, which we create if absent
+    let agents = std::fs::read_to_string(dir.join("AGENTS.md")).expect("pointer");
+    assert!(agents.contains("text-graph protocol"), "{agents}");
+
+    run();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
+        agents,
+        "installing twice must not stack blocks"
+    );
+
+    // --user follows the person, not the vault
+    let home = scratch("install-home");
+    let user = output(text_graph().current_dir(&dir).env("HOME", &home).args([
+        "protocol",
+        "--install",
+        "--user",
+    ]));
+    assert!(
+        user.status.success(),
+        "{}",
+        String::from_utf8_lossy(&user.stderr)
+    );
+    assert!(home.join(".claude/skills/text-graph/SKILL.md").is_file());
+    assert!(
+        !home.join("AGENTS.md").exists(),
+        "a user install has no vault to leave a pointer in"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&home);
 }

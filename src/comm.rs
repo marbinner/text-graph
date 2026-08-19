@@ -83,6 +83,119 @@ fn strip_frontmatter(text: &str) -> &str {
     }
 }
 
+/// Where an installed skill lands: in the vault (hand a vault to someone
+/// with the instructions inside it) or in the person's own `~/.claude`
+/// (the tool is theirs, like the config, and every vault they open gets
+/// it). The skill's own description is what keeps it from firing in
+/// projects that have nothing to do with text-graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    Vault,
+    User,
+}
+
+/// What an install touched, so the CLI can say so.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Installed {
+    pub skill: PathBuf,
+    /// The AGENTS.md that now points at the skill, and whether the file
+    /// had to be created. None for a user-scope install.
+    pub pointer: Option<(PathBuf, bool)>,
+}
+
+/// Marks our block in a hand-written AGENTS.md. Everything between the
+/// markers is ours to rewrite; everything outside is the vault owner's and
+/// is never touched.
+const POINTER_START: &str = "<!-- text-graph -->";
+const POINTER_END: &str = "<!-- /text-graph -->";
+
+/// Harnesses that don't do skills still read AGENTS.md, so a vault install
+/// leaves a few lines there pointing at the depth. Short on purpose: this
+/// text is in context on every turn, and the skill is not.
+fn pointer_block() -> String {
+    format!(
+        "{POINTER_START}\n\
+         This is a text-graph vault: every file is a node, `[[wikilinks]]` are edges,\n\
+         and other agents may be working here right now. `text-graph roster` lists\n\
+         them, `text-graph send <agent> \"…\"` reaches one, `text-graph protocol`\n\
+         explains the conventions in full.\n\
+         {POINTER_END}"
+    )
+}
+
+/// Splice our block into an AGENTS.md, replacing an older one in place.
+/// Pure so the splice can be tested without a filesystem — and it is the
+/// part that would silently eat someone's file if it were wrong.
+fn update_pointer(existing: &str) -> String {
+    let block = pointer_block();
+    if let Some(start) = existing.find(POINTER_START)
+        && let Some(end) = existing[start..].find(POINTER_END)
+    {
+        let end = start + end + POINTER_END.len();
+        return format!("{}{block}{}", &existing[..start], &existing[end..]);
+    }
+    if existing.trim().is_empty() {
+        return format!("{block}\n");
+    }
+    let separator = if existing.ends_with("\n\n") {
+        ""
+    } else if existing.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    format!("{existing}{separator}{block}\n")
+}
+
+/// Write the skill where the harness will find it, and (in a vault) leave
+/// a pointer for harnesses that don't do skills.
+///
+/// The skill file is ours: it lives under a `text-graph/` directory we
+/// name and is rewritten wholesale, because a half-updated copy of the
+/// conventions is worse than none. AGENTS.md is the vault owner's, so
+/// only the marked block is ever replaced.
+pub fn install(scope: Scope, vault: &Path) -> Result<Installed, String> {
+    let root = match scope {
+        Scope::Vault => vault.to_path_buf(),
+        Scope::User => PathBuf::from(
+            std::env::var("HOME").map_err(|_| "no $HOME to install into".to_string())?,
+        ),
+    };
+    let dir = root.join(".claude/skills/text-graph");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let skill = dir.join("SKILL.md");
+    std::fs::write(&skill, skill_file()).map_err(|e| format!("{}: {e}", skill.display()))?;
+    if scope == Scope::User {
+        return Ok(Installed {
+            skill,
+            pointer: None,
+        });
+    }
+
+    let agents = vault.join("AGENTS.md");
+    // a symlink here would write through to wherever it points; the person
+    // asked us to edit their vault, not something outside it
+    if agents
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(format!(
+            "{} is a symlink — not writing it",
+            agents.display()
+        ));
+    }
+    let existing = std::fs::read_to_string(&agents).unwrap_or_default();
+    let fresh = !agents.exists();
+    let updated = update_pointer(&existing);
+    if updated != existing {
+        std::fs::write(&agents, updated).map_err(|e| format!("{}: {e}", agents.display()))?;
+    }
+    Ok(Installed {
+        skill,
+        pointer: Some((agents, fresh)),
+    })
+}
+
 /// What a pane is, which decides whether it can be *sent* to. Owned
 /// sessions carry their role in the name (`tg_term`, `tg_edit`), so the
 /// tag [`crate::agents::Tracker`] derives is the whole signal.
@@ -831,6 +944,64 @@ mod tests {
         );
         assert!(!lines[2].ends_with(' '), "no trailing padding");
         assert!(render_roster(&[], 1000, None).is_empty());
+    }
+
+    #[test]
+    fn the_pointer_block_lands_once_and_leaves_the_rest_alone() {
+        let mine = pointer_block();
+        assert_eq!(update_pointer(""), format!("{mine}\n"), "an empty file");
+        let theirs = "# Wiki schema\n\nYou are the maintainer of this wiki.\n";
+        let once = update_pointer(theirs);
+        assert!(
+            once.starts_with(theirs),
+            "their text is untouched: {once:?}"
+        );
+        assert!(once.ends_with(&format!("{mine}\n")));
+        assert_eq!(
+            update_pointer(&once),
+            once,
+            "installing twice must not stack two blocks"
+        );
+
+        // an older block is replaced in place, with what follows preserved
+        let stale = format!("intro\n\n{POINTER_START}\nold words\n{POINTER_END}\n\nafter\n");
+        let fixed = update_pointer(&stale);
+        assert!(fixed.starts_with("intro\n\n"), "{fixed:?}");
+        assert!(fixed.ends_with("\n\nafter\n"), "{fixed:?}");
+        assert!(!fixed.contains("old words"));
+        assert_eq!(fixed.matches(POINTER_START).count(), 1);
+    }
+
+    #[test]
+    fn installing_writes_the_skill_and_is_repeatable() {
+        let vault = std::env::temp_dir().join(format!("tg-comm-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&vault);
+        std::fs::create_dir_all(&vault).unwrap();
+        std::fs::write(vault.join("AGENTS.md"), "# house rules\n").unwrap();
+
+        let done = install(Scope::Vault, &vault).expect("install");
+        assert_eq!(
+            done.skill,
+            vault.join(".claude/skills/text-graph/SKILL.md"),
+            "the directory name must match the skill's frontmatter name"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&done.skill).unwrap(),
+            skill_file(),
+            "the installed skill IS the compiled-in one, frontmatter and all"
+        );
+        assert_eq!(done.pointer.as_ref().map(|(_, fresh)| *fresh), Some(false));
+
+        let after_first = std::fs::read_to_string(vault.join("AGENTS.md")).unwrap();
+        install(Scope::Vault, &vault).expect("install again");
+        assert_eq!(
+            std::fs::read_to_string(vault.join("AGENTS.md")).unwrap(),
+            after_first,
+            "a second install changes nothing"
+        );
+        assert!(after_first.starts_with("# house rules\n"));
+
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     #[test]

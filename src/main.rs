@@ -15,7 +15,7 @@ const COMM_USAGE: &str = "\
   text-graph roster               who else is live in this vault
   text-graph send <agent> <msg>   type a message into an agent's terminal
   text-graph peek <agent> [-n N]  the last N lines of an agent's screen
-  text-graph protocol             how agents talk here
+  text-graph protocol [--install] how agents talk here (--install: as a skill)
 ";
 
 #[cfg(feature = "gui")]
@@ -71,10 +71,7 @@ fn main() -> ExitCode {
         [command, rest @ ..] if is(command, "roster") => report(run_roster(rest)),
         [command, rest @ ..] if is(command, "send") => report(run_send(rest)),
         [command, rest @ ..] if is(command, "peek") => report(run_peek(rest)),
-        [command] if is(command, "protocol") => {
-            print!("{}", comm::protocol_text());
-            ExitCode::SUCCESS
-        }
+        [command, rest @ ..] if is(command, "protocol") => report(run_protocol(rest)),
         #[cfg(feature = "gui")]
         [p] if !p.to_string_lossy().starts_with('-') => app::run(Path::new(p)),
         _ => {
@@ -180,6 +177,47 @@ fn run_roster(args: &[OsString]) -> Result<(), CliError> {
         "{}",
         comm::render_roster(&entries, comm::epoch_now(), self_pane.as_deref())
     );
+    Ok(())
+}
+
+/// `protocol` prints the skill; `--install` puts it where a harness will
+/// find it. Its flags are parsed here rather than in [`parse_comm`] so the
+/// other subcommands don't quietly accept them.
+fn run_protocol(args: &[OsString]) -> Result<(), CliError> {
+    let (mut install, mut user) = (false, false);
+    for arg in args {
+        match arg.to_string_lossy().as_ref() {
+            "--install" => install = true,
+            "--user" => user = true,
+            other => {
+                return Err(CliError::Usage(format!(
+                    "protocol: unknown argument {other}"
+                )));
+            }
+        }
+    }
+    if user && !install {
+        return Err(CliError::Usage(
+            "--user says WHERE to install; add --install".into(),
+        ));
+    }
+    if !install {
+        print!("{}", comm::protocol_text());
+        return Ok(());
+    }
+
+    let scope = if user {
+        comm::Scope::User
+    } else {
+        comm::Scope::Vault
+    };
+    let done = comm::install(scope, &here()?).map_err(CliError::Failed)?;
+    println!("wrote {}", done.skill.display());
+    if let Some((agents, fresh)) = done.pointer {
+        let verb = if fresh { "created" } else { "updated" };
+        println!("{verb} {}", agents.display());
+    }
+    println!("agents pick it up when they next start.");
     Ok(())
 }
 
