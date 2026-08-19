@@ -6,13 +6,16 @@
 # Usage: scripts/screenshot.sh [vault] [out.png]
 #   defaults: a scratch COPY of fixtures/vault (a running viewer writes
 #   .text-graph/ into whatever vault it opens — never point this at the
-#   fixture itself), and docs/screenshot.png
+#   fixture itself), and docs/headless-capture.png. It deliberately does NOT
+#   default to docs/screenshot.png: no headless capture can show agent cards,
+#   so the README's picture comes from a real session and must not be
+#   clobbered by a run of this script.
 #
 # Needs sway and grim. XDG_CONFIG_HOME is redirected at a scratch dir so the
 # capture can never pick up — or overwrite — your real config.
 set -e
 repo=$(cd "$(dirname "$0")/.." && pwd)
-out=${2:-$repo/docs/screenshot.png}
+out=${2:-$repo/docs/headless-capture.png}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 

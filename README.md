@@ -14,12 +14,14 @@ cargo run --release -- ~/notes          # open the graph window
 cargo run --release -- stats ~/notes    # headless statistics
 ```
 
-![text-graph showing the bundled fixture vault: folders, notes, an image and
-two ghost nodes in a force-directed graph](docs/screenshot.png)
+![text-graph showing a research vault of a hundred notes as a dense graph,
+with three live agent terminal cards tethered to the folders they work in
+](docs/screenshot.png)
 
-*The bundled `fixtures/vault` — folders as bright nodes, notes as file nodes,
-hollow circles for links to notes that don't exist yet, and the status line
-carrying the keys.*
+*A wiki of ~100 notes being built by three agents at once. Each card is a live
+tmux pane, tethered to the folder its agent works in and typed into in place;
+the graph behind them redraws as they write. The line at the top says which
+pane has the keyboard, and how to get it back.*
 
 ## Install
 
