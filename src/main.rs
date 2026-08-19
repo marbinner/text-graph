@@ -72,7 +72,7 @@ fn main() -> ExitCode {
         [command, rest @ ..] if is(command, "send") => report(run_send(rest)),
         [command, rest @ ..] if is(command, "peek") => report(run_peek(rest)),
         [command] if is(command, "protocol") => {
-            print!("{}", comm::PROTOCOL);
+            print!("{}", comm::protocol_text());
             ExitCode::SUCCESS
         }
         #[cfg(feature = "gui")]

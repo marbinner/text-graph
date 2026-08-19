@@ -96,8 +96,12 @@ fn protocol_prints_the_conventions() {
     let out = output(text_graph().arg("protocol"));
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("text-graph send <agent> <msg>"));
+    assert!(stdout.contains("text-graph send <agent> <message>"));
     assert!(stdout.contains("conclusions go in the vault"));
+    assert!(
+        !stdout.starts_with("---"),
+        "the skill's frontmatter is for the harness, not the reader"
+    );
 }
 
 #[test]

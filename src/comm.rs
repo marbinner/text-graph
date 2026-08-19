@@ -53,37 +53,35 @@ const TAIL_CHARS: usize = 60;
 /// how the "chatter in terminals, conclusions in notes" rule gets teeth.
 pub const MAX_MESSAGE: usize = 8 * 1024;
 
-/// The conventions `text-graph protocol` prints. This is the whole of the
-/// protocol: there is no schema and no framing, because the participants
-/// are language models reading a terminal. The first ping teaches a
-/// newcomer by pointing here.
-pub const PROTOCOL: &str = "\
-text-graph — how agents talk in this vault
+/// The one text that teaches an agent everything about this tool: what a
+/// vault is as a graph, how to reach the other agents in it, and the
+/// conventions. It ships as a SKILL file — frontmatter and all — because
+/// that is how a harness loads it on demand instead of carrying it in
+/// every prompt; `text-graph protocol` prints the body, and
+/// `--install` writes the file. One source, so the printed text and the
+/// installed skill can never drift.
+const SKILL: &str = include_str!("../assets/skill.md");
 
-You are one agent among several working in the same vault. Three commands:
+/// The skill exactly as it is installed, YAML frontmatter included.
+pub fn skill_file() -> &'static str {
+    SKILL
+}
 
-  text-graph roster              who else is live, and how long they've been quiet
-  text-graph send <agent> <msg>  type a message into another agent's terminal
-  text-graph peek <agent> [-n N] read the last N lines of their screen
+/// The skill without its frontmatter — what `text-graph protocol` prints
+/// for a reader who arrived here from a message footer.
+pub fn protocol_text() -> &'static str {
+    strip_frontmatter(SKILL)
+}
 
-Conventions, most important first:
-
-1. Chatter goes in terminals; conclusions go in the vault. A message is a
-   nudge, not a record. Anything that should outlive the session is a note,
-   linked from the notes it concerns — that is the shared memory.
-2. Address a note, not an inbox. For anything substantial, write the note
-   first and send the link:
-     text-graph send pi \"see [[topics/api-shape]] — need your read on §2\"
-3. Messages arrive as if typed at the other agent's prompt, and their
-   harness queues them while it is busy. You do not have to wait for idle,
-   and you should not re-send because a reply hasn't appeared: peek first.
-4. Judge relevance yourself. Nothing here routes, filters or summarizes —
-   you are the router. If a message doesn't concern you, say so in one line
-   or ignore it.
-5. Keep messages short. Anything over 8 KiB is refused: that is a note.
-6. Reply the way you were reached — the sender's name is in the prefix of
-   the message you received.
-";
+fn strip_frontmatter(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return text;
+    };
+    match rest.find("\n---\n") {
+        Some(at) => rest[at + "\n---\n".len()..].trim_start_matches('\n'),
+        None => text,
+    }
+}
 
 /// What a pane is, which decides whether it can be *sent* to. Owned
 /// sessions carry their role in the name (`tg_term`, `tg_edit`), so the
@@ -970,9 +968,50 @@ mod tests {
     }
 
     #[test]
-    fn the_protocol_text_documents_the_commands_it_ships_with() {
-        for command in ["text-graph roster", "text-graph send", "text-graph peek"] {
-            assert!(PROTOCOL.contains(command), "protocol forgot {command}");
+    fn the_skill_documents_the_commands_it_ships_with() {
+        for command in [
+            "text-graph roster",
+            "text-graph send",
+            "text-graph peek",
+            "text-graph stats",
+        ] {
+            assert!(
+                protocol_text().contains(command),
+                "the skill forgot {command}"
+            );
         }
+    }
+
+    /// The installed directory is named after the frontmatter, and the
+    /// printed text must not start with YAML nobody asked to read.
+    #[test]
+    fn the_skill_is_a_skill_file_and_prints_as_prose() {
+        let file = skill_file();
+        assert!(file.starts_with("---\n"), "no frontmatter");
+        assert!(
+            file.contains("\nname: text-graph\n"),
+            "the skill must be named"
+        );
+        assert!(
+            file.contains("\ndescription: "),
+            "a skill is found by its description"
+        );
+
+        let body = protocol_text();
+        assert!(
+            body.starts_with("# Working in a text-graph vault"),
+            "{:?}",
+            &body[..40]
+        );
+        assert!(
+            !body.contains("description: "),
+            "frontmatter leaked into the printout"
+        );
+
+        assert_eq!(
+            strip_frontmatter("no frontmatter here"),
+            "no frontmatter here"
+        );
+        assert_eq!(strip_frontmatter("---\nname: x\n---\n\nbody\n"), "body\n");
     }
 }
