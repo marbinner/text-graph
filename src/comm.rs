@@ -23,14 +23,29 @@
 //!   map iteration, so two agents reading it see the same list in the same
 //!   order.
 //!
-//! This module stays egui-free and tmux-free: it is the join, the ordering,
-//! the addressing rules and the rendering. The subcommands in `main.rs` are
-//! what actually shells out.
+//! This module stays egui-free: it owns the join, the ordering, the
+//! addressing rules, the rendering and the tmux calls the trio needs.
+//! `main.rs` only parses arguments and prints what comes back.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use crate::agents::{AgentPane, PaneInfo};
+use crate::agents::{self, AgentPane, PaneInfo};
+
+/// Deadline for the CLI's own tmux calls. Longer than discovery's 1s
+/// (a capture of deep history is more work than listing panes), short
+/// enough that a wedged server never holds an agent's shell for long.
+const CLI_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How many lines `peek` shows without being asked, and the ceiling on
+/// asking: a capture is text an agent must then read, so an unbounded
+/// `-n` spends someone else's context.
+pub const PEEK_DEFAULT: usize = 40;
+pub const PEEK_MAX: usize = 2000;
+
+/// Roster tails are a glance, not a read — `peek` is the read.
+const TAIL_CHARS: usize = 60;
 
 /// The conventions `text-graph protocol` prints. This is the whole of the
 /// protocol: there is no schema and no framing, because the participants
@@ -351,6 +366,98 @@ pub fn epoch_now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Who is live in `vault` right now, sorted and ready to address.
+///
+/// The [`agents::Tracker`] is fresh every run, which one-shot processes
+/// can't avoid: its stickiness is memory across scans. The consequence is
+/// worth knowing — a FOREIGN pane (no `tg_` owner marker) is only visible
+/// while its foreground command is still the agent binary, so one that is
+/// deep in a tool call reads as absent. Sessions the graph launched carry
+/// the owner marker and are unaffected.
+pub fn live(socket: Option<&str>, vault: &Path) -> Result<Vec<Entry>, String> {
+    let panes = agents::scan(socket, vault)?;
+    let allowlist = agents::default_allowlist();
+    let active = agents::Tracker::new().update(&panes, &allowlist, Instant::now());
+    Ok(roster(vault, &panes, &active))
+}
+
+/// The last `lines` lines of a pane that carry anything, oldest first.
+///
+/// `-S -n` starts n lines up in the history and runs to the bottom of the
+/// screen, so the capture is longer than asked; trimming the blank tail a
+/// screen always has and then keeping the last `lines` gives "the last N
+/// lines that say something", which is what a reader wanted.
+pub fn capture(socket: Option<&str>, pane: &str, lines: usize) -> Result<Vec<String>, String> {
+    let start = format!("-{}", lines.min(PEEK_MAX));
+    let text = capture_raw(socket, pane, &start)?;
+    let mut out: Vec<String> = text.lines().map(str::to_string).collect();
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    let keep = lines.min(PEEK_MAX);
+    if out.len() > keep {
+        out.drain(..out.len() - keep);
+    }
+    Ok(out)
+}
+
+/// Fill in each entry's [`Entry::tail`] — one capture per pane, best
+/// effort: a pane that dies between the scan and the capture costs its
+/// last line, never the roster.
+pub fn fill_tails(socket: Option<&str>, entries: &mut [Entry]) {
+    for entry in entries.iter_mut() {
+        entry.tail = capture_raw(socket, &entry.pane, "0")
+            .ok()
+            .and_then(|text| last_non_blank(&text));
+    }
+}
+
+/// `capture-pane -p` without `-e`: plain text, since the reader is a
+/// language model and escape sequences are noise it would have to parse.
+fn capture_raw(socket: Option<&str>, pane: &str, start: &str) -> Result<String, String> {
+    let mut command =
+        agents::tmux_command(socket, &["capture-pane", "-p", "-t", pane, "-S", start]);
+    let out = agents::lifecycle_output_with_timeout(&mut command, CLI_TIMEOUT).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "tmux is not installed".to_string()
+        } else {
+            e.to_string()
+        }
+    })?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(if agents::no_server(&stderr) {
+            "no tmux server is running".to_string()
+        } else {
+            stderr.trim().to_string()
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn last_non_blank(text: &str) -> Option<String> {
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(tidy_tail)
+}
+
+/// One roster cell's worth of a terminal line: control characters gone
+/// (a capture can carry them even without `-e`) and clipped, so a wide
+/// TUI can't push the table apart.
+fn tidy_tail(line: &str) -> String {
+    let cleaned: String = line
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.chars().count() <= TAIL_CHARS {
+        return cleaned.to_string();
+    }
+    cleaned.chars().take(TAIL_CHARS - 1).collect::<String>() + "…"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +637,22 @@ mod tests {
         );
         assert!(!lines[2].ends_with(' '), "no trailing padding");
         assert!(render_roster(&[], 1000, None).is_empty());
+    }
+
+    #[test]
+    fn tails_are_one_glance_wide_and_free_of_control_bytes() {
+        assert_eq!(
+            last_non_blank("first\nlast line here\n\n   \n").as_deref(),
+            Some("last line here"),
+            "the blank tail every screen has is not the last line"
+        );
+        assert_eq!(last_non_blank("   \n\n"), None);
+        let noisy = format!("busy{}spinner", '\u{7}');
+        assert_eq!(tidy_tail(&noisy), "busy spinner");
+        let long = "x".repeat(TAIL_CHARS + 20);
+        let clipped = tidy_tail(&long);
+        assert_eq!(clipped.chars().count(), TAIL_CHARS);
+        assert!(clipped.ends_with('…'));
     }
 
     #[test]

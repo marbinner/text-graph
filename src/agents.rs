@@ -31,7 +31,10 @@ fn lifecycle_output(cmd: &mut Command) -> std::io::Result<Output> {
     lifecycle_output_with_timeout(cmd, LIFECYCLE_TIMEOUT)
 }
 
-fn lifecycle_output_with_timeout(cmd: &mut Command, timeout: Duration) -> std::io::Result<Output> {
+pub(crate) fn lifecycle_output_with_timeout(
+    cmd: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<Output> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -52,6 +55,17 @@ fn lifecycle_output_with_timeout(cmd: &mut Command, timeout: Duration) -> std::i
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// A `tmux` invocation against the default server, or a private `-L` one
+/// for tests. The single place the socket flag is spelled.
+pub(crate) fn tmux_command(socket: Option<&str>, args: &[&str]) -> Command {
+    let mut command = Command::new("tmux");
+    if let Some(socket) = socket {
+        command.args(["-L", socket]);
+    }
+    command.args(args);
+    command
 }
 
 /// A raw tmux pane whose cwd is inside the vault (pre-filtering).
@@ -449,9 +463,10 @@ pub fn scan(socket: Option<&str>, vault: &Path) -> Result<Vec<PaneInfo>, String>
     Ok(parse_scan_bytes(&out.stdout, vault))
 }
 
-/// A non-zero `list-panes` exit that just means "no server on this
-/// socket" — tmux phrases it both ways depending on version/state.
-fn no_server(stderr: &str) -> bool {
+/// A non-zero exit that just means "no server on this socket" — tmux
+/// phrases it both ways depending on version/state. Shared with the
+/// messaging CLI, where it likewise means "nobody is here", not a failure.
+pub(crate) fn no_server(stderr: &str) -> bool {
     stderr.contains("no server running") || stderr.contains("error connecting")
 }
 

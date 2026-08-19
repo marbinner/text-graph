@@ -74,3 +74,81 @@ fn stats_accepts_a_non_utf8_vault_path() {
     assert!(String::from_utf8_lossy(&stats.stdout).contains("1 files"));
     cleanup.expect("remove non-UTF-8 vault");
 }
+
+/// A scratch directory to run the messaging commands from — never the
+/// repo, where the user's own tmux may well have a pane whose cwd is
+/// inside it and would show up in the roster.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("tg-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create scratch dir");
+    dir
+}
+
+/// A socket name no server listens on: tmux says so, and "nobody is here"
+/// is an answer, not a failure.
+fn dead_socket() -> String {
+    format!("tg-cli-absent-{}", std::process::id())
+}
+
+#[test]
+fn protocol_prints_the_conventions() {
+    let out = output(text_graph().arg("protocol"));
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("text-graph send <agent> <msg>"));
+    assert!(stdout.contains("conclusions go in the vault"));
+}
+
+#[test]
+fn help_lists_the_messaging_commands() {
+    let help = output(text_graph().arg("--help"));
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    for command in [
+        "text-graph roster",
+        "text-graph peek",
+        "text-graph protocol",
+    ] {
+        assert!(stdout.contains(command), "usage forgot {command}: {stdout}");
+    }
+}
+
+#[test]
+fn an_empty_roster_is_success_not_an_error() {
+    let dir = scratch("roster");
+    let out = output(
+        text_graph()
+            .current_dir(&dir)
+            .args(["roster", "-L", &dead_socket()]),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("no live agents in"));
+}
+
+#[test]
+fn malformed_messaging_commands_exit_two() {
+    let dir = scratch("usage");
+    let cases: [&[&str]; 4] = [
+        &["peek"],
+        &["peek", "someone", "-n", "zero"],
+        &["peek", "someone", "-n"],
+        &["roster", "--bogus"],
+    ];
+    for case in cases {
+        let out = output(text_graph().current_dir(&dir).args(case));
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{case:?} should be a usage error: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(out.stdout.is_empty(), "{case:?} printed to stdout");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
