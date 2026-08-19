@@ -324,6 +324,16 @@ Creation helpers also refuse overwrites, symlinked destination directories,
 and subtrees such as `target/` or `node_modules/` that the scanner deliberately
 prunes.
 
+What it runs, and what it doesn't: text-graph spawns the processes you ask it
+to — your `$EDITOR`, your terminal emulator, the agent you pick from the
+right-click menu — and talks to tmux over its control protocol. It makes **no
+network requests of its own**: nothing phones home, and a URL cited in a note
+becomes a node without ever being fetched (opening one hands it to your
+browser). Writes are limited to the hidden `.text-graph/` state directory, the
+file or folder you explicitly create, your own `~/.config/text-graph/config`,
+and the skill file when you run `protocol --install`. Your notes are never
+edited.
+
 ## Creating from the graph
 
 Right-click is the creation surface; everything lands relative to the node
@@ -625,6 +635,22 @@ settle, content search) — `fixtures/gen-stress.sh N` generates large
 synthetic vaults — and the ⚙ *frame statistics* setting overlays
 per-stage frame times and the repaint rate in the running viewer.
 
-House rules: if you touch `fixtures/vault/`, re-count `fixtures/EXPECTED.md`
-and update the tests in the same commit — the numbers are asserted exactly.
-One commit per change. See `CLAUDE.md` for the details that bite.
+## Contributing
+
+Every line of text-graph was written by an AI agent working from a human's
+direction, and contributions written the same way are welcome. `CONTRIBUTING.md`
+has the whole ask; the short version is that `scripts/check.sh` is the entire
+gate, changes land one coherent commit at a time, new behavior comes with a
+test named as a sentence, and invariants belong in the compiler or a test
+rather than in prose. `CLAUDE.md` is the map an agent should read before
+editing; `PLAN.md` carries the roadmap and the decisions behind it.
+
+## License
+
+MIT OR Apache-2.0, at your option — see `LICENSE-MIT` and `LICENSE-APACHE`.
+
+The two bundled fonts are licensed separately under the SIL Open Font License
+1.1: `assets/reading.ttf` is a Latin subset of Inter, `assets/icons.ttf` a
+35-glyph subset of JetBrainsMono Nerd Font Propo. `THIRD-PARTY.md` says what
+was subset from what, and `assets/LICENSE-OFL-1.1.txt` carries the OFL text
+with both copyright notices.
