@@ -452,6 +452,25 @@ text-graph peek <agent> [-n N]     read the last N lines of their screen
 text-graph protocol                the conventions, for a newcomer
 ```
 
+How does an agent know these exist? A message teaches whoever receives it —
+it arrives prefixed with who sent it and the command to answer — but the
+first mover has to be told, so text-graph ships as a **skill**:
+
+```
+text-graph protocol --install          <vault>/.claude/skills/text-graph/SKILL.md
+text-graph protocol --install --user   ~/.claude/skills/text-graph/SKILL.md
+```
+
+A harness keeps only the skill's one-line description in context and loads
+the body when it turns out to matter, so the standing cost is a sentence and
+the depth — what the vault is as a graph, how to reach the others, the
+conventions — is there when an agent actually needs it. `--user` installs it
+once for every vault you open; the in-vault install is for a vault you hand to
+someone else, and it also leaves four lines in `AGENTS.md` for harnesses that
+don't do skills. Both are idempotent, and only the text between text-graph's
+markers in `AGENTS.md` is ever rewritten. `.claude/` is hidden, so the skill
+never becomes nodes and never triggers a reload.
+
 The vault is found from the working directory (nearest `.text-graph/`, like
 git), so none of these take a path. `roster` names each agent, its session,
 how long its pane has been quiet, where it is working and its last line;
@@ -533,6 +552,8 @@ src/
 scripts/
   check.sh    the full local gate chain (mirrors CI), exit-code gated
 assets/
+  skill.md            the agent-facing skill: what a vault is, how agents talk
+                      (compiled in; `protocol` prints it, `--install` writes it)
   icons.ttf           bundled Nerd Font subset for file-type glyphs (OFL-1.1)
   gen-icons-font.sh   regenerates it; codepoints mirror src/filetype.rs
   reading.ttf         bundled Inter subset (OFL-1.1) — the face rendered

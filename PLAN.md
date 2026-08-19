@@ -1,6 +1,6 @@
 # text-graph — Plan
 
-*Last updated 2026-08-19 (v0.3.0, 310 tests). Where to pick up: milestone F
+*Last updated 2026-08-19 (v0.3.0, 315 tests). Where to pick up: milestone F
 (agents talk) — F1 (the CLI trio) SHIPPED 2026-08-19; next is F2, the
 two-agent experiment that gates F3–F6. Still queued behind it: jump history (Ctrl+O/I), Phase 2
 step 0, the audit backlog under D. The 2026-08-15 feature wave: asset
@@ -379,6 +379,18 @@ types into a pane on its own — only agents and the human do.
    without it a `cargo run` viewer hands its agents a `text-graph` that
    does not exist. Integration test on a private socket
    (`tests/comm_cli.rs`) with `cat` panes standing in for agents.
+
+   Discovery came next, on the user's suggestion: a message teaches its
+   RECEIVER (prefix + reply line), but the first mover had nothing, so the
+   agent-facing text became a SKILL — `assets/skill.md`, one compiled-in
+   source that `protocol` prints and `protocol --install [--user]` writes
+   to `.claude/skills/text-graph/SKILL.md`. Progressive disclosure is the
+   point: a harness carries one description line and loads the body on
+   demand, so the text can afford to teach the whole tool (the graph
+   model, so agents write link-rich notes; the trio; the conventions;
+   `stats`). A vault install also leaves a marked pointer block in
+   AGENTS.md for harnesses without skills — that file is the owner's, so
+   only the marked text is ours and a symlinked one is refused.
 
    Decisions made while building, worth keeping: shells and editor cards
    are listed and peekable but never send targets (a paste into a shell

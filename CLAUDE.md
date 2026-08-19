@@ -153,7 +153,13 @@
   panes mid-tool-call read as absent, and `agents::launch_path` puts our
   own binary's directory FIRST or a `cargo run` viewer hands its agents a
   `text-graph` that doesn't exist. `tests/comm_cli.rs` drives the real
-  binary against a private socket.
+  binary against a private socket. The agent-facing text lives ONCE, in
+  `assets/skill.md` (a SKILL file, frontmatter included, `include_str!`'d):
+  `protocol` prints its body, `--install` writes the file verbatim — never
+  restate the conventions anywhere else. An install owns the namespaced
+  skill file wholesale but only the marked block in the vault's AGENTS.md
+  (their file; a symlinked one is refused), and `update_pointer` is pure
+  because that splice is what could eat someone's notes.
 - Keybinds are ROWS in `app/keymap.rs`'s `BINDINGS` table — chords,
   guard, press kind, ⚙ doc row, precondition, action — dispatched
   first-match in table order, with `widget_free` and key-repeat applied
