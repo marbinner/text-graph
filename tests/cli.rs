@@ -134,11 +134,13 @@ fn an_empty_roster_is_success_not_an_error() {
 #[test]
 fn malformed_messaging_commands_exit_two() {
     let dir = scratch("usage");
-    let cases: [&[&str]; 4] = [
+    let cases: [&[&str]; 6] = [
         &["peek"],
         &["peek", "someone", "-n", "zero"],
         &["peek", "someone", "-n"],
         &["roster", "--bogus"],
+        &["send"],
+        &["send", "someone"],
     ];
     for case in cases {
         let out = output(text_graph().current_dir(&dir).args(case));

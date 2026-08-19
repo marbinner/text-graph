@@ -47,6 +47,12 @@ pub const PEEK_MAX: usize = 2000;
 /// Roster tails are a glance, not a read — `peek` is the read.
 const TAIL_CHARS: usize = 60;
 
+/// The biggest message that may be typed into another agent's prompt.
+/// Not a buffer limit — a design one: past this you are writing a
+/// document at someone, and the vault is where documents go. Refusing is
+/// how the "chatter in terminals, conclusions in notes" rule gets teeth.
+pub const MAX_MESSAGE: usize = 8 * 1024;
+
 /// The conventions `text-graph protocol` prints. This is the whole of the
 /// protocol: there is no schema and no framing, because the participants
 /// are language models reading a terminal. The first ping teaches a
@@ -458,6 +464,196 @@ fn tidy_tail(line: &str) -> String {
     cleaned.chars().take(TAIL_CHARS - 1).collect::<String>() + "…"
 }
 
+/// Who a message is from, as the receiving agent will read it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Sender {
+    /// Another pane on the roster: it can be replied to by name.
+    Agent {
+        name: String,
+        /// Session name — the address that can never be ambiguous.
+        address: String,
+        place: String,
+    },
+    /// No `$TMUX_PANE`: someone typed this at an ordinary terminal.
+    Human,
+    /// In tmux, but not a pane discovery lists (outside the vault, or a
+    /// window this scan didn't accept). Attribution degrades to the pane
+    /// id rather than lying about who spoke.
+    Unlisted { pane: String },
+}
+
+/// Identify the caller from `$TMUX_PANE`. The environment variable is
+/// tmux's own, set in every pane it spawns, so it needs no cooperation
+/// from the agent — which matters, because attribution a sender can
+/// forge by argument is attribution nobody can trust.
+pub fn sender_from(entries: &[Entry], tmux_pane: Option<&str>) -> Sender {
+    let Some(pane) = tmux_pane else {
+        return Sender::Human;
+    };
+    match entries.iter().find(|e| e.pane == pane) {
+        Some(me) => Sender::Agent {
+            name: me.agent.clone(),
+            address: me.session.clone(),
+            place: me.place.clone(),
+        },
+        None => Sender::Unlisted {
+            pane: pane.to_string(),
+        },
+    }
+}
+
+/// What actually gets typed into the target's prompt: one attribution
+/// line, the message verbatim, and (from an agent) one line telling the
+/// reader how to answer.
+///
+/// The reply hint is stateless and unconditional — tracking "have these
+/// two spoken before" would need a state file, which is the mail
+/// directory this design refuses. Whether it earns its line is a question
+/// for the F2 experiment, when two real agents have used it.
+pub fn compose(sender: &Sender, message: &str) -> String {
+    let (attribution, footer) = match sender {
+        Sender::Agent {
+            name,
+            address,
+            place,
+        } => (
+            format!("[tg] from {name} · at {place}"),
+            Some(format!(
+                "(reply: text-graph send {address} \"…\" · then: text-graph protocol)"
+            )),
+        ),
+        Sender::Human => (
+            "[tg] from the human · answer in your own terminal".to_string(),
+            None,
+        ),
+        Sender::Unlisted { pane } => (
+            format!("[tg] from tmux pane {pane}"),
+            Some("(conventions: text-graph protocol)".to_string()),
+        ),
+    };
+    let mut out = format!("{attribution}\n{}", message.trim_end());
+    if let Some(footer) = footer {
+        out.push('\n');
+        out.push_str(&footer);
+    }
+    out
+}
+
+/// Why a message wasn't delivered. Every variant names what to do instead:
+/// the sender is a model that will try again immediately.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SendError {
+    Empty,
+    TooLong(usize),
+    NotAnAgent { session: String, kind: Kind },
+    Yourself { session: String },
+    Tmux(String),
+}
+
+impl fmt::Display for SendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SendError::Empty => write!(f, "nothing to send"),
+            SendError::TooLong(bytes) => write!(
+                f,
+                "message is {bytes} bytes, over the {MAX_MESSAGE}-byte limit — write it as a note and send the link instead"
+            ),
+            SendError::NotAnAgent { session, kind } => {
+                let what = match kind {
+                    Kind::Shell => "a shell: a message pasted there would RUN as a command",
+                    Kind::Editor => "an editor: a message pasted there would land in a file",
+                    Kind::Agent => "not an agent",
+                };
+                write!(f, "{session} is {what} (peek at it instead)")
+            }
+            SendError::Yourself { session } => {
+                write!(f, "{session} is your own pane — talk to yourself elsewhere")
+            }
+            SendError::Tmux(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+/// Type `message` into `target`'s pane and submit it.
+///
+/// The delivery path is tmux's own paste machinery, for the reason
+/// documented on [`crate::keys::paste_cmds`]: `paste-buffer -p` wraps the
+/// text in bracketed-paste markers only if the receiving application asked
+/// for them, and only the SERVER knows that. Deciding it here would
+/// silently submit a multi-line message one line at a time. The buffer is
+/// filled from stdin (`load-buffer -`) so no quoting question arises, and
+/// named by our pid so two senders can't overwrite each other between
+/// filling and pasting.
+pub fn send(
+    socket: Option<&str>,
+    target: &Entry,
+    sender: &Sender,
+    message: &str,
+) -> Result<(), SendError> {
+    if message.trim().is_empty() {
+        return Err(SendError::Empty);
+    }
+    if message.len() > MAX_MESSAGE {
+        return Err(SendError::TooLong(message.len()));
+    }
+    if !target.kind.addressable() {
+        return Err(SendError::NotAnAgent {
+            session: target.session.clone(),
+            kind: target.kind,
+        });
+    }
+    if let Sender::Agent { address, .. } = sender
+        && address == &target.session
+    {
+        return Err(SendError::Yourself {
+            session: target.session.clone(),
+        });
+    }
+
+    let buffer = format!("tg_send_{}", std::process::id());
+    let text = compose(sender, message);
+    let mut load = agents::tmux_command(socket, &["load-buffer", "-b", &buffer, "-"]);
+    run(
+        agents::output_with_stdin(&mut load, text.as_bytes(), CLI_TIMEOUT),
+        "load-buffer",
+    )?;
+    // -d drops the one-shot buffer as it pastes
+    let mut paste = agents::tmux_command(
+        socket,
+        &["paste-buffer", "-dp", "-b", &buffer, "-t", &target.pane],
+    );
+    run(
+        agents::lifecycle_output_with_timeout(&mut paste, CLI_TIMEOUT),
+        "paste-buffer",
+    )?;
+    // separate from the paste on purpose: inside the bracketed markers a
+    // newline is text, so the submit has to arrive after them
+    let mut enter = agents::tmux_command(socket, &["send-keys", "-t", &target.pane, "Enter"]);
+    run(
+        agents::lifecycle_output_with_timeout(&mut enter, CLI_TIMEOUT),
+        "send-keys",
+    )
+}
+
+fn run(result: std::io::Result<std::process::Output>, what: &str) -> Result<(), SendError> {
+    let out = result.map_err(|e| {
+        SendError::Tmux(if e.kind() == std::io::ErrorKind::NotFound {
+            "tmux is not installed".to_string()
+        } else {
+            format!("{what}: {e}")
+        })
+    })?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Err(SendError::Tmux(if stderr.trim().is_empty() {
+        format!("{what} failed")
+    } else {
+        format!("{what}: {}", stderr.trim())
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,6 +849,96 @@ mod tests {
         let clipped = tidy_tail(&long);
         assert_eq!(clipped.chars().count(), TAIL_CHARS);
         assert!(clipped.ends_with('…'));
+    }
+
+    #[test]
+    fn attribution_comes_from_the_pane_the_caller_is_in() {
+        let vault = Path::new("/v");
+        let entries = roster(
+            vault,
+            &[],
+            &[
+                agent_pane("tg_claude", "%1", "claude", true),
+                agent_pane("tg_pi", "%2", "pi", true),
+            ],
+        );
+        assert_eq!(
+            sender_from(&entries, Some("%2")),
+            Sender::Agent {
+                name: "pi".into(),
+                address: "tg_pi".into(),
+                place: ".".into()
+            }
+        );
+        assert_eq!(sender_from(&entries, None), Sender::Human);
+        assert_eq!(
+            sender_from(&entries, Some("%9")),
+            Sender::Unlisted { pane: "%9".into() },
+            "an unknown pane is named, never attributed to someone else"
+        );
+    }
+
+    #[test]
+    fn composed_messages_carry_a_reply_route() {
+        let from = Sender::Agent {
+            name: "pi".into(),
+            address: "tg_pi".into(),
+            place: "topics".into(),
+        };
+        let text = compose(&from, "does §2 still hold?\n");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "[tg] from pi · at topics");
+        assert_eq!(lines[1], "does §2 still hold?", "the message is verbatim");
+        assert_eq!(
+            lines[2], "(reply: text-graph send tg_pi \"…\" · then: text-graph protocol)",
+            "exact, because this text is typed into someone's prompt"
+        );
+        assert_eq!(lines.len(), 3, "three lines, no padding: {text:?}");
+
+        let human = compose(&Sender::Human, "stop and look at the build");
+        assert!(human.starts_with("[tg] from the human"));
+        assert!(
+            !human.contains("reply: text-graph send"),
+            "a human at a terminal has no roster address to reply to"
+        );
+    }
+
+    #[test]
+    fn refusals_that_protect_the_receiver() {
+        let vault = Path::new("/v");
+        let entries = roster(
+            vault,
+            &[],
+            &[
+                agent_pane("tg_term", "%1", "term", true),
+                agent_pane("tg_pi", "%2", "pi", true),
+            ],
+        );
+        let shell = entries.iter().find(|e| e.session == "tg_term").unwrap();
+        let pi = entries.iter().find(|e| e.session == "tg_pi").unwrap();
+        let me = sender_from(&entries, Some("%2"));
+
+        // no tmux is reached in any of these: the guards come first
+        let error = send(None, shell, &me, "hello").unwrap_err();
+        assert!(error.to_string().contains("RUN as a command"), "{error}");
+        let error = send(None, pi, &me, "hello").unwrap_err();
+        assert_eq!(
+            error,
+            SendError::Yourself {
+                session: "tg_pi".into()
+            }
+        );
+        let stranger = Sender::Human;
+        assert_eq!(
+            send(None, pi, &stranger, "   ").unwrap_err(),
+            SendError::Empty
+        );
+        let huge = "x".repeat(MAX_MESSAGE + 1);
+        let error = send(None, pi, &stranger, &huge).unwrap_err();
+        assert!(
+            error.to_string().contains("write it as a note"),
+            "the limit has to teach the convention: {error}"
+        );
     }
 
     #[test]

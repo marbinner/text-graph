@@ -13,6 +13,7 @@ mod app;
 /// exactly what a headless box would install.
 const COMM_USAGE: &str = "\
   text-graph roster               who else is live in this vault
+  text-graph send <agent> <msg>   type a message into an agent's terminal
   text-graph peek <agent> [-n N]  the last N lines of an agent's screen
   text-graph protocol             how agents talk here
 ";
@@ -68,6 +69,7 @@ fn main() -> ExitCode {
             }
         },
         [command, rest @ ..] if is(command, "roster") => report(run_roster(rest)),
+        [command, rest @ ..] if is(command, "send") => report(run_send(rest)),
         [command, rest @ ..] if is(command, "peek") => report(run_peek(rest)),
         [command] if is(command, "protocol") => {
             print!("{}", comm::PROTOCOL);
@@ -178,6 +180,41 @@ fn run_roster(args: &[OsString]) -> Result<(), CliError> {
         "{}",
         comm::render_roster(&entries, comm::epoch_now(), self_pane.as_deref())
     );
+    Ok(())
+}
+
+fn run_send(args: &[OsString]) -> Result<(), CliError> {
+    let args = parse_comm(args)?;
+    let [target, rest @ ..] = args.positional.as_slice() else {
+        return Err(CliError::Usage(
+            "send <agent> <message>   (message of \"-\" is read from stdin)".into(),
+        ));
+    };
+    // unquoted words are joined back into the sentence the sender meant:
+    // a model that forgets its quotes should not have its message eaten
+    let message = match rest {
+        [] => {
+            return Err(CliError::Usage(
+                "send <agent> <message>   (message of \"-\" is read from stdin)".into(),
+            ));
+        }
+        [only] if only == "-" => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .map_err(|e| CliError::Failed(format!("cannot read the message: {e}")))?;
+            text
+        }
+        words => words.join(" "),
+    };
+
+    let vault = here()?;
+    let socket = args.socket.as_deref();
+    let entries = comm::live(socket, &vault).map_err(CliError::Failed)?;
+    let target = comm::resolve(&entries, target).map_err(|e| CliError::Failed(e.to_string()))?;
+    let self_pane = std::env::var("TMUX_PANE").ok();
+    let sender = comm::sender_from(&entries, self_pane.as_deref());
+    comm::send(socket, target, &sender, &message).map_err(|e| CliError::Failed(e.to_string()))?;
+    println!("sent to {} ({})", target.agent, target.session);
     Ok(())
 }
 

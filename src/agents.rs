@@ -35,11 +35,44 @@ pub(crate) fn lifecycle_output_with_timeout(
     cmd: &mut Command,
     timeout: Duration,
 ) -> std::io::Result<Output> {
-    let mut child = cmd
+    let child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    wait_with_deadline(child, timeout)
+}
+
+/// Same deadline, with `data` fed to the command's stdin — how the
+/// messaging CLI fills a tmux buffer (`load-buffer -`), where putting the
+/// text in argv would mean quoting it. Write-then-wait is only safe
+/// because the commands used this way answer with nothing: a reply larger
+/// than a pipe buffer would deadlock against our unread stdout.
+pub(crate) fn output_with_stdin(
+    cmd: &mut Command,
+    data: &[u8],
+    timeout: Duration,
+) -> std::io::Result<Output> {
+    use std::io::Write as _;
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(data)?;
+        // dropped here: tmux waits for EOF before it stores the buffer
+    }
+    wait_with_deadline(child, timeout)
+}
+
+/// Poll to the deadline, then kill: a wedged server must not occupy the
+/// caller forever (in the viewer that is a worker and its UI slot; in the
+/// CLI it is an agent's blocked shell).
+fn wait_with_deadline(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Output> {
     let started = Instant::now();
     loop {
         if child.try_wait()?.is_some() {
