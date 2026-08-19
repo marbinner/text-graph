@@ -69,7 +69,7 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "text-graph";
-  version = "0.3.0"; # keep in step with Cargo.toml
+  version = "0.4.0"; # keep in step with Cargo.toml
 
   # Explicit fileset, so editing README/CLAUDE.md/PLAN.md does not rebuild.
   # fixtures/, tests/ and examples/ are here because the check phase needs

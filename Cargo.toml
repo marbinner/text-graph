@@ -1,6 +1,6 @@
 [package]
 name = "text-graph"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Native graph viewer for a folder of markdown notes, with live tmux agent terminals in the graph"

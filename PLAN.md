@@ -1,6 +1,6 @@
 # text-graph — Plan
 
-*Last updated 2026-08-19 (v0.3.0, 315 tests). Where to pick up: milestone F
+*Last updated 2026-08-19 (v0.4.0, 315 tests). Where to pick up: milestone F
 (agents talk) — F1 (the CLI trio) SHIPPED 2026-08-19; next is F2, the
 two-agent experiment that gates F3–F6. Still queued behind it: jump history (Ctrl+O/I), Phase 2
 step 0, the audit backlog under D. The 2026-08-15 feature wave: asset
