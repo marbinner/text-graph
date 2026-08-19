@@ -20,7 +20,9 @@ else
 fi
 
 if cargo audit --version >/dev/null 2>&1; then
-    cargo audit
+    # keep these in step with the `ignore:` list in .github/workflows/ci.yml,
+    # or "mirrors CI" stops being true
+    cargo audit --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2024-0320
 else
     echo "note: cargo-audit not installed — advisory check left to CI" >&2
 fi

@@ -40,3 +40,10 @@ jobs:
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # UNMAINTAINED notices, not vulnerabilities, and not ours to fix:
+          # both crates come from syntect (bincode via its dump loader,
+          # yaml-rust via its syntax loader), which egui_commonmark's backend
+          # enables too — so feature-trimming can't drop them and losing them
+          # means losing source highlighting. Vulnerability advisories still
+          # fail this job. Revisit when syntect moves off either crate.
+          ignore: RUSTSEC-2025-0141,RUSTSEC-2024-0320
