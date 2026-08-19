@@ -14,6 +14,13 @@ cargo run --release -- ~/notes          # open the graph window
 cargo run --release -- stats ~/notes    # headless statistics
 ```
 
+![text-graph showing the bundled fixture vault: folders, notes, an image and
+two ghost nodes in a force-directed graph](docs/screenshot.png)
+
+*The bundled `fixtures/vault` — folders as bright nodes, notes as file nodes,
+hollow circles for links to notes that don't exist yet, and the status line
+carrying the keys.*
+
 ## Install
 
 There is a flake, so on NixOS — or anywhere with nix flakes — nothing needs to
