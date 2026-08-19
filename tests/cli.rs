@@ -113,7 +113,12 @@ fn help_lists_the_messaging_commands() {
         "text-graph peek",
         "text-graph protocol",
     ] {
-        assert!(stdout.contains(command), "usage forgot {command}: {stdout}");
+        // with its leading indent: a `\`-continued literal silently eats the
+        // whitespace of its first line, which is exactly how this broke once
+        assert!(
+            stdout.contains(&format!("\n  {command}")),
+            "usage forgot (or unindented) {command}:\n{stdout}"
+        );
     }
 }
 

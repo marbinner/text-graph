@@ -11,8 +11,7 @@ mod app;
 /// The subcommands agents run from inside their own tmux pane. Listed in
 /// both builds: messaging needs no window, and the GUI-free binary is
 /// exactly what a headless box would install.
-const COMM_USAGE: &str = "\
-  text-graph roster               who else is live in this vault
+const COMM_USAGE: &str = "  text-graph roster               who else is live in this vault
   text-graph send <agent> <msg>   type a message into an agent's terminal
   text-graph peek <agent> [-n N]  the last N lines of an agent's screen
   text-graph protocol [--install] how agents talk here (--install: as a skill)
