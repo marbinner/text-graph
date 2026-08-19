@@ -29,9 +29,11 @@
   `fixtures/gen-stress.sh N` makes big vaults); the ⚙ *frame statistics*
   setting overlays per-stage frame times in the running viewer. Measure
   BEFORE optimizing — both exist so perf work starts from numbers.
-- tmux tests: `tests/tmux_mirror.rs` spawns a real tmux on a **private socket**
-  (`tmux -L tg-test-<pid>`) and kills only that server; it skips (passes) when
-  tmux is absent. Never point tests at the user's default tmux server.
+- tmux tests: `tests/tmux_mirror.rs` (mirror) and `tests/comm_cli.rs` (the
+  messaging trio, driving the real binary) spawn a real tmux on a
+  **private socket** (`tmux -L tg-test-<pid>`) and kill only that server;
+  they skip (pass) when tmux is absent. Never point tests at the user's
+  default tmux server.
 - Viewer state machine: `src/app/kb_tests/` (topic modules — keybinds,
   finder, settings_window, pane, cards…) drives handle_keys, the
   hover popup, and apply_graph through egui_kittest (headless, no
@@ -139,6 +141,19 @@
   placement). Verify any scan-format change against a real server
   (`cargo run --example discovery_probe <vault>` — tmux octal-escapes
   `-F` output; tab passes raw).
+- Agents message each other through the CLI trio, not through the
+  viewer: `comm.rs`'s module doc is the contract (bus-free — a message is
+  a nudge, a note is the record; one-shot tmux, never control mode; a
+  deadline on every call because the caller is an agent's blocked shell;
+  the viewer NEVER sends; deterministic roster order), and `main.rs`
+  holds the argument parsing. Cross-module: the busy/idle signal is
+  `PaneInfo::activity` (window-scoped `#{window_activity}`, joined onto
+  the roster by (session, pane) because `AgentPane` must stay
+  repaint-stable), a one-shot process has no `Tracker` memory so foreign
+  panes mid-tool-call read as absent, and `agents::launch_path` puts our
+  own binary's directory FIRST or a `cargo run` viewer hands its agents a
+  `text-graph` that doesn't exist. `tests/comm_cli.rs` drives the real
+  binary against a private socket.
 - Keybinds are ROWS in `app/keymap.rs`'s `BINDINGS` table — chords,
   guard, press kind, ⚙ doc row, precondition, action — dispatched
   first-match in table order, with `widget_free` and key-repeat applied

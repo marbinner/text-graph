@@ -438,6 +438,41 @@ aware — pasting into claude doesn't submit on every newline. (tmux itself
 applies the markers from the pane's live mode, so this holds even for
 sessions that were already running when the viewer attached.)
 
+## Agents talking to each other
+
+Several agents in one vault need to reach each other, and the vault already
+provides everything that takes: they are all panes on the same tmux server.
+So there is no bus, no inbox, no daemon — four subcommands an agent runs from
+inside its own pane:
+
+```
+text-graph roster                  who else is live, and how long they've been quiet
+text-graph send <agent> <message>  type a message into another agent's terminal
+text-graph peek <agent> [-n N]     read the last N lines of their screen
+text-graph protocol                the conventions, for a newcomer
+```
+
+The vault is found from the working directory (nearest `.text-graph/`, like
+git), so none of these take a path. `roster` names each agent, its session,
+how long its pane has been quiet, where it is working and its last line;
+addressing accepts the harness name (`claude`), the session (`tg_claude`) or
+the pane id, and a name matching two sessions fails rather than picking one.
+
+A message arrives as if typed at the other agent's prompt — tmux's own paste
+machinery, so multi-line messages don't submit themselves a line at a time —
+prefixed with who sent it (from `$TMUX_PANE`, not from an argument) and one
+line saying how to answer. Their harness queues it if it's mid-turn.
+
+The conventions matter more than the commands: **chatter goes in terminals,
+conclusions go in the vault**. A message is a nudge; anything that should
+outlive the session is a note, linked from the notes it concerns, which is
+also how it becomes a node in the graph. Messages are capped at 8 KiB —
+past that you are writing a document at someone, and documents are notes.
+
+Two refusals are deliberate: a shell or editor card is listed and peekable
+but never a send target (a message pasted into a shell would *run*), and
+the viewer itself never sends. Only agents and you type into panes.
+
 ## Determinism
 
 Force-directed layouts are usually non-reproducible; this one isn't. The
@@ -473,6 +508,8 @@ src/
   mirror.rs   per-pane screens: vt100 parsers behind a TermGrid facade
   agents.rs   which tmux panes count as agents (allowlist, owner marker, grace) + launch
   keys.rs     keyboard → tmux commands (key names + raw hex + buffer pastes)
+  comm.rs     agent-to-agent messaging: the roster, addressing and delivery
+              behind `roster` / `send` / `peek` / `protocol`
   highlight.rs [gui feature] syntect source colouring as plain RGB spans
   search.rs   the picker's engine: fuzzy name/path scoring, literal content
               scanning (streamed from disk, never indexed), ranked rows

@@ -1,8 +1,8 @@
 # text-graph — Plan
 
-*Last updated 2026-08-16 (v0.3.0, 268 tests). Where to pick up: milestone F
-(agents talk) is fully spec'd below — design converged, NO code yet; start at
-slice F1 (CLI trio). Still queued behind it: jump history (Ctrl+O/I), Phase 2
+*Last updated 2026-08-19 (v0.3.0, 310 tests). Where to pick up: milestone F
+(agents talk) — F1 (the CLI trio) SHIPPED 2026-08-19; next is F2, the
+two-agent experiment that gates F3–F6. Still queued behind it: jump history (Ctrl+O/I), Phase 2
 step 0, the audit backlog under D. The 2026-08-15 feature wave: asset
 nodes + file-type icons, metadata hover popups everywhere,
 Obsidian-flavored previews, milestone G (web nodes), directed/tapered
@@ -366,16 +366,29 @@ matters" better than any router we'd write), so there is no watch list, no
 event queue, no digest machinery, no `mail/` directory, and the viewer never
 types into a pane on its own — only agents and the human do.
 
-1. **F1 — CLI trio** (lib `comm.rs`, egui-free; hand-parsed subcommands like
-   `stats`): `roster` (live agents: session, anchor, busy/idle via
-   `window_activity`, status line), `send <agent> <msg>` (paste-safe via
-   `load-buffer` + `paste-buffer -p` + Enter; sender attribution from
-   `$TMUX_PANE`; roster-validated addressing that fails loudly with
-   suggestions), `peek <agent> [-n]` (capture-pane wrapper), `protocol`
-   (prints the conventions: chatter in terminals, conclusions in notes; the
-   first ping teaches newcomers). Vault root found git-style: walk up from
-   cwd to the nearest `.text-graph/`, else cwd. Private-socket integration
-   test; scan-format additions verified against a real server.
+1. **F1 — CLI trio ✓ done 2026-08-19** (lib `comm.rs`, egui-free;
+   hand-parsed subcommands like `stats`): `roster`, `send <agent> <msg>`,
+   `peek <agent> [-n]`, `protocol`, all four in both builds. Shipped as
+   specified — buffer-paste delivery so the SERVER decides bracketing,
+   attribution from `$TMUX_PANE` (never an argument: forgeable
+   attribution is worthless), addressing by tag/session/pane id that
+   fails loudly with the live names, vault root found git-style from the
+   cwd. `#{window_activity}` joined the scan format second-to-last
+   (verified against tmux 3.4: it advances for DETACHED sessions), and
+   `agents::launch_path` now leads with our own binary's directory —
+   without it a `cargo run` viewer hands its agents a `text-graph` that
+   does not exist. Integration test on a private socket
+   (`tests/comm_cli.rs`) with `cat` panes standing in for agents.
+
+   Decisions made while building, worth keeping: shells and editor cards
+   are listed and peekable but never send targets (a paste into a shell
+   RUNS); messages cap at 8 KiB with an error that says to write a note
+   and send the link, which is how the convention gets teeth; the reply
+   hint is stateless and unconditional, because tracking "have these two
+   spoken" needs the state file this design refuses. Accepted limitation:
+   a one-shot process has no `Tracker` memory, so a FOREIGN pane (no
+   `tg_` owner marker) deep in a tool call reads as absent — owned
+   sessions are unaffected.
 2. **F2 — the experiment (decision point).** Two real `tg_` agents on a
    scratch vault negotiate one small artifact purely over `send`/`peek` and a
    shared topic note, no human relay. Ergonomics verdict gates the rest.
