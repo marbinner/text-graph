@@ -776,7 +776,7 @@ impl Viewer {
                         ctx.request_repaint();
                     }
                 };
-                match agents::scan(&root) {
+                match agents::scan(None, &root) {
                     Ok(panes) => {
                         failing_since = None;
                         if update_discovery_error(&discovery_error, None) {

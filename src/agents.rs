@@ -68,6 +68,14 @@ pub struct PaneInfo {
     /// card tethers to (edit sessions pin to their file). Stored IN tmux,
     /// so it survives viewer restarts and dies with the session.
     pub anchor: Option<String>,
+    /// `#{window_activity}` — epoch seconds of the window's last output,
+    /// None when tmux reported nothing numeric. Window-scoped: exact for
+    /// our single-pane `tg_` sessions, an approximation for foreign
+    /// multi-pane windows (where the mirror's own per-pane output
+    /// timestamps are the precise signal). Verified against tmux 3.4 that
+    /// it advances for DETACHED sessions, so telling busy from idle needs
+    /// no client attached.
+    pub activity: Option<u64>,
 }
 
 /// A pane the graph should show as an agent terminal.
@@ -83,6 +91,10 @@ pub struct AgentPane {
     pub ours: bool,
     /// See [`PaneInfo::anchor`].
     pub anchor: Option<String>,
+    // Deliberately NO activity field: the viewer's discovery thread
+    // republishes (and repaints) whenever this snapshot compares unequal,
+    // and a per-second timestamp would make every scan differ. Callers
+    // wanting freshness join [`PaneInfo::activity`] on (session, pane).
 }
 
 pub fn default_allowlist() -> Vec<String> {
@@ -393,9 +405,10 @@ pub fn kill_pane(pane: &str) -> std::io::Result<bool> {
     Ok(lifecycle_output(&mut command)?.status.success())
 }
 
-/// One-shot scan of the default tmux server. Returns every pane whose cwd is
-/// inside `vault`; allowlist and stickiness filtering happen in [`Tracker`].
-/// tmux absent or no server running → empty.
+/// One-shot scan of a tmux server (`socket` selects a private `-L` server
+/// for tests; the viewer passes None for the default one). Returns every
+/// pane whose cwd is inside `vault`; allowlist and stickiness filtering
+/// happen in [`Tracker`]. tmux absent or no server running → empty.
 ///
 /// Separator: TAB. tmux octal-escapes non-printables in format output
 /// (a 0x1f separator arrives as the literal text `\037` — tried it), but
@@ -403,14 +416,18 @@ pub fn kill_pane(pane: &str) -> std::io::Result<bool> {
 /// path can't shear the record; a tab inside a *session name* (legal but
 /// pathological) shifts the pid field, fails its numeric parse, and drops
 /// that line safely — the degradation is a missing card, never a
-/// mis-parsed one.
-pub fn scan(vault: &Path) -> Result<Vec<PaneInfo>, String> {
+/// mis-parsed one. `#{window_activity}` sits second-to-last for the same
+/// reason: a new field must never come after the path.
+pub fn scan(socket: Option<&str>, vault: &Path) -> Result<Vec<PaneInfo>, String> {
     let mut command = Command::new("tmux");
+    if let Some(socket) = socket {
+        command.args(["-L", socket]);
+    }
     command.args([
         "list-panes",
         "-a",
         "-F",
-        "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_owner}\t#{@tg_anchor}\t#{pane_current_path}",
+        "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}\t#{@tg_owner}\t#{@tg_anchor}\t#{window_activity}\t#{pane_current_path}",
     ]);
     let out = match lifecycle_output_with_timeout(&mut command, DISCOVERY_TIMEOUT) {
         Ok(output) => output,
@@ -446,7 +463,7 @@ fn parse_scan_bytes(text: &[u8], vault: &Path) -> Vec<PaneInfo> {
     text.split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .filter_map(|line| {
-            let mut fields = line.splitn(7, |byte| *byte == b'\t');
+            let mut fields = line.splitn(8, |byte| *byte == b'\t');
             let (
                 Some(session),
                 Some(pane),
@@ -454,8 +471,10 @@ fn parse_scan_bytes(text: &[u8], vault: &Path) -> Vec<PaneInfo> {
                 Some(command),
                 Some(owner),
                 Some(anchor),
+                Some(activity),
                 Some(cwd),
             ) = (
+                fields.next(),
                 fields.next(),
                 fields.next(),
                 fields.next(),
@@ -479,6 +498,9 @@ fn parse_scan_bytes(text: &[u8], vault: &Path) -> Vec<PaneInfo> {
                 command: String::from_utf8_lossy(command).into_owned(),
                 owned: owner == OWNER_VALUE.as_bytes(),
                 anchor: (!anchor.is_empty()).then(|| String::from_utf8_lossy(anchor).into_owned()),
+                activity: std::str::from_utf8(activity)
+                    .ok()
+                    .and_then(|a| a.trim().parse().ok()),
             })
         })
         .collect()
@@ -589,10 +611,10 @@ mod tests {
 
     #[test]
     fn parse_filters_to_vault() {
-        let text = "work\t%1\t100\tclaude\t\t\t/v/notes\n\
-                    other\t%2\t200\tclaude\t\t\t/elsewhere\n\
-                    tg_pi_1\t%3\t300\tpi\ttext-graph\t\t/v/notes/topics\n\
-                    tg_edit\t%4\t400\thx\ttext-graph\tnotes/a.md\t/v/notes\n\
+        let text = "work\t%1\t100\tclaude\t\t\t1787141160\t/v/notes\n\
+                    other\t%2\t200\tclaude\t\t\t1787141160\t/elsewhere\n\
+                    tg_pi_1\t%3\t300\tpi\ttext-graph\t\t\t/v/notes/topics\n\
+                    tg_edit\t%4\t400\thx\ttext-graph\tnotes/a.md\t1787141199\t/v/notes\n\
                     bad-line\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 3);
@@ -602,20 +624,26 @@ mod tests {
         assert_eq!(panes[1].pane, "%3");
         assert!(panes[1].owned);
         assert_eq!(panes[2].anchor.as_deref(), Some("notes/a.md"));
+        assert_eq!(panes[0].activity, Some(1787141160));
+        assert_eq!(panes[2].activity, Some(1787141199));
+        assert_eq!(
+            panes[1].activity, None,
+            "a blank #{{window_activity}} is absence, never a zero timestamp"
+        );
     }
 
     #[test]
     fn parse_survives_tabs_in_paths_and_drops_tabbed_names_safely() {
         // path is the last field, so an embedded tab stays part of the path
-        let text = "work\t%1\t100\tclaude\t\t\t/v/notes/weird\tdir\n";
+        let text = "work\t%1\t100\tclaude\t\t\t1787141160\t/v/notes/weird\tdir\n";
         let panes = parse_scan(text, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].cwd, PathBuf::from("/v/notes/weird\tdir"));
         assert_eq!(panes[0].command, "claude");
         // a tab inside a session name shifts the pid field; the numeric
         // parse fails and the record is DROPPED — never mis-assigned
-        let sheared = "we\tird\t%1\t100\tclaude\t\t\t/v/notes\n\
-                       work\t%2\t200\tclaude\t\t\t/v/notes\n";
+        let sheared = "we\tird\t%1\t100\tclaude\t\t\t1787141160\t/v/notes\n\
+                       work\t%2\t200\tclaude\t\t\t1787141160\t/v/notes\n";
         let panes = parse_scan(sheared, Path::new("/v/notes"));
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].session, "work");
@@ -634,6 +662,7 @@ mod tests {
             command: command.into(),
             owned: false,
             anchor: None,
+            activity: None,
         }
     }
 
@@ -748,7 +777,7 @@ mod tests {
         );
 
         let cwd = PathBuf::from(OsString::from_vec(b"/v/notes-\x81".to_vec()));
-        let mut output = b"work\t%1\t100\tclaude\t\t\t".to_vec();
+        let mut output = b"work\t%1\t100\tclaude\t\t\t1787141160\t".to_vec();
         output.extend_from_slice(cwd.as_os_str().as_bytes());
         output.push(b'\n');
         let panes = parse_scan_bytes(&output, Path::new("/v"));
