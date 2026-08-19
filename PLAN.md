@@ -542,7 +542,7 @@ finding was fixed in its own focused commit. The remediation includes:
   build, and process-level CLI coverage including non-UTF-8 vault paths.
 
 The final matrix passes formatting, strict all-target Clippy, the Rust 1.95
-all-target build, the no-default-features headless build, and 268 tests
+all-target build, the no-default-features headless build, and 315 tests
 (library, GUI state machine, CLI, fixture, and real-tmux integration).
 
 ## Phase 2: the intelligence layer

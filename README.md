@@ -1,5 +1,7 @@
 # text-graph
 
+[![CI](https://github.com/marbinner/text-graph/actions/workflows/ci.yml/badge.svg)](https://github.com/marbinner/text-graph/actions/workflows/ci.yml)
+
 A fast, native graph viewer for a folder of markdown notes — with your AI
 agents living inside it. Point it at a vault (an Obsidian vault works
 as-is) and get an Obsidian-style force-directed graph you can drive
