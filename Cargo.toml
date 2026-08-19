@@ -4,7 +4,12 @@ version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Native graph viewer for a folder of markdown notes, with live tmux agent terminals in the graph"
-# license: intentionally unset until the author picks one
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/marbinner/text-graph"
+homepage = "https://github.com/marbinner/text-graph"
+readme = "README.md"
+keywords = ["markdown", "graph", "notes", "tmux", "obsidian"]
+categories = ["visualization", "gui", "command-line-utilities"]
 
 [features]
 default = ["gui"]

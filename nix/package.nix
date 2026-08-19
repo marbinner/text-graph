@@ -143,7 +143,7 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Native graph viewer for a folder of markdown notes, with live tmux agent terminals in the graph";
     homepage = "https://github.com/marbinner/text-graph";
-    # license: intentionally unset — the author has not picked one (see Cargo.toml)
+    license = with lib.licenses; [ mit asl20 ];
     mainProgram = "text-graph";
     platforms = lib.platforms.linux;
   };
