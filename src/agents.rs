@@ -204,9 +204,16 @@ pub fn launch_edit(
     launch_named(socket, dir, "edit", Some(&command), Some(anchor))
 }
 
-/// The PATH a launched agent should resolve against: the server's global
-/// PATH (from whoever started the server — normally the user's real shell)
-/// joined with our own. The viewer itself may run with a stripped PATH
+/// The PATH a launched agent should resolve against: our own binary's
+/// directory first, then the server's global PATH (from whoever started
+/// the server — normally the user's real shell), then our own.
+///
+/// Our directory leads because a launched agent is expected to run
+/// `text-graph roster|send|peek` (see `comm.rs`), and the viewer is
+/// commonly started from a build directory that is on nobody's PATH —
+/// without this the messaging trio is simply unreachable from the
+/// sessions that need it most. Leading also means the RUNNING viewer's
+/// binary wins over an older installed copy. The viewer itself may run with a stripped PATH
 /// (IDE/launcher environments), and tmux seeds a new session's environment
 /// from its CLIENT — us — so without this an agent binary can be
 /// unfindable in the pane while being findable in every terminal the user
@@ -230,6 +237,11 @@ fn launch_path(socket: Option<&str>) -> Option<String> {
         Some(text.strip_prefix("PATH=")?.trim_end().to_string())
     })();
     let client = std::env::var("PATH").ok().filter(|s| !s.is_empty());
+    let ours = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .filter(|dir| dir.is_dir())
+        .map(|dir| dir.to_string_lossy().into_owned());
     // Well-known user bin dirs (only those that exist) rescue the
     // NO-SERVER case: the server we are about to start inherits OUR env,
     // and there is no healthy global PATH to borrow — without these,
@@ -255,8 +267,8 @@ fn launch_path(socket: Option<&str>) -> Option<String> {
         extras.push("/usr/local/bin".into());
     }
     let merged = merge_paths(
-        server
-            .iter()
+        ours.iter()
+            .chain(server.iter())
             .chain(client.iter())
             .flat_map(|s| s.split(':'))
             .chain(extras.iter().map(String::as_str)),
@@ -766,6 +778,27 @@ mod tests {
         assert!(no_server("no server running on /tmp/tmux-1000/default"));
         assert!(!no_server("server exited unexpectedly"));
         assert!(!no_server("protocol version mismatch"));
+    }
+
+    /// The messaging trio is only reachable from a launched agent if the
+    /// binary the viewer is running from is on its PATH — a viewer started
+    /// out of a build directory otherwise hands its agents a `text-graph`
+    /// that does not exist.
+    #[test]
+    fn launched_agents_get_our_own_directory_first() {
+        let exe = std::env::current_exe().expect("test binary path");
+        let dir = exe
+            .parent()
+            .expect("a parent")
+            .to_string_lossy()
+            .into_owned();
+        // a socket with no server: the global-PATH lookup fails, which is
+        // exactly the case where our own directory has to carry it
+        let path = launch_path(Some("tg-no-such-socket")).expect("some PATH");
+        assert!(
+            path.starts_with(&dir),
+            "our directory must LEAD (a stale installed copy must not win): {path}"
+        );
     }
 
     #[test]
