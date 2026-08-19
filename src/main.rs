@@ -14,7 +14,8 @@ mod app;
 const COMM_USAGE: &str = "  text-graph roster               who else is live in this vault
   text-graph send <agent> <msg>   type a message into an agent's terminal
   text-graph peek <agent> [-n N]  the last N lines of an agent's screen
-  text-graph protocol [--install] how agents talk here (--install: as a skill)
+  text-graph protocol [--install [--user] [--to <path>]]
+                                  how agents talk here (--install: as a skill)
 ";
 
 #[cfg(feature = "gui")]
@@ -184,16 +185,31 @@ fn run_roster(args: &[OsString]) -> Result<(), CliError> {
 /// other subcommands don't quietly accept them.
 fn run_protocol(args: &[OsString]) -> Result<(), CliError> {
     let (mut install, mut user) = (false, false);
-    for arg in args {
+    let mut extra: Option<std::path::PathBuf> = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
         match arg.to_string_lossy().as_ref() {
             "--install" => install = true,
             "--user" => user = true,
+            // the escape hatch for a harness we don't know: a skills root,
+            // or the file itself when it names its own layout
+            "--to" => {
+                let path = args
+                    .next()
+                    .ok_or_else(|| CliError::Usage("--to needs a directory or file".into()))?;
+                extra = Some(std::path::PathBuf::from(path));
+            }
             other => {
                 return Err(CliError::Usage(format!(
                     "protocol: unknown argument {other}"
                 )));
             }
         }
+    }
+    if extra.is_some() && !install {
+        return Err(CliError::Usage(
+            "--to says WHERE to install; add --install".into(),
+        ));
     }
     if user && !install {
         return Err(CliError::Usage(
@@ -210,8 +226,10 @@ fn run_protocol(args: &[OsString]) -> Result<(), CliError> {
     } else {
         comm::Scope::Vault
     };
-    let done = comm::install(scope, &here()?).map_err(CliError::Failed)?;
-    println!("wrote {}", done.skill.display());
+    let done = comm::install(scope, &here()?, extra.as_deref()).map_err(CliError::Failed)?;
+    for skill in &done.skills {
+        println!("wrote {}", skill.display());
+    }
     if let Some((agents, fresh)) = done.pointer {
         let verb = if fresh { "created" } else { "updated" };
         println!("{verb} {}", agents.display());

@@ -143,7 +143,7 @@ fn an_empty_roster_is_success_not_an_error() {
 #[test]
 fn malformed_messaging_commands_exit_two() {
     let dir = scratch("usage");
-    let cases: [&[&str]; 7] = [
+    let cases: [&[&str]; 9] = [
         &["peek"],
         &["peek", "someone", "-n", "zero"],
         &["peek", "someone", "-n"],
@@ -151,6 +151,8 @@ fn malformed_messaging_commands_exit_two() {
         &["send"],
         &["send", "someone"],
         &["protocol", "--user"],
+        &["protocol", "--to", "/tmp"],
+        &["protocol", "--install", "--to"],
     ];
     for case in cases {
         let out = output(text_graph().current_dir(&dir).args(case));
@@ -182,13 +184,19 @@ fn installing_the_skill_puts_it_where_a_harness_looks() {
         String::from_utf8_lossy(&first.stderr)
     );
 
-    let skill = dir.join(".claude/skills/text-graph/SKILL.md");
-    let installed = std::fs::read_to_string(&skill).expect("installed skill");
-    assert!(
-        installed.starts_with("---\nname: text-graph\n"),
-        "no frontmatter"
-    );
-    assert!(installed.contains("text-graph roster"));
+    // Claude Code's location and the harness-neutral one from the Agent
+    // Skills standard (pi and friends discover the latter)
+    for root in [".claude/skills", ".agents/skills"] {
+        let skill = dir.join(root).join("text-graph/SKILL.md");
+        let installed =
+            std::fs::read_to_string(&skill).unwrap_or_else(|e| panic!("{}: {e}", skill.display()));
+        assert!(
+            installed.starts_with("---\nname: text-graph\n"),
+            "no frontmatter in {}",
+            skill.display()
+        );
+        assert!(installed.contains("text-graph roster"));
+    }
 
     // harnesses without skills read AGENTS.md, which we create if absent
     let agents = std::fs::read_to_string(dir.join("AGENTS.md")).expect("pointer");
@@ -214,6 +222,7 @@ fn installing_the_skill_puts_it_where_a_harness_looks() {
         String::from_utf8_lossy(&user.stderr)
     );
     assert!(home.join(".claude/skills/text-graph/SKILL.md").is_file());
+    assert!(home.join(".agents/skills/text-graph/SKILL.md").is_file());
     assert!(
         !home.join("AGENTS.md").exists(),
         "a user install has no vault to leave a pointer in"

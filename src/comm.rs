@@ -94,10 +94,20 @@ pub enum Scope {
     User,
 }
 
+/// Skill roots, relative to the vault or the home directory. Two, because
+/// harnesses disagree about where skills live and a copy is cheaper than a
+/// guess: `.claude/skills` is Claude Code's, and `.agents/skills` is the
+/// harness-neutral location of the Agent Skills standard
+/// (<https://agentskills.io/specification>) — pi discovers it globally and
+/// per-project, and anything else implementing the standard finds it too.
+/// Both copies are written from the same compiled-in source and rewritten
+/// wholesale on every install, so they cannot drift apart.
+const SKILL_ROOTS: [&str; 2] = [".claude/skills", ".agents/skills"];
+
 /// What an install touched, so the CLI can say so.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Installed {
-    pub skill: PathBuf,
+    pub skills: Vec<PathBuf>,
     /// The AGENTS.md that now points at the skill, and whether the file
     /// had to be created. None for a user-scope install.
     pub pointer: Option<(PathBuf, bool)>,
@@ -147,27 +157,41 @@ fn update_pointer(existing: &str) -> String {
     format!("{existing}{separator}{block}\n")
 }
 
-/// Write the skill where the harness will find it, and (in a vault) leave
-/// a pointer for harnesses that don't do skills.
+/// Write the skill everywhere a harness will find it, and (in a vault)
+/// leave a pointer for harnesses that don't do skills at all.
 ///
-/// The skill file is ours: it lives under a `text-graph/` directory we
+/// `extra` is the escape hatch for a harness we don't know about: a path
+/// ending in `.md` is written exactly, anything else is treated as a
+/// skills root and gets `text-graph/SKILL.md` beneath it.
+///
+/// The skill files are ours: each lives under a `text-graph/` directory we
 /// name and is rewritten wholesale, because a half-updated copy of the
 /// conventions is worse than none. AGENTS.md is the vault owner's, so
 /// only the marked block is ever replaced.
-pub fn install(scope: Scope, vault: &Path) -> Result<Installed, String> {
+pub fn install(scope: Scope, vault: &Path, extra: Option<&Path>) -> Result<Installed, String> {
     let root = match scope {
         Scope::Vault => vault.to_path_buf(),
         Scope::User => PathBuf::from(
             std::env::var("HOME").map_err(|_| "no $HOME to install into".to_string())?,
         ),
     };
-    let dir = root.join(".claude/skills/text-graph");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let skill = dir.join("SKILL.md");
-    std::fs::write(&skill, skill_file()).map_err(|e| format!("{}: {e}", skill.display()))?;
+    let mut skills = Vec::new();
+    for skill_root in SKILL_ROOTS {
+        skills.push(write_skill(
+            &root.join(skill_root).join("text-graph/SKILL.md"),
+        )?);
+    }
+    if let Some(extra) = extra {
+        let path = if extra.extension().is_some_and(|e| e == "md") {
+            extra.to_path_buf()
+        } else {
+            extra.join("text-graph/SKILL.md")
+        };
+        skills.push(write_skill(&path)?);
+    }
     if scope == Scope::User {
         return Ok(Installed {
-            skill,
+            skills,
             pointer: None,
         });
     }
@@ -191,9 +215,17 @@ pub fn install(scope: Scope, vault: &Path) -> Result<Installed, String> {
         std::fs::write(&agents, updated).map_err(|e| format!("{}: {e}", agents.display()))?;
     }
     Ok(Installed {
-        skill,
+        skills,
         pointer: Some((agents, fresh)),
     })
+}
+
+fn write_skill(path: &Path) -> Result<PathBuf, String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(path, skill_file()).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path.to_path_buf())
 }
 
 /// What a pane is, which decides whether it can be *sent* to. Owned
@@ -979,21 +1011,36 @@ mod tests {
         std::fs::create_dir_all(&vault).unwrap();
         std::fs::write(vault.join("AGENTS.md"), "# house rules\n").unwrap();
 
-        let done = install(Scope::Vault, &vault).expect("install");
+        let done = install(Scope::Vault, &vault, None).expect("install");
         assert_eq!(
-            done.skill,
-            vault.join(".claude/skills/text-graph/SKILL.md"),
-            "the directory name must match the skill's frontmatter name"
+            done.skills,
+            vec![
+                vault.join(".claude/skills/text-graph/SKILL.md"),
+                vault.join(".agents/skills/text-graph/SKILL.md"),
+            ],
+            "both roots, and directory names matching the frontmatter name"
         );
-        assert_eq!(
-            std::fs::read_to_string(&done.skill).unwrap(),
-            skill_file(),
-            "the installed skill IS the compiled-in one, frontmatter and all"
-        );
+        for skill in &done.skills {
+            assert_eq!(
+                std::fs::read_to_string(skill).unwrap(),
+                skill_file(),
+                "an installed skill IS the compiled-in one, frontmatter and all"
+            );
+        }
         assert_eq!(done.pointer.as_ref().map(|(_, fresh)| *fresh), Some(false));
 
+        // an unknown harness gets an explicit path: a skills root…
+        let elsewhere = vault.join("odd/skills");
+        let done = install(Scope::Vault, &vault, Some(&elsewhere)).expect("install --to root");
+        assert!(done.skills.contains(&elsewhere.join("text-graph/SKILL.md")));
+        // …or the file itself, when the harness names its own layout
+        let exact = vault.join("odd/text-graph.md");
+        let done = install(Scope::Vault, &vault, Some(&exact)).expect("install --to file");
+        assert!(done.skills.contains(&exact));
+        assert_eq!(std::fs::read_to_string(&exact).unwrap(), skill_file());
+
         let after_first = std::fs::read_to_string(vault.join("AGENTS.md")).unwrap();
-        install(Scope::Vault, &vault).expect("install again");
+        install(Scope::Vault, &vault, None).expect("install again");
         assert_eq!(
             std::fs::read_to_string(vault.join("AGENTS.md")).unwrap(),
             after_first,
