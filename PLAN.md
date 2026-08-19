@@ -390,7 +390,12 @@ types into a pane on its own — only agents and the human do.
    model, so agents write link-rich notes; the trio; the conventions;
    `stats`). A vault install also leaves a marked pointer block in
    AGENTS.md for harnesses without skills — that file is the owner's, so
-   only the marked text is ours and a symlinked one is refused.
+   only the marked text is ours and a symlinked one is refused. Installs
+   write two skill roots: `.claude/skills` and `.agents/skills`, the
+   neutral location of the Agent Skills standard (verified against pi's
+   docs on this machine: it discovers `~/.agents/skills`, project
+   `.agents/skills`, AND AGENTS.md/CLAUDE.md context files), with `--to`
+   for anything else.
 
    Decisions made while building, worth keeping: shells and editor cards
    are listed and peekable but never send targets (a paste into a shell

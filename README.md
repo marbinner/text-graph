@@ -457,19 +457,31 @@ it arrives prefixed with who sent it and the command to answer — but the
 first mover has to be told, so text-graph ships as a **skill**:
 
 ```
-text-graph protocol --install          <vault>/.claude/skills/text-graph/SKILL.md
-text-graph protocol --install --user   ~/.claude/skills/text-graph/SKILL.md
+text-graph protocol --install                 into the vault
+text-graph protocol --install --user          into ~ (every vault you open)
+text-graph protocol --install --to <path>     into a harness we haven't met
 ```
 
 A harness keeps only the skill's one-line description in context and loads
 the body when it turns out to matter, so the standing cost is a sentence and
 the depth — what the vault is as a graph, how to reach the others, the
-conventions — is there when an agent actually needs it. `--user` installs it
-once for every vault you open; the in-vault install is for a vault you hand to
-someone else, and it also leaves four lines in `AGENTS.md` for harnesses that
-don't do skills. Both are idempotent, and only the text between text-graph's
-markers in `AGENTS.md` is ever rewritten. `.claude/` is hidden, so the skill
-never becomes nodes and never triggers a reload.
+conventions — is there when an agent actually needs it.
+
+Each install writes two copies, because harnesses disagree about where skills
+live: `.claude/skills/text-graph/SKILL.md` (Claude Code) and
+`.agents/skills/text-graph/SKILL.md` (the [Agent Skills
+standard](https://agentskills.io/specification), which pi and others
+discover). Both come from the same compiled-in source and are rewritten
+wholesale, so they can't drift; `--to` adds a third location for anything
+else. A vault install also leaves four lines in `AGENTS.md`, which reaches
+harnesses that do no skills at all — pi reads that too.
+
+`--user` installs once for every vault you open; the in-vault install is for a
+vault you hand to someone else, and note that some harnesses only load
+project-local skills after you trust the project. Both are idempotent, and
+only the text between text-graph's markers in `AGENTS.md` is ever rewritten.
+`.claude/` and `.agents/` are hidden, so the skill never becomes nodes and
+never triggers a reload.
 
 The vault is found from the working directory (nearest `.text-graph/`, like
 git), so none of these take a path. `roster` names each agent, its session,

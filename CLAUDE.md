@@ -156,10 +156,13 @@
   binary against a private socket. The agent-facing text lives ONCE, in
   `assets/skill.md` (a SKILL file, frontmatter included, `include_str!`'d):
   `protocol` prints its body, `--install` writes the file verbatim — never
-  restate the conventions anywhere else. An install owns the namespaced
-  skill file wholesale but only the marked block in the vault's AGENTS.md
-  (their file; a symlinked one is refused), and `update_pointer` is pure
-  because that splice is what could eat someone's notes.
+  restate the conventions anywhere else. An install writes BOTH skill
+  roots (`.claude/skills` and the standard's `.agents/skills` — pi and
+  friends discover the latter) plus `--to` for the unknown harness; it
+  owns those namespaced files wholesale but only the marked block in the
+  vault's AGENTS.md (their file; a symlinked one is refused), and
+  `update_pointer` is pure because that splice is what could eat
+  someone's notes.
 - Keybinds are ROWS in `app/keymap.rs`'s `BINDINGS` table — chords,
   guard, press kind, ⚙ doc row, precondition, action — dispatched
   first-match in table order, with `widget_free` and key-repeat applied
