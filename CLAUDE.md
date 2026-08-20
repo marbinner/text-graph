@@ -74,7 +74,13 @@
   what an extension *is* (textual? which icon/color?).
 - Bundled fonts: `assets/reading.ttf` (Inter subset, OFL) heads the
   "reading" family that rendered markdown PROSE uses, with egui's
-  default proportional fonts behind it so nothing tofus. Math is a
+  default proportional fonts behind it so nothing tofus. Its LEADING is
+  baked into the file (`assets/set-leading.py`, run by the generator):
+  egui has no line-height setting, epaint takes a row's height straight
+  from the face, and Inter ships none — the extra goes half into the
+  ascent and half into the descent, never into the line gap, or
+  everything that centres itself in a line box (list bullets, numbers)
+  floats above its text. Math is a
   family of its OWN — `assets/math.ttf` (Noto Sans Math + Noto Sans +
   Noto Sans Symbols 2, merged, OFL) — because epaint CENTRES a fallback
   face against the primary one: a `∑` resolved through the reading chain

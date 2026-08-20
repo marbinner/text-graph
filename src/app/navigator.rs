@@ -243,8 +243,16 @@ const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
         .get(&egui::TextStyle::Body)
         .map_or(15.0, |f| f.size);
     if inline {
+        let font = egui::FontId::new(prose, math::family());
         let frame = math::layout(ui, &tree, prose, color, false);
-        place(ui, &frame, &tree, color);
+        // the prose family's own line, not the math face's
+        let body = ui
+            .style()
+            .text_styles
+            .get(&egui::TextStyle::Body)
+            .cloned()
+            .unwrap_or(font);
+        place(ui, &frame, &tree, color, Some(line_metrics(ui, &body)));
         return;
     }
     ui.allocate_ui_with_layout(
@@ -258,32 +266,60 @@ const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
                 frame = math::layout(ui, &tree, fit, color, true);
             }
             ui.add_space(MATH_BLOCK_GAP);
-            place(ui, &frame, &tree, color);
+            place(ui, &frame, &tree, color, None);
             ui.add_space(MATH_BLOCK_GAP);
         },
     );
 };
 
-/// Claim room for a laid-out formula and paint it there. The formula's
-/// own text goes on the widget so a screen reader still gets the note —
-/// painting a galley, unlike showing a label, tells accessibility
-/// nothing by itself.
+/// Claim room for a laid-out formula and paint it there.
+///
+/// The room is the formula's INK, never its font box. A math face is
+/// built to hold integrals and fences, so its ascent and descent run far
+/// past any letter — Noto Sans Math's row is half again Inter's at the
+/// same size. Allocating that box put every inline `$…$` five points
+/// below the line it sits in (bottom-aligned rows, so the extra descent
+/// pushed the baseline down) and stretched the paragraph around it.
+/// Clamping to the PROSE metrics is the other half: a short formula then
+/// takes exactly a line, and only something genuinely taller — a
+/// fraction, a fence — grows one.
+///
+/// The formula's own text goes on the widget so a screen reader still
+/// gets the note: painting a galley, unlike showing a label, tells
+/// accessibility nothing by itself.
 fn place(
     ui: &mut egui::Ui,
     frame: &math::Frame,
     tree: &text_graph::mathtext::Node,
     color: Color32,
+    line: Option<(f32, f32)>,
 ) {
+    let (ascent, descent) = match line {
+        Some((up, down)) => (frame.ink_ascent().max(up), frame.ink_descent().max(down)),
+        None => (frame.ink_ascent(), frame.ink_descent()),
+    };
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(frame.width, frame.height()),
+        egui::vec2(frame.width, ascent + descent),
         egui::Sense::hover(),
     );
     frame.paint(
         ui.painter(),
-        egui::pos2(rect.left(), rect.top() + frame.ascent),
+        egui::pos2(rect.left(), rect.bottom() - descent),
         color,
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, tree.text()));
+}
+
+/// (ascent, descent) of the prose a formula has to sit on, measured off
+/// a one-glyph galley — epaint reports a baseline per glyph and nowhere
+/// else.
+fn line_metrics(ui: &egui::Ui, font: &egui::FontId) -> (f32, f32) {
+    let job = egui::text::LayoutJob::simple_singleline("x".into(), font.clone(), Color32::WHITE);
+    let galley = ui.painter().layout_job(job);
+    galley.rows.first().map_or((font.size, 0.0), |row| {
+        let ascent = row.glyphs.first().map_or(font.size, |g| g.pos.y);
+        (ascent, (row.size.y - ascent).max(0.0))
+    })
 }
 
 /// Air above and below a display equation, inside its own row.

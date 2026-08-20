@@ -56,6 +56,19 @@ impl Frame {
         self.ascent + self.descent
     }
 
+    /// How far the ink reaches above the baseline, and below it. What a
+    /// caller needs to sit a formula ON a line of prose: the font boxes
+    /// of a math face are enormous (Noto Sans Math's row is half again
+    /// Inter's at the same size), and honouring them would drop every
+    /// inline formula below the line it belongs on.
+    pub(super) fn ink_ascent(&self) -> f32 {
+        -self.ink_top()
+    }
+
+    pub(super) fn ink_descent(&self) -> f32 {
+        self.ink_bottom()
+    }
+
     /// The top of the ink, falling back to the font's ascent for a frame
     /// with nothing in it.
     fn ink_top(&self) -> f32 {
@@ -167,7 +180,10 @@ const FENCE_MAX: f32 = 5.0;
 /// Display style sets `∑` and friends larger, and puts their limits
 /// above and below instead of beside.
 const BIG_OP_SCALE: f32 = 1.4;
-const BIG_OPS: &str = "∑∏∐∫∬∭∮⋃⋂⨁⨂⋀⋁";
+const LARGE_OPS: &str = "∑∏∐∫∬∭∮⋃⋂⨁⨂⋀⋁";
+/// …of which the integrals keep their limits BESIDE them, the way TeX
+/// sets `\int` even in display style.
+const STACKED_OPS: &str = "∑∏∐⋃⋂⨁⨂⋀⋁";
 /// The named operators that take limits the same way — `\lim_{x \to 0}`
 /// belongs under the word, not beside it. They are words, so unlike the
 /// symbols above they are not set any larger.
@@ -176,6 +192,8 @@ const LIMIT_WORDS: &[&str] = &[
 ];
 /// Air between a big operator and a limit riding over it.
 const LIMIT_GAP: f32 = 0.1;
+/// …and between an accent and the letter it marks.
+const ACCENT_CLEAR: f32 = 0.04;
 
 pub(super) fn family() -> egui::FontFamily {
     egui::FontFamily::Name("math".into())
@@ -215,7 +233,13 @@ impl Ctx<'_> {
 
     fn lay(&self, node: &Node, size: f32) -> Frame {
         match node {
+            Node::Text(t) if self.display && lone(t, LARGE_OPS) => self.operator(t, size),
             Node::Text(t) => self.text(t, size),
+            Node::Space(ems) => Frame {
+                width: ems * size,
+                ..Frame::empty()
+            },
+            Node::Accent { base, mark } => self.accent(base, *mark, size),
             Node::Row(children) => self.row(children, size),
             Node::Scripts { base, sup, sub } => {
                 self.scripts(base, sup.as_deref(), sub.as_deref(), size)
@@ -258,6 +282,54 @@ impl Ctx<'_> {
         }
     }
 
+    /// A mark centred over the INK of what it marks, clearing its top.
+    ///
+    /// Left inside the text a combining mark is laid out at the base's
+    /// ADVANCE — egui does no shaping, so the font's own mark
+    /// positioning never runs — and it lands right of centre on
+    /// anything but a square glyph. A `\hat` on an italic `𝑦` visibly
+    /// missed. Measuring the mark's own ink and centring it is the
+    /// shaping, done here.
+    fn accent(&self, base: &Node, mark: char, size: f32) -> Frame {
+        let base = self.lay(base, size);
+        let font = FontId::new(size, family());
+        let galley = self
+            .ui
+            .painter()
+            .layout_no_wrap(mark.to_string(), font, self.color);
+        let baseline = galley
+            .rows
+            .first()
+            .and_then(|r| r.glyphs.first())
+            .map_or(size * 0.8, |g| g.pos.y);
+        let ink = galley.mesh_bounds;
+        if !ink.is_positive() {
+            return base;
+        }
+        // a frame for the mark alone, with its origin at the LEFT of its
+        // ink and on its own baseline — a combining glyph carries no
+        // advance, so its box is the only thing there is to place
+        let (top, bottom) = (ink.top() - baseline, ink.bottom() - baseline);
+        let mark = Frame {
+            width: ink.width(),
+            ascent: -top,
+            descent: bottom,
+            ink: Some((top, bottom)),
+            items: vec![Item::Text(vec2(-ink.left(), -baseline), galley)],
+        };
+        let at = vec2(
+            (base.width - mark.width) / 2.0,
+            base.ink_top() - ACCENT_CLEAR * size - bottom,
+        );
+        let width = base.width;
+        let mut out = Frame::empty();
+        out.place(base, Vec2::ZERO);
+        out.place(mark, at);
+        // an accent rides over its base without widening it
+        out.width = width;
+        out
+    }
+
     fn row(&self, children: &[Node], size: f32) -> Frame {
         let mut out = Frame::empty();
         let mut x = 0.0;
@@ -272,9 +344,9 @@ impl Ctx<'_> {
         // `\sum_{i=1}^{n}` in display style stacks its limits, the way a
         // display sum does on paper
         if self.display
-            && let Some((op, scale)) = limit_base(base)
+            && let Some((op, large)) = limit_base(base)
         {
-            return self.limits(op, scale, sup, sub, size);
+            return self.limits(op, large, sup, sub, size);
         }
         let base = self.lay(base, size);
         let small = self.smaller(size);
@@ -295,16 +367,33 @@ impl Ctx<'_> {
         out
     }
 
+    /// A big operator, set larger and hung on the math axis rather than
+    /// on the baseline — a display `∑` is a symbol the formula is built
+    /// around, not a letter sitting on the line.
+    fn operator(&self, op: &str, size: f32) -> Frame {
+        let glyph = self.text(op, size * BIG_OP_SCALE);
+        let y = -AXIS * size - (glyph.ink_top() + glyph.ink_bottom()) / 2.0;
+        let width = glyph.width;
+        let mut out = Frame::empty();
+        out.place(glyph, vec2(0.0, y));
+        out.width = width;
+        out
+    }
+
     /// A big operator with its limits over and under it.
     fn limits(
         &self,
         op: &str,
-        scale: f32,
+        large: bool,
         sup: Option<&Node>,
         sub: Option<&Node>,
         size: f32,
     ) -> Frame {
-        let glyph = self.text(op, size * scale);
+        let glyph = if large {
+            self.operator(op, size)
+        } else {
+            self.text(op, size)
+        };
         let small = self.smaller(size);
         let over = sup.map(|n| self.lay(n, small));
         let under = sub.map(|n| self.lay(n, small));
@@ -313,10 +402,9 @@ impl Ctx<'_> {
             .width
             .max(over.as_ref().map_or(0.0, |f| f.width))
             .max(under.as_ref().map_or(0.0, |f| f.width));
-        // the operator centres its ink on the axis; the limits clear it
-        let glyph_y = -AXIS * size - (glyph.ink_top() + glyph.ink_bottom()) / 2.0;
-        let (top, bottom) = (glyph.ink_top() + glyph_y, glyph.ink_bottom() + glyph_y);
-        let at = vec2((width - glyph.width) / 2.0, glyph_y);
+        // the limits clear the operator's ink, wherever it ended up
+        let (top, bottom) = (glyph.ink_top(), glyph.ink_bottom());
+        let at = vec2((width - glyph.width) / 2.0, 0.0);
         let mut out = Frame::empty();
         out.place(glyph, at);
         if let Some(frame) = over {
@@ -506,14 +594,18 @@ impl Ctx<'_> {
 /// What a node is, if it takes its limits over and under: the operator
 /// text and how much larger to set it. `\sum` and `\lim` do, `x` does
 /// not.
-fn limit_base(node: &Node) -> Option<(&str, f32)> {
+fn limit_base(node: &Node) -> Option<(&str, bool)> {
     let Node::Text(t) = node else { return None };
-    let mut chars = t.chars();
-    let lone = chars.next().is_some_and(|c| BIG_OPS.contains(c)) && chars.next().is_none();
-    if lone {
-        return Some((t.as_str(), BIG_OP_SCALE));
+    if lone(t, STACKED_OPS) {
+        return Some((t.as_str(), true));
     }
     LIMIT_WORDS
         .contains(&t.as_str())
-        .then_some((t.as_str(), 1.0))
+        .then_some((t.as_str(), false))
+}
+
+/// Whether `text` is exactly one character out of `set`.
+fn lone(text: &str, set: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(|c| set.contains(c)) && chars.next().is_none()
 }

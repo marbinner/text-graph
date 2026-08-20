@@ -45,6 +45,13 @@
 pub enum Node {
     /// Characters to draw as they are — italics already resolved.
     Text(String),
+    /// Horizontal space, in ems. TeX's, not the author's: see [`space`].
+    Space(f32),
+    /// A combining mark centred over what it marks. It cannot ride
+    /// inside the text, because a mark is laid out at the base's ADVANCE
+    /// and lands right of centre on anything but a perfectly square
+    /// glyph.
+    Accent { base: Box<Node>, mark: char },
     /// A horizontal sequence.
     Row(Vec<Node>),
     /// A base with what rides on it.
@@ -78,6 +85,8 @@ impl Node {
     pub fn is_empty(&self) -> bool {
         match self {
             Node::Text(t) => t.is_empty(),
+            Node::Space(_) => false,
+            Node::Accent { base, .. } => base.is_empty(),
             Node::Row(v) | Node::Stack(v) => v.iter().all(Node::is_empty),
             Node::Grid(rows) => rows.iter().flatten().all(Node::is_empty),
             _ => false,
@@ -96,6 +105,11 @@ impl Node {
     fn write_text(&self, out: &mut String) {
         match self {
             Node::Text(t) => out.push_str(t),
+            Node::Space(_) => out.push(' '),
+            Node::Accent { base, mark } => {
+                base.write_text(out);
+                out.push(*mark);
+            }
             Node::Row(v) | Node::Stack(v) => v.iter().for_each(|n| n.write_text(out)),
             Node::Grid(rows) => rows.iter().flatten().for_each(|n| n.write_text(out)),
             Node::Scripts { base, sup, sub } => {
@@ -127,7 +141,11 @@ impl Node {
 /// Convert one math span (the text between the dollars) to a tree.
 pub fn to_tree(tex: &str) -> Node {
     let chars: Vec<char> = tex.chars().collect();
-    let mut p = Parser { s: &chars, i: 0 };
+    let mut p = Parser {
+        s: &chars,
+        i: 0,
+        tight: false,
+    };
     p.rows(None)
 }
 
@@ -159,9 +177,10 @@ pub fn glyphs() -> String {
     out
 }
 
-/// Characters the parser emits on its own, outside any table: the radical
-/// sign and the two spaces `\,` and `\quad` become.
-const STANDALONE: &str = "√−\u{2003}\u{2009}";
+/// Characters the parser emits on its own, outside any table: the
+/// radical sign, and the minus a keyboard hyphen becomes. Spacing is a
+/// `Space` node with a width, never a space character.
+const STANDALONE: &str = "√−";
 
 /// Environments whose `&` separates COLUMNS instead of marking an
 /// alignment point. Everything else (`aligned`, `align`, `gather`,
@@ -195,6 +214,8 @@ fn matrix_fence(env: &str) -> Option<(&'static str, &'static str)> {
 struct Parser<'a> {
     s: &'a [char],
     i: usize,
+    /// Inside a script, where TeX drops the spacing between atoms.
+    tight: bool,
 }
 
 /// A sequence under construction: characters accumulate into one `Text`
@@ -213,29 +234,46 @@ struct Seq {
     /// character of the formula's own text, but the whole of `\log` —
     /// `\log_2 n` subscripts the function, not its final `g`.
     atom: Option<usize>,
-    /// A space is owed to the next character, unless the cell is empty or
-    /// a minted space (`\,`, `\quad`) is already beside it.
-    pending: bool,
+    /// What the last atom was, for [`space`]. None at the start of a
+    /// cell, where nothing needs separating.
+    last: Option<Class>,
+    /// Inside a script, where TeX drops the spacing it would otherwise
+    /// insert.
+    tight: bool,
 }
 
 impl Seq {
-    fn push_str(&mut self, s: &str) {
+    /// Add `s` as one atom of class `class`, with the space TeX puts in
+    /// front of it. A note's own spaces inside `$…$` never get here:
+    /// this table is the only thing that separates atoms, which is why
+    /// `$a+b$` and `$a + b$` come out the same.
+    fn push_atom(&mut self, s: &str, class: Class) {
         if s.is_empty() {
             return;
         }
-        let math_space = |c: char| c == '\u{2003}' || c == '\u{2009}';
-        if self.pending {
-            self.pending = false;
-            let empty = self.text.is_empty() && self.cell.is_empty();
-            let beside_space = self.text.ends_with(math_space)
-                || s.starts_with(math_space)
-                || self.text.ends_with(' ');
-            if !empty && !beside_space {
-                self.text.push(' ');
+        // a binary operator with nothing on its left is not binary
+        let class = if class == Class::Bin && !binds(self.last) {
+            Class::Ord
+        } else {
+            class
+        };
+        if let Some(left) = self.last {
+            let gap = space(left, class, self.tight);
+            if gap > 0.0 {
+                self.flush_text();
+                self.cell.push(Node::Space(gap));
             }
         }
+        self.last = Some(class);
         self.atom = Some(self.text.len());
         self.text.push_str(s);
+    }
+
+    /// A word — a function name, a `\text{…}` — which TeX sets as one
+    /// atom whatever it is made of.
+    fn push_str(&mut self, s: &str) {
+        let class = s.chars().next().map_or(Class::Ord, class_of);
+        self.push_atom(s, class);
     }
 
     /// One character of the formula's own text — TeX's math italic
@@ -250,24 +288,38 @@ impl Seq {
         // TeX sets a binary minus as MINUS SIGN, not as the hyphen the
         // keyboard has — beside a `+` the short one reads as a dash
         let c = if c == '-' { '−' } else { c };
-        self.push_str(&leaning(c).unwrap_or(c).to_string());
+        let class = class_of(c);
+        self.push_atom(&leaning(c).unwrap_or(c).to_string(), class);
     }
 
-    fn space(&mut self) {
-        self.pending = true;
+    /// Space the author asked for by name (`\,`, `\quad`), which is the
+    /// only kind that survives — and it replaces whatever the table
+    /// would have put there.
+    fn push_space(&mut self, ems: f32) {
+        self.flush_text();
+        self.cell.push(Node::Space(ems));
+        self.last = None;
     }
 
     fn push(&mut self, node: Node) {
+        self.push_boxed(node, Class::Inner);
+    }
+
+    /// A built node — a fraction, a fence, a script — which spaces like
+    /// its class says and can never be part of a run of text.
+    fn push_boxed(&mut self, node: Node, class: Class) {
         if node.is_empty() {
             return;
         }
-        self.atom = None;
-        if self.pending {
-            self.pending = false;
-            if !(self.text.is_empty() && self.cell.is_empty()) {
-                self.text.push(' ');
+        if let Some(left) = self.last {
+            let gap = space(left, class, self.tight);
+            if gap > 0.0 {
+                self.flush_text();
+                self.cell.push(Node::Space(gap));
             }
         }
+        self.last = Some(class);
+        self.atom = None;
         self.flush_text();
         self.cell.push(node);
     }
@@ -293,7 +345,7 @@ impl Seq {
     }
 
     fn end_cell(&mut self) {
-        self.pending = false;
+        self.last = None;
         self.text = self.text.trim_end().to_string();
         self.flush_text();
         let cell = std::mem::take(&mut self.cell);
@@ -373,7 +425,10 @@ fn row_node(mut nodes: Vec<Node>) -> Node {
 impl Parser<'_> {
     /// Read a sequence up to `until` (or the end), as rows and cells.
     fn rows(&mut self, until: Option<char>) -> Node {
-        let mut seq = Seq::default();
+        let mut seq = Seq {
+            tight: self.tight,
+            ..Seq::default()
+        };
         while let Some(&c) = self.s.get(self.i) {
             if Some(c) == until {
                 self.i += 1;
@@ -383,28 +438,46 @@ impl Parser<'_> {
             match c {
                 '\\' => self.command(&mut seq),
                 '{' => {
-                    let node = self.rows(Some('}'));
-                    seq.push(node);
+                    // grouping, not a construction: `{ab}` is an atom of
+                    // whatever `ab` is, and spaces like it. Only
+                    // something BUILT is Inner.
+                    match self.rows(Some('}')) {
+                        Node::Text(t) => {
+                            let class = t.chars().next().map_or(Class::Ord, class_of);
+                            seq.push_atom(&t, class);
+                        }
+                        node => seq.push(node),
+                    }
                 }
                 '}' => {} // stray closer: grouping, not content
-                '^' => {
-                    let base = seq.take_last();
-                    let sup = self.arg();
-                    seq.push(attach(base, Some(sup), None));
-                }
-                '_' => {
-                    let base = seq.take_last();
-                    let sub = self.arg();
-                    seq.push(attach(base, None, Some(sub)));
-                }
+                '^' => self.script(&mut seq, true),
+                '_' => self.script(&mut seq, false),
                 '&' => seq.end_cell(),
-                // TeX whitespace: source line breaks and tabs are spaces,
-                // `~` is a space that doesn't break. Only `\\` ends a row.
-                '~' | ' ' | '\n' | '\r' | '\t' => seq.space(),
+                // whitespace in math mode is TeX's to decide, not the
+                // author's: `space` puts it between atoms instead
+                '~' | ' ' | '\n' | '\r' | '\t' => {}
                 _ => seq.push_char(c),
             }
         }
         seq.finish()
+    }
+
+    /// A `^` or `_` was consumed: read its argument in script style and
+    /// fold it onto the atom before it. The result spaces as its BASE
+    /// does — `\sum_{i}` is still an operator, `x^2` still ordinary.
+    fn script(&mut self, seq: &mut Seq, up: bool) {
+        let class = seq.last.unwrap_or(Class::Ord);
+        let base = seq.take_last();
+        let outer = std::mem::replace(&mut self.tight, true);
+        let arg = self.arg();
+        self.tight = outer;
+        let (sup, sub) = if up {
+            (Some(arg), None)
+        } else {
+            (None, Some(arg))
+        };
+        seq.last = None;
+        seq.push_boxed(attach(base, sup, sub), class);
     }
 
     /// One argument: a `{…}` group, a `\command`, or a single character.
@@ -416,7 +489,10 @@ impl Parser<'_> {
             }
             Some('\\') => {
                 self.i += 1;
-                let mut seq = Seq::default();
+                let mut seq = Seq {
+                    tight: self.tight,
+                    ..Seq::default()
+                };
                 self.command(&mut seq);
                 seq.finish()
             }
@@ -441,6 +517,42 @@ impl Parser<'_> {
         upright(&self.arg_text())
     }
 
+    /// The argument exactly as typed — `\text{…}` is a word, so its
+    /// letters do not lean and its spaces are not TeX's to remove.
+    fn raw_arg(&mut self) -> String {
+        if self.s.get(self.i) != Some(&'{') {
+            return self.arg_name();
+        }
+        self.i += 1;
+        let mut out = String::new();
+        let mut depth = 1usize;
+        while let Some(&c) = self.s.get(self.i) {
+            self.i += 1;
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                // an escape puts its character through, whatever it is
+                '\\' => {
+                    if let Some(&next) = self.s.get(self.i) {
+                        self.i += 1;
+                        out.push(next);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            if depth > 0 {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     /// A `\` was consumed: read the command and add what it draws.
     fn command(&mut self, seq: &mut Seq) {
         let start = self.i;
@@ -452,11 +564,11 @@ impl Parser<'_> {
             if let Some(&c) = self.s.get(self.i) {
                 self.i += 1;
                 match c {
-                    ',' | ':' | ';' => seq.push_str("\u{2009}"), // thin space
+                    ',' | ':' | ';' => seq.push_space(3.0 / 18.0), // thin space
                     '!' => {}
                     '|' => seq.push_str("‖"),
                     '\\' => seq.end_row(),
-                    ' ' => seq.space(),
+                    ' ' => seq.push_space(4.0 / 18.0),
                     // \{ \} \$ \% \& \# \_ and a lone \
                     _ => seq.push_str(&c.to_string()),
                 }
@@ -468,8 +580,14 @@ impl Parser<'_> {
         let name: String = self.s[start..self.i].iter().collect();
         // accents: combining mark after a single-char base
         if let Some(mark) = accent_mark(&name) {
-            let base = self.arg_text();
-            seq.push_str(&accent(&base, mark));
+            let base = self.arg();
+            seq.push_boxed(
+                Node::Accent {
+                    base: Box::new(base),
+                    mark,
+                },
+                Class::Ord,
+            );
             return;
         }
         match name.as_str() {
@@ -477,8 +595,10 @@ impl Parser<'_> {
             // upright, the way `\text{if}` is a word and not i·f
             "text" | "textrm" | "textbf" | "textsf" | "texttt" | "mathrm" | "mathsf" | "mathtt"
             | "mbox" | "operatorname" => {
-                let arg = self.arg_text();
-                seq.push_str(&upright(&arg));
+                // a word's own spaces are the author's, not TeX's: read
+                // the argument as written rather than as math
+                let arg = self.raw_arg();
+                seq.push_atom(&arg, Class::Ord);
             }
             // wrappers that only change weight or shape: the argument
             // keeps whatever setting its own characters ask for
@@ -493,7 +613,7 @@ impl Parser<'_> {
                 seq.push_str(&blackboard(&upright(&arg)));
             }
             // named functions are set upright — the name IS the rendering
-            _ if FUNCTIONS.contains(&name.as_str()) => seq.push_str(&name),
+            _ if FUNCTIONS.contains(&name.as_str()) => seq.push_atom(&name, Class::Op),
             "pmod" => {
                 let arg = self.arg();
                 seq.push_str(" (mod ");
@@ -566,10 +686,10 @@ impl Parser<'_> {
             }
             "hspace" | "vspace" => {
                 let _ = self.arg();
-                seq.space();
+                seq.push_space(1.0);
             }
-            "quad" => seq.push_str("\u{2003}"),
-            "qquad" => seq.push_str("\u{2003}\u{2003}"),
+            "quad" => seq.push_space(1.0),
+            "qquad" => seq.push_space(2.0),
             _ => match symbol(&name) {
                 Some(s) => seq.push_str(&lean_str(s)),
                 None => {
@@ -591,7 +711,10 @@ impl Parser<'_> {
             }
             Some('\\') => {
                 self.i += 1;
-                let mut seq = Seq::default();
+                let mut seq = Seq {
+                    tight: self.tight,
+                    ..Seq::default()
+                };
                 self.command(&mut seq);
                 seq.finish().text()
             }
@@ -610,7 +733,11 @@ impl Parser<'_> {
         let (end, resume) = self.find_command("left", "right");
         let body: Vec<char> = self.s[start..end].to_vec();
         self.i = resume;
-        let mut sub = Parser { s: &body, i: 0 };
+        let mut sub = Parser {
+            s: &body,
+            i: 0,
+            tight: self.tight,
+        };
         sub.rows(None)
     }
 
@@ -635,7 +762,11 @@ impl Parser<'_> {
         } else {
             resume
         };
-        let mut sub = Parser { s: &body, i: 0 };
+        let mut sub = Parser {
+            s: &body,
+            i: 0,
+            tight: self.tight,
+        };
         let mut inner = sub.rows(None);
         // outside a columned environment an `&` is an alignment tab: it
         // draws nothing, but the columns it lines up do stand apart, and
@@ -801,16 +932,91 @@ fn accent_mark(name: &str) -> Option<char> {
         .map(|(_, mark)| *mark)
 }
 
-fn accent(base: &str, mark: char) -> String {
-    let mut out = base.to_string();
-    if base.chars().count() == 1 {
-        out.push(mark);
-    }
-    out
-}
-
 fn symbol(name: &str) -> Option<&'static str> {
     SYMBOLS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+}
+
+/// What a piece of a formula IS, for spacing. TeX's atom classes, minus
+/// the ones a note never writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Class {
+    /// A variable, a digit, a symbol: the default.
+    Ord,
+    /// An operator that takes limits — `\sum`, and the function names.
+    Op,
+    /// A binary operator: `+`, `\times`, `\cap`.
+    Bin,
+    /// A relation: `=`, `\le`, `\to`.
+    Rel,
+    Open,
+    Close,
+    /// `,` and `;` — space goes AFTER them, never before.
+    Punct,
+    /// Something built rather than written: a fraction, a fence.
+    Inner,
+}
+
+/// TeX's spacing, in ems, for what goes between two atoms.
+///
+/// This is the table from the TeXbook, in the units it is written in
+/// (18 mu to the em): thin is 3, medium 4, thick 5. Two ordinaries touch;
+/// a binary operator gets a medium space either side; a relation a thick
+/// one. It is why `$a+b=c$` reads as an equation instead of as five
+/// characters — and why a note's own spacing inside `$…$` is ignored,
+/// exactly as TeX ignores it, so `$a+b$` and `$a + b$` set identically.
+///
+/// `tight` is the script styles, where TeX drops every space that is
+/// parenthesised in its table — an exponent has no room for them.
+fn space(left: Class, right: Class, tight: bool) -> f32 {
+    use Class::{Bin, Close, Inner, Op, Open, Punct, Rel};
+    const THIN: f32 = 3.0 / 18.0;
+    const MED: f32 = 4.0 / 18.0;
+    const THICK: f32 = 5.0 / 18.0;
+    // the parenthesised entries: present at text and display style only
+    let sometimes = |mu: f32| if tight { 0.0 } else { mu };
+    match (left, right) {
+        (Punct, _) => sometimes(THIN),
+        (_, Punct) => 0.0,
+        (Bin, _) | (_, Bin) => sometimes(MED),
+        (Rel, _) | (_, Rel) => sometimes(THICK),
+        (Op, _) | (_, Op) => THIN,
+        (Inner, _) | (_, Inner) => sometimes(THIN),
+        (Open, _) | (_, Close) => 0.0,
+        _ => 0.0,
+    }
+}
+
+/// The class of a character. Everything not named here is ordinary,
+/// which is the right default: a letter, a digit, a `\partial`.
+fn class_of(c: char) -> Class {
+    match c {
+        '+' | '−' | '±' | '∓' | '×' | '÷' | '∗' | '⋆' | '∘' | '•' | '∩' | '∪' | '⊓' | '⊔' | '⊎'
+        | '∖' | '∧' | '∨' | '⊕' | '⊖' | '⊗' | '⊙' | '·' => Class::Bin,
+        '=' | '<' | '>' | '≤' | '≥' | '≠' | '≡' | '≈' | '≍' | '∼' | '≃' | '≅' | '∝' | '≪' | '≫'
+        | '≺' | '≻' | '⪯' | '⪰' | '⊂' | '⊃' | '⊆' | '⊇' | '⊊' | '⊋' | '∈' | '∉' | '∋' | '⊥'
+        | '⊤' | '∥' | '∣' | '∤' | '⊢' | '⊣' | '⊨' | '→' | '←' | '↔' | '⇒' | '⇐' | '⇔' | '↦'
+        | '⟶' | '⟵' | '⟹' | '⟸' | '⟺' | '⟼' | '↑' | '↓' | '↕' | '↪' | '↩' | '⇝' | ':' => {
+            Class::Rel
+        }
+        '(' | '[' | '{' | '⟨' | '⌈' | '⌊' => Class::Open,
+        ')' | ']' | '}' | '⟩' | '⌉' | '⌋' | '!' => Class::Close,
+        ',' | ';' => Class::Punct,
+        _ if BIG_OPS.contains(c) => Class::Op,
+        _ => Class::Ord,
+    }
+}
+
+/// The operators that take limits, and are an `Op` for spacing.
+const BIG_OPS: &str = "∑∏∐∫∬∭∮⋃⋂⨁⨂⋀⋁";
+
+/// A binary operator with nothing to bind on its left is not binary —
+/// the `-` of `-b`, or the one after a `(`. TeX calls it ordinary there,
+/// and so the space in front of it goes away.
+fn binds(left: Option<Class>) -> bool {
+    matches!(
+        left,
+        Some(Class::Ord | Class::Close | Class::Inner) | Some(Class::Op)
+    )
 }
 
 const ACCENTS: &[(&str, char)] = &[
@@ -1057,6 +1263,10 @@ mod tests {
         fn go(n: &Node) -> String {
             match n {
                 Node::Text(t) => t.clone(),
+                // a space shows as the fraction of an em it is, so an
+                // assertion can read the spacing TeX asked for
+                Node::Space(ems) => format!("<{:.0}>", ems * 18.0),
+                Node::Accent { base, mark } => format!("{}{mark}", go(base)),
                 Node::Row(v) => format!("[{}]", v.iter().map(go).collect::<Vec<_>>().join("")),
                 Node::Stack(v) => {
                     format!(
@@ -1096,9 +1306,9 @@ mod tests {
 
     #[test]
     fn plain_symbols_and_greek() {
-        assert_eq!(show(r"\delta = 2"), "𝛿 = 2");
-        assert_eq!(show(r"\alpha \to \beta"), "𝛼 → 𝛽");
-        assert_eq!(show(r"\forall x \in S"), "∀ 𝑥 ∈ 𝑆");
+        assert_eq!(show(r"\delta = 2"), "[𝛿<5>=<5>2]");
+        assert_eq!(show(r"\alpha \to \beta"), "[𝛼<5>→<5>𝛽]");
+        assert_eq!(show(r"\forall x \in S"), "[∀𝑥<5>∈<5>𝑆]");
     }
 
     /// TeX's math italic: a letter is a variable and leans, a digit or an
@@ -1108,12 +1318,31 @@ mod tests {
     /// renderer's italics flag only shears the upright glyph.
     #[test]
     fn letters_lean_and_everything_else_stands() {
-        assert_eq!(show(r"2x + 3y = 0"), "2𝑥 + 3𝑦 = 0");
-        assert_eq!(show(r"\log n"), "log 𝑛");
-        assert_eq!(show(r"\text{if } x > 0"), "if 𝑥 > 0");
+        assert_eq!(show(r"2x + 3y = 0"), "[2𝑥<4>+<4>3𝑦<5>=<5>0]");
+        assert_eq!(show(r"\log n"), "[log<3>𝑛]");
+        assert_eq!(show(r"\text{if } x > 0"), "[if 𝑥<5>><5>0]");
         assert_eq!(show(r"\mathrm{d}x"), "d𝑥");
         // …and `\text` puts back what leaned inside it
         assert_eq!(show(r"\text{max}"), "max");
+    }
+
+    /// TeX ignores the spaces a formula is WRITTEN with and inserts its
+    /// own by what the atoms are, which is why `$a+b=c$` reads as an
+    /// equation rather than as five characters — and why writing it
+    /// roomily changes nothing.
+    #[test]
+    fn spacing_comes_from_the_atoms_not_from_the_source() {
+        assert_eq!(show("a+b=c"), show("a  +  b  =  c"));
+        assert_eq!(show("a+b=c"), "[𝑎<4>+<4>𝑏<5>=<5>𝑐]");
+        // a binary operator with nothing on its left is not binary
+        assert_eq!(show("-b"), "−𝑏");
+        assert_eq!(show("(-b)"), "(−𝑏)");
+        // …and punctuation is followed, never preceded
+        assert_eq!(show("f(x, y)"), "[𝑓(𝑥,<3>𝑦)]");
+        // an operator name takes a thin space before what it applies to
+        assert_eq!(show(r"\sin x"), "[sin<3>𝑥]");
+        // a script has no room for any of it
+        assert_eq!(show("e^{a+b}"), "𝑒^{𝑎+𝑏}");
     }
 
     /// A fraction is a BOX, so it needs no slash and no parentheses to
@@ -1121,13 +1350,13 @@ mod tests {
     #[test]
     fn fractions_roots_and_binomials_keep_their_structure() {
         assert_eq!(show(r"\frac{1}{2}"), "frac(1, 2)");
-        assert_eq!(show(r"\frac{a+b}{c}"), "frac(𝑎+𝑏, 𝑐)");
+        assert_eq!(show(r"\frac{a+b}{c}"), "frac([𝑎<4>+<4>𝑏], 𝑐)");
         // a keyboard hyphen is a minus sign in a formula
-        assert_eq!(show(r"a - b"), "𝑎 − 𝑏");
+        assert_eq!(show(r"a - b"), "[𝑎<4>−<4>𝑏]");
         assert_eq!(show(r"\frac{\pi^2}{6}"), "frac(𝜋^{2}, 6)");
         // a fraction keeps the setting of what is inside it
-        assert_eq!(show(r"\frac{\sin x}{x}"), "frac(sin 𝑥, 𝑥)");
-        assert_eq!(show(r"\sqrt{x+1}"), "sqrt(𝑥+1)");
+        assert_eq!(show(r"\frac{\sin x}{x}"), "frac([sin<3>𝑥], 𝑥)");
+        assert_eq!(show(r"\sqrt{x+1}"), "sqrt([𝑥<4>+<4>1])");
         assert_eq!(show(r"\sqrt[3]{x}"), "root(3, 𝑥)");
         assert_eq!(show(r"\binom{n}{k}"), "fence(stack[𝑛 / 𝑘])");
         assert_eq!(show(r"\mathbb{R}^n"), "ℝ^{𝑛}");
@@ -1138,9 +1367,9 @@ mod tests {
     /// whole of a function name.
     #[test]
     fn scripts_attach_to_the_atom_before_them() {
-        assert_eq!(show(r"x^2 + y_i"), "[𝑥^{2} + 𝑦_{𝑖}]");
+        assert_eq!(show(r"x^2 + y_i"), "[𝑥^{2}<4>+<4>𝑦_{𝑖}]");
         assert_eq!(show(r"abc^2"), "[𝑎𝑏𝑐^{2}]");
-        assert_eq!(show(r"\log_2 n"), "[log_{2} 𝑛]");
+        assert_eq!(show(r"\log_2 n"), "[log_{2}<3>𝑛]");
         assert_eq!(show(r"\sum_{i=1}^{n}"), "∑_{𝑖=1}^{𝑛}");
         // both scripts on one base, written either way round
         assert_eq!(show(r"x_a^b"), "𝑥_{𝑎}^{𝑏}");
@@ -1154,14 +1383,14 @@ mod tests {
     #[test]
     fn accents_ride_single_char_bases() {
         assert_eq!(show(r"\vec{x}"), "𝑥\u{20d7}");
-        assert_eq!(show(r"\hat{y} = \bar{x}"), "𝑦\u{0302} = 𝑥\u{0304}");
+        assert_eq!(show(r"\hat{y} = \bar{x}"), "[𝑦\u{0302}<5>=<5>𝑥\u{0304}]");
     }
 
     #[test]
     fn unknown_commands_stay_verbatim() {
-        assert_eq!(show(r"\foobar + 1"), r"\foobar + 1");
+        assert_eq!(show(r"\foobar + 1"), r"[\foobar<4>+<4>1]");
         // grouping braces disappear, the name does not
-        assert_eq!(show(r"\undefinedcmd{x}"), r"[\undefinedcmd𝑥]");
+        assert_eq!(show(r"\undefinedcmd{x}"), r"\undefinedcmd𝑥");
     }
 
     /// `\left…\right` is a pair that grows around what it holds, and an
@@ -1170,17 +1399,17 @@ mod tests {
     fn fences_pair_up_and_delimiters_stay() {
         assert_eq!(show(r"\left( \frac{1}{2} \right)"), "fence(frac(1, 2))");
         assert_eq!(show(r"\left\{ x \right."), "fence{𝑥");
-        assert_eq!(show(r"\langle u, v \rangle"), "⟨ 𝑢, 𝑣 ⟩");
+        assert_eq!(show(r"\langle u, v \rangle"), "[⟨𝑢,<3>𝑣⟩]");
         // a nested pair closes its own
         assert_eq!(show(r"\left( \left| x \right| \right)"), "fence(fence|𝑥|)");
     }
 
     #[test]
     fn named_functions_lose_only_their_backslash() {
-        assert_eq!(show(r"\sin x + \cos y"), "sin 𝑥 + cos 𝑦");
+        assert_eq!(show(r"\sin x + \cos y"), "[sin<3>𝑥<4>+<4>cos<3>𝑦]");
         assert_eq!(
             show(r"\lim_{x \to 0} \frac{\sin x}{x} = 1"),
-            "[lim_{𝑥 → 0} frac(sin 𝑥, 𝑥) = 1]"
+            "[lim_{𝑥→0}<3>frac([sin<3>𝑥], 𝑥)<5>=<5>1]"
         );
     }
 
@@ -1190,19 +1419,19 @@ mod tests {
     /// equation drew with a blank line above and below.
     #[test]
     fn source_line_breaks_are_spaces_and_only_a_double_backslash_breaks() {
-        assert_eq!(show("\nE = mc^2\n"), "[𝐸 = 𝑚𝑐^{2}]");
-        assert_eq!(show("a\n= b"), "𝑎 = 𝑏");
+        assert_eq!(show("\nE = mc^2\n"), "[𝐸<5>=<5>𝑚𝑐^{2}]");
+        assert_eq!(show("a\n= b"), "[𝑎<5>=<5>𝑏]");
         assert_eq!(show(r"a \\ b"), "stack[𝑎 / 𝑏]");
-        assert_eq!(show("x    +     y"), "𝑥 + 𝑦");
+        assert_eq!(show("x    +     y"), "[𝑥<4>+<4>𝑦]");
         // a minted space swallows the ordinary ones beside it
-        assert_eq!(show(r"x \, dx"), "𝑥\u{2009}𝑑𝑥");
+        assert_eq!(show(r"x \, dx"), "[𝑥<3>𝑑𝑥]");
     }
 
     #[test]
     fn environments_become_rows_and_grids() {
         assert_eq!(
             show("\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}"),
-            "stack[[𝑎 = 𝑏] / [𝑐 = 𝑑]]"
+            "stack[[𝑎 [=<5>𝑏]] / [𝑐 [=<5>𝑑]]]"
         );
         assert_eq!(
             show(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}"),
@@ -1211,15 +1440,15 @@ mod tests {
         // cases keeps its brace, and only on the left
         assert_eq!(
             show(r"\begin{cases} 1 & x > 0 \\ 0 & x < 0 \end{cases}"),
-            "fence{grid[1 | 𝑥 > 0 / 0 | 𝑥 < 0]"
+            "fence{grid[1 | [𝑥<5>><5>0] / 0 | [𝑥<5><<5>0]]"
         );
         // a matrix inside cases closes its own \end
         assert_eq!(
             show(r"\begin{aligned} a &= \begin{matrix} 1 & 2 \end{matrix} \end{aligned}"),
-            "[𝑎 [= grid[1 | 2]]]"
+            "[𝑎 [=<5>grid[1 | 2]]]"
         );
         // an unclosed environment still draws what it holds
-        assert_eq!(show(r"\begin{aligned} a &= b"), "[𝑎 = 𝑏]");
+        assert_eq!(show(r"\begin{aligned} a &= b"), "[𝑎 [=<5>𝑏]]");
     }
 
     /// Nothing may reach the screen that the bundled math font can't

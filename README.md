@@ -225,7 +225,8 @@ Inline `$\delta = 2$` and display `$$…$$` math are **typeset**, not
 spelled out: `\frac` stacks around a rule, `\sqrt` draws its bar over
 what it covers, `\left(…\right)` grows to its content, a display `\sum`
 takes its limits above and below, and variables are set in real math
-italics. Greek, operators, `\begin{aligned}` rows, matrices and `cases`
+italics. Spacing is TeX's table rather than the author's spaces, so
+`$a+b=c$` reads as an equation however it was typed. Greek, operators, `\begin{aligned}` rows, matrices and `cases`
 come along; display math gets a centered line of its own. There is no
 TeX engine in the stack, so anything unrecognized stays verbatim rather
 than vanishing.
@@ -598,6 +599,8 @@ assets/
   reading.ttf         bundled Inter subset (OFL-1.1) — the face rendered
                       markdown reads in; non-Latin falls back to egui's fonts
   gen-reading-font.sh regenerates it from an Inter release TTF
+  set-leading.py      bakes the prose leading into a face — egui has no
+                      line-height setting to reach for
   math.ttf            bundled Noto Sans Math subset (OFL-1.1) — the one face
                       a math span is drawn in, italics and all
   gen-math-font.sh    regenerates it; codepoints come from mathtext::glyphs()
