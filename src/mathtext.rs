@@ -52,6 +52,9 @@ pub enum Node {
     /// and lands right of centre on anything but a perfectly square
     /// glyph.
     Accent { base: Box<Node>, mark: char },
+    /// A rule across the whole of what it covers — `\overline{AB}` bars
+    /// both letters, where an accent would sit one mark between them.
+    Bar { base: Box<Node>, under: bool },
     /// A horizontal sequence.
     Row(Vec<Node>),
     /// A base with what rides on it.
@@ -86,7 +89,7 @@ impl Node {
         match self {
             Node::Text(t) => t.is_empty(),
             Node::Space(_) => false,
-            Node::Accent { base, .. } => base.is_empty(),
+            Node::Accent { base, .. } | Node::Bar { base, .. } => base.is_empty(),
             Node::Row(v) | Node::Stack(v) => v.iter().all(Node::is_empty),
             Node::Grid(rows) => rows.iter().flatten().all(Node::is_empty),
             _ => false,
@@ -110,6 +113,7 @@ impl Node {
                 base.write_text(out);
                 out.push(*mark);
             }
+            Node::Bar { base, .. } => base.write_text(out),
             Node::Row(v) | Node::Stack(v) => v.iter().for_each(|n| n.write_text(out)),
             Node::Grid(rows) => rows.iter().flatten().for_each(|n| n.write_text(out)),
             Node::Scripts { base, sup, sub } => {
@@ -171,9 +175,7 @@ pub fn glyphs() -> String {
     for (_, c) in ACCENTS {
         out.push(*c);
     }
-    for c in ['ℂ', '𝔼', '𝔽', 'ℍ', 'ℕ', 'ℙ', 'ℚ', 'ℝ', 'ℤ'] {
-        out.push(c);
-    }
+    out.push_str(&alphabet_glyphs());
     out
 }
 
@@ -510,6 +512,13 @@ impl Parser<'_> {
         self.arg().text()
     }
 
+    /// `\mathcal{…}` and friends: the argument read as plain letters and
+    /// put back in the alphabet the command selects.
+    fn alphabet(&mut self, seq: &mut Seq, kind: Alphabet) {
+        let arg = self.arg_name();
+        seq.push_atom(&alphabet(&arg, kind), Class::Ord);
+    }
+
     /// The argument as a NAME: an environment's, and nothing a reader
     /// sees. It has to be read back upright, because the parser leans
     /// every letter it meets and `pmatrix` is not `𝑝𝑚𝑎𝑡𝑟𝑖𝑥`.
@@ -578,7 +587,21 @@ impl Parser<'_> {
             return;
         }
         let name: String = self.s[start..self.i].iter().collect();
-        // accents: combining mark after a single-char base
+        // `\overline`/`\underline` reach across everything they cover
+        if let Some(under) =
+            matches!(name.as_str(), "overline" | "underline").then(|| name == "underline")
+        {
+            let base = self.arg();
+            seq.push_boxed(
+                Node::Bar {
+                    base: Box::new(base),
+                    under,
+                },
+                Class::Ord,
+            );
+            return;
+        }
+        // accents: combining mark centred on a base
         if let Some(mark) = accent_mark(&name) {
             let base = self.arg();
             seq.push_boxed(
@@ -600,18 +623,18 @@ impl Parser<'_> {
                 let arg = self.raw_arg();
                 seq.push_atom(&arg, Class::Ord);
             }
-            // wrappers that only change weight or shape: the argument
-            // keeps whatever setting its own characters ask for
-            "textit" | "mathbf" | "mathit" | "mathcal" | "mathfrak" | "mathscr" | "boldsymbol"
-            | "bm" | "pmb" | "overbrace" | "underbrace" => {
+            // wrappers that only change shape: the argument keeps
+            // whatever setting its own characters ask for
+            "textit" | "mathit" | "pmb" | "overbrace" | "underbrace" => {
                 let arg = self.arg();
                 seq.push(arg);
             }
-            // `\mathbb{R}` has a letter of its own
-            "mathbb" => {
-                let arg = self.arg_text();
-                seq.push_str(&blackboard(&upright(&arg)));
-            }
+            // …and the ones that select a math ALPHABET, which Unicode
+            // has as characters: `\mathcal{L}` is `ℒ`
+            "mathbf" | "boldsymbol" | "bm" => self.alphabet(seq, Alphabet::Bold),
+            "mathcal" | "mathscr" => self.alphabet(seq, Alphabet::Script),
+            "mathfrak" => self.alphabet(seq, Alphabet::Fraktur),
+            "mathbb" => self.alphabet(seq, Alphabet::DoubleStruck),
             // named functions are set upright — the name IS the rendering
             _ if FUNCTIONS.contains(&name.as_str()) => seq.push_atom(&name, Class::Op),
             "pmod" => {
@@ -900,23 +923,88 @@ fn standing(c: char) -> Option<char> {
     }
 }
 
-/// `\mathbb{R}` is ℝ wherever a double-struck letter exists; the rest of
-/// the argument keeps its plain letters.
-fn blackboard(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'C' => 'ℂ',
-            'E' => '𝔼',
-            'F' => '𝔽',
-            'H' => 'ℍ',
-            'N' => 'ℕ',
-            'P' => 'ℙ',
-            'Q' => 'ℚ',
-            'R' => 'ℝ',
-            'Z' => 'ℤ',
-            other => other,
-        })
-        .collect()
+/// The math alphabets TeX's font commands select. Unicode has them all
+/// as characters — a `\mathcal{L}` IS `ℒ` — which is the same trade the
+/// italics make: a designed letterform a math font draws, where a
+/// renderer could only fake a slant and could not fake script at all.
+///
+/// The blocks are contiguous except where the letter was already in
+/// Letterlike Symbols, so those few are listed by hand.
+#[derive(Clone, Copy)]
+enum Alphabet {
+    Bold,
+    Script,
+    Fraktur,
+    DoubleStruck,
+}
+
+fn alphabet(s: &str, kind: Alphabet) -> String {
+    s.chars().map(|c| letter(c, kind)).collect()
+}
+
+fn letter(c: char, kind: Alphabet) -> char {
+    let (upper, lower, holes): (u32, u32, &[(char, char)]) = match kind {
+        Alphabet::Bold => (0x1d400, 0x1d41a, &[]),
+        Alphabet::Script => (
+            0x1d49c,
+            0x1d4b6,
+            &[
+                ('B', 'ℬ'),
+                ('E', 'ℰ'),
+                ('F', 'ℱ'),
+                ('H', 'ℋ'),
+                ('I', 'ℐ'),
+                ('L', 'ℒ'),
+                ('M', 'ℳ'),
+                ('R', 'ℛ'),
+                ('e', 'ℯ'),
+                ('g', 'ℊ'),
+                ('o', 'ℴ'),
+            ],
+        ),
+        Alphabet::Fraktur => (
+            0x1d504,
+            0x1d51e,
+            &[('C', 'ℭ'), ('H', 'ℌ'), ('I', 'ℑ'), ('R', 'ℜ'), ('Z', 'ℨ')],
+        ),
+        Alphabet::DoubleStruck => (
+            0x1d538,
+            0x1d552,
+            &[
+                ('C', 'ℂ'),
+                ('H', 'ℍ'),
+                ('N', 'ℕ'),
+                ('P', 'ℙ'),
+                ('Q', 'ℚ'),
+                ('R', 'ℝ'),
+                ('Z', 'ℤ'),
+            ],
+        ),
+    };
+    if let Some((_, mapped)) = holes.iter().find(|(from, _)| *from == c) {
+        return *mapped;
+    }
+    let at = |base: u32, offset: u32| char::from_u32(base + offset).unwrap_or(c);
+    match c {
+        'A'..='Z' => at(upper, c as u32 - 'A' as u32),
+        'a'..='z' => at(lower, c as u32 - 'a' as u32),
+        _ => c,
+    }
+}
+
+/// Every character the alphabets can produce — [`glyphs`] needs them,
+/// and so does the font.
+fn alphabet_glyphs() -> String {
+    let letters: String = ('A'..='Z').chain('a'..='z').collect();
+    [
+        Alphabet::Bold,
+        Alphabet::Script,
+        Alphabet::Fraktur,
+        Alphabet::DoubleStruck,
+    ]
+    .into_iter()
+    .map(|kind| alphabet(&letters, kind))
+    .collect()
 }
 
 /// Combining marks ride the character before them — the accents this
@@ -1025,12 +1113,10 @@ const ACCENTS: &[(&str, char)] = &[
     ("hat", '\u{0302}'),
     ("widehat", '\u{0302}'),
     ("bar", '\u{0304}'),
-    ("overline", '\u{0304}'),
     ("tilde", '\u{0303}'),
     ("widetilde", '\u{0303}'),
     ("dot", '\u{0307}'),
     ("ddot", '\u{0308}'),
-    ("underline", '\u{0332}'),
     ("check", '\u{030c}'),
     ("breve", '\u{0306}'),
     ("acute", '\u{0301}'),
@@ -1267,6 +1353,10 @@ mod tests {
                 // assertion can read the spacing TeX asked for
                 Node::Space(ems) => format!("<{:.0}>", ems * 18.0),
                 Node::Accent { base, mark } => format!("{}{mark}", go(base)),
+                Node::Bar { base, under } => {
+                    let side = if *under { "under" } else { "over" };
+                    format!("{side}({})", go(base))
+                }
                 Node::Row(v) => format!("[{}]", v.iter().map(go).collect::<Vec<_>>().join("")),
                 Node::Stack(v) => {
                     format!(
@@ -1360,6 +1450,11 @@ mod tests {
         assert_eq!(show(r"\sqrt[3]{x}"), "root(3, 𝑥)");
         assert_eq!(show(r"\binom{n}{k}"), "fence(stack[𝑛 / 𝑘])");
         assert_eq!(show(r"\mathbb{R}^n"), "ℝ^{𝑛}");
+        // the font commands select a math ALPHABET, which Unicode has
+        assert_eq!(show(r"\mathcal{L}"), "ℒ");
+        assert_eq!(show(r"\mathbf{v}"), "𝐯");
+        assert_eq!(show(r"\mathfrak{g}"), "𝔤");
+        assert_eq!(show(r"\mathbb{E}"), "𝔼");
     }
 
     /// A script attaches to an ATOM, and an atom is as long as whatever
@@ -1384,6 +1479,9 @@ mod tests {
     fn accents_ride_single_char_bases() {
         assert_eq!(show(r"\vec{x}"), "𝑥\u{20d7}");
         assert_eq!(show(r"\hat{y} = \bar{x}"), "[𝑦\u{0302}<5>=<5>𝑥\u{0304}]");
+        // a bar reaches across everything it covers, an accent does not
+        assert_eq!(show(r"\overline{AB}"), "over(𝐴𝐵)");
+        assert_eq!(show(r"\underline{x}"), "under(𝑥)");
     }
 
     #[test]

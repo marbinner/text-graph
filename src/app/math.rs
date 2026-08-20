@@ -240,6 +240,7 @@ impl Ctx<'_> {
                 ..Frame::empty()
             },
             Node::Accent { base, mark } => self.accent(base, *mark, size),
+            Node::Bar { base, under } => self.bar(base, *under, size),
             Node::Row(children) => self.row(children, size),
             Node::Scripts { base, sup, sub } => {
                 self.scripts(base, sup.as_deref(), sub.as_deref(), size)
@@ -326,6 +327,25 @@ impl Ctx<'_> {
         out.place(base, Vec2::ZERO);
         out.place(mark, at);
         // an accent rides over its base without widening it
+        out.width = width;
+        out
+    }
+
+    /// A rule across the whole of what it covers. `\overline{AB}` bars
+    /// both letters; an accent would have put one mark between them.
+    fn bar(&self, base: &Node, under: bool, size: f32) -> Frame {
+        let base = self.lay(base, size);
+        let rule = (RULE * size).max(1.0);
+        let gap = GAP * size;
+        let y = if under {
+            base.ink_bottom() + gap
+        } else {
+            base.ink_top() - gap - rule
+        };
+        let width = base.width;
+        let mut out = Frame::empty();
+        out.place(base, Vec2::ZERO);
+        out.rule(Rect::from_min_max(pos2(0.0, y), pos2(width, y + rule)));
         out.width = width;
         out
     }

@@ -24,9 +24,10 @@ fonts. Regenerate with `assets/gen-reading-font.sh`.
 Copyright 2018 Google LLC (<https://github.com/notofonts/notofonts.github.io>),
 OFL-1.1.
 
-A ~370-codepoint subset holding exactly what `src/mathtext.rs` converts math
+A ~550-codepoint subset holding exactly what `src/mathtext.rs` converts math
 spans into: operators, relations, arrows, greek, combining accents, and the
-Mathematical Alphanumeric italics that ARE math italic. Math spans are drawn
+Mathematical Alphanumeric letters that ARE math italic, bold, script,
+fraktur and double-struck — `\mathcal{L}` is the character `ℒ`. Math spans are drawn
 in this face ALONE rather than through the reading chain — epaint centres a
 fallback face against the primary one, so a borrowed `∑` sits off the baseline
 of the letters beside it. No single Noto face covers the whole inventory, so

@@ -225,8 +225,9 @@ Inline `$\delta = 2$` and display `$$…$$` math are **typeset**, not
 spelled out: `\frac` stacks around a rule, `\sqrt` draws its bar over
 what it covers, `\left(…\right)` grows to its content, a display `\sum`
 takes its limits above and below, and variables are set in real math
-italics. Spacing is TeX's table rather than the author's spaces, so
-`$a+b=c$` reads as an equation however it was typed. Greek, operators, `\begin{aligned}` rows, matrices and `cases`
+italics — as are `\mathcal`, `\mathbf`, `\mathfrak` and `\mathbb`, which
+Unicode has as real letterforms. Spacing is TeX's table rather than the
+author's spaces, so `$a+b=c$` reads as an equation however it was typed. Greek, operators, `\begin{aligned}` rows, matrices and `cases`
 come along; display math gets a centered line of its own. There is no
 TeX engine in the stack, so anything unrecognized stays verbatim rather
 than vanishing.
