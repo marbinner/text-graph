@@ -252,7 +252,7 @@ fn a_display_equation_takes_a_centred_row_of_its_own() {
             .unwrap_or_else(|| panic!("{needle:?} never rendered, only {labels:?}"))
             .1
     };
-    let math = find("E = mc");
+    let math = find("𝐸 = 𝑚𝑐");
     let prose = find("Prelude words");
     assert!(
         math.width() > math.height(),
@@ -272,57 +272,111 @@ fn a_display_equation_takes_a_centred_row_of_its_own() {
     );
 }
 
-/// An exponent has to LOOK like one. `mathtext` hands over runs with a
-/// level rather than characters, because Unicode can spell `x²` and has
+/// An exponent has to LOOK like one, at whatever depth the formula puts
+/// it. `mathtext` hands over runs carrying a scale and an absolute rise
+/// rather than characters, because Unicode can spell `x²` and has
 /// nothing at all for the `z_i` in `e^{z_i}` — that one used to degrade
-/// to `e^(zᵢ)`, caret and parens on the page. The setting is what makes
-/// the level real: a smaller font, aligned to the top of the row.
+/// to `e^(zᵢ)`, caret and parens on the page. This is the other half:
+/// `math_job` solving `line_height` so each baseline lands where the
+/// formula asked, which is the part epaint gives no direct lever for.
 #[test]
-fn an_exponent_is_set_smaller_and_rides_higher() {
-    let h = harness();
-    let font = eframe::egui::FontId::new(15.0, eframe::egui::FontFamily::Name("reading".into()));
-    let job = super::navigator::math_job("x^2 + y_i", &font, eframe::egui::Color32::WHITE);
-    let galley = h.ctx.fonts_mut(|f| f.layout_job(job));
-    let row = galley.rows.first().expect("one row");
-    let glyph = |c: char| {
-        row.glyphs
-            .iter()
-            .find(|g| g.chr == c)
-            .unwrap_or_else(|| panic!("{c:?} never laid out"))
-    };
-    let (base, sup, sub) = (glyph('x'), glyph('2'), glyph('i'));
-    assert!(
-        sup.font_height < base.font_height,
-        "the exponent is set at the base size"
+fn every_script_lands_where_the_formula_puts_it() {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    const TEX: &str = r"x^{a_b}_c";
+    const SIZE: f32 = 20.0;
+
+    let seen: Arc<Mutex<Vec<(char, f32, f32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let probe = seen.clone();
+    // the first frame runs before install_fonts, and the reading family
+    // is not bound yet — laying out against it there panics epaint
+    let mut h = Harness::new_ui_state(
+        move |ui, ready: &mut bool| {
+            if !*ready {
+                return;
+            }
+            let font =
+                eframe::egui::FontId::new(SIZE, eframe::egui::FontFamily::Name("math".into()));
+            let job = super::navigator::math_job(ui, TEX, &font, eframe::egui::Color32::WHITE);
+            let galley = ui.painter().layout_job(job);
+            let row = galley.rows.first().expect("one row");
+            *probe.lock().expect("no other thread") = row
+                .glyphs
+                .iter()
+                .map(|g| (g.chr, g.pos.y, g.font_height))
+                .collect();
+        },
+        false,
     );
-    // y grows downward: a smaller y is higher up the row
-    assert!(sup.pos.y < base.pos.y, "the exponent does not ride high");
-    assert!(sub.pos.y > base.pos.y, "the index does not sit low");
+    super::install_fonts(&h.ctx);
+    *h.state_mut() = true;
+    h.step();
+    let glyphs = seen.lock().expect("no other thread").clone();
+    let at = |c: char| {
+        glyphs
+            .iter()
+            .find(|g| g.0 == c)
+            .copied()
+            .unwrap_or_else(|| panic!("{c:?} never laid out in {glyphs:?}"))
+    };
+    // the letters ARE their math-italic characters by the time they are
+    // laid out — `mathtext::lean` resolves the setting into the text
+    let base = at('𝑥');
+    for run in text_graph::mathtext::to_runs(TEX) {
+        let c = run.text.chars().next().expect("no empty runs");
+        let glyph = at(c);
+        // y grows downward, and `rise` is negative upward, both in ems
+        // of the span's size
+        let got = (base.1 - glyph.1) / SIZE;
+        assert!(
+            (got + run.rise).abs() < 0.1,
+            "{c:?} landed at {got} em, and the formula asked for {}",
+            -run.rise
+        );
+        assert!(
+            (glyph.2 - base.2 * run.scale).abs() < 1.0,
+            "{c:?} is set at {} against a line of {}, scale {}",
+            glyph.2,
+            base.2,
+            run.scale
+        );
+    }
+    // and the ladder is one the formula actually describes: down, up,
+    // and back down but not all the way
+    assert!(at('𝑎').1 < base.1, "the exponent does not ride high");
+    assert!(at('𝑐').1 > base.1, "the index does not sit low");
+    assert!(
+        at('𝑏').1 > at('𝑎').1 && at('𝑏').1 < base.1,
+        "a subscript inside a superscript left the exponent"
+    );
 }
 
 /// A glyph no font in the family owns is not invisible — epaint draws
 /// the replacement box in its place. Inter's Latin subset has no
-/// operators, no modifier-letter scripts and no combining accents, and
-/// neither does egui's default face, so every `$\alpha \in S$` in a note
-/// used to reach the reader as a row of boxes. `assets/math.ttf` is the
-/// answer, and this is the gate that says when it needs regenerating:
-/// a symbol added to `mathtext`'s tables without a rerun of
-/// `assets/gen-math-font.sh` fails right here.
+/// operators, no math italics and no combining accents, and neither does
+/// egui's default face, so every `$\alpha \in S$` in a note used to
+/// reach the reader as a row of boxes. `assets/math.ttf` is the answer,
+/// and this is the gate that says when it needs regenerating: a symbol
+/// added to `mathtext`'s tables without a rerun of
+/// `assets/gen-math-font.sh` fails right here. It also holds the family
+/// to covering the span on its OWN — a character that fell through to a
+/// fallback would draw off the baseline of the ones around it.
 #[test]
 fn every_character_mathtext_can_draw_has_a_glyph() {
     let h = harness();
-    let reading = eframe::egui::FontId::new(15.0, eframe::egui::FontFamily::Name("reading".into()));
+    let math = eframe::egui::FontId::new(15.0, eframe::egui::FontFamily::Name("math".into()));
     let mut missing = String::new();
     h.ctx.fonts_mut(|f| {
         for c in text_graph::mathtext::glyphs().chars() {
-            if !f.has_glyph(&reading, c) {
+            if !f.has_glyph(&math, c) {
                 missing.push(c);
             }
         }
     });
     assert!(
         missing.is_empty(),
-        "the reading family cannot draw {missing:?} — rerun assets/gen-math-font.sh"
+        "the math family cannot draw {missing:?} — rerun assets/gen-math-font.sh"
     );
 }
 

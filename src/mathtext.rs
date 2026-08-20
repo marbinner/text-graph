@@ -9,20 +9,24 @@
 //! named functions (`\sin`, `\log`, `\lim`), `\begin{…}` environments
 //! and `\text`-style wrappers.
 //!
-//! The output is [`Run`]s, not a string, because two things about a
-//! formula cannot be said in plain characters. Scripts: Unicode has
-//! superscript forms for some characters and none for the rest, so
-//! `x^2` could be spelled and `e^{z_i}` could only degrade to `e^(zᵢ)`.
-//! A run carries its LEVEL instead and the app raises or lowers it, so
-//! every exponent sets like an exponent. And style: TeX leans variables
-//! and stands operators, digits and function names upright, which is
-//! what tells `log` from `l·o·g` at a glance — [`Run::italic`] carries
-//! that decision per run.
+//! The output is [`Run`]s, not a string, because the two things that
+//! make a formula READ as one cannot be said in plain characters.
 //!
-//! One level only. A script inside a script (the `_i` in `e^{z_i}`) has
-//! nowhere lower to go, so it flattens into the Unicode forms, and a
-//! script that can't be spelled that way falls back to `^(…)`/`_(…)`.
-//! Same rule for arguments: `\frac{1}{i^2}` sets its denominator flat.
+//! Scripts. Unicode has superscript forms for some characters and none
+//! for the rest, so spelling them gave `x²` here and `e^(zᵢ)` there —
+//! a caret and parentheses on the page the moment one character in a
+//! script had no script form, which for `e^{z_i}` is every time. A run
+//! carries a SCALE and a RISE instead, TeX's own ladder: each step is
+//! smaller than the last, moves less far than the step before it, and
+//! stops at scriptscript. The app places it; nothing has to be spellable.
+//!
+//! Italics. TeX leans variables and stands operators, digits and
+//! function names, which is what tells `log` from `l·o·g` at a glance.
+//! That decision is resolved into the CHARACTERS — Unicode's
+//! Mathematical Alphanumeric block is a designed italic that a math
+//! font draws properly, where a renderer's italics flag only shears an
+//! upright glyph. So a run's text is what gets drawn, with no styling
+//! left over for the app to apply.
 //!
 //! Whitespace follows TeX, not the source: a newline inside a span is
 //! just a space, runs of spaces collapse, and only `\\` breaks a line.
@@ -39,15 +43,77 @@
 //! renders with to it.
 
 /// One stretch of converted math that sets the same way throughout.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+struct Piece {
+    text: String,
+    style: Style,
+    /// Whether TeX's math italic applies — resolved into the characters
+    /// themselves by [`lean`] before any of this leaves the module.
+    italic: bool,
+}
+
+/// One stretch of converted math that sets the same way throughout.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Run {
+    /// What to draw. Leaning letters are already the Mathematical
+    /// Alphanumeric characters that ARE italic, so there is no styling
+    /// left for the app to apply — see [`lean`].
     pub text: String,
-    /// 0 on the baseline, 1 raised, -1 lowered. Never anything else —
-    /// see the module doc on why one level is the whole ladder.
-    pub level: i8,
-    /// TeX's math italic: letters lean, digits and operators stand, and
-    /// a function name or `\text{…}` stands whatever it is made of.
-    pub italic: bool,
+    /// Size as a fraction of the span's base size: 1 on the main line,
+    /// [`SCRIPT`] in a script, [`SCRIPTSCRIPT`] below that.
+    pub scale: f32,
+    /// Baseline offset in ems of the SPAN's size — not of this run's —
+    /// negative upward. Every run's offset is absolute, so the app
+    /// places each one without knowing what it is nested in.
+    pub rise: f32,
+}
+
+/// TeX's two smaller sizes, as fractions of the main line.
+pub const SCRIPT: f32 = 0.7;
+pub const SCRIPTSCRIPT: f32 = 0.5;
+/// How far a script moves off the line it rides on, in ems of THAT
+/// line's size — so an exponent's exponent moves less than the first
+/// one did, the way the ladder narrows in a real formula.
+const SUP_RISE: f32 = 0.45;
+const SUB_DROP: f32 = 0.2;
+
+/// Where a stretch of math sits and how big it is: TeX's "style",
+/// carried down the parse so a script knows what it is a script OF.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Style {
+    scale: f32,
+    rise: f32,
+}
+
+impl Style {
+    const BASE: Self = Self {
+        scale: 1.0,
+        rise: 0.0,
+    };
+
+    fn sup(self) -> Self {
+        Self {
+            scale: self.smaller(),
+            rise: self.rise - SUP_RISE * self.scale,
+        }
+    }
+
+    fn sub(self) -> Self {
+        Self {
+            scale: self.smaller(),
+            rise: self.rise + SUB_DROP * self.scale,
+        }
+    }
+
+    /// One step down, and then no further: TeX has scriptscript and
+    /// nothing smaller, so a fourth-level index stays legible.
+    fn smaller(self) -> f32 {
+        if self.scale > SCRIPT {
+            SCRIPT
+        } else {
+            SCRIPTSCRIPT
+        }
+    }
 }
 
 /// Convert one math span (the text between the dollars) to runs.
@@ -57,11 +123,58 @@ pub fn to_runs(tex: &str) -> Vec<Run> {
         s: &chars,
         i: 0,
         col: ALIGN_TAB,
-        flat: false,
+        style: Style::BASE,
     };
     let mut out = Runs::default();
     p.seq(None, &mut out);
-    tidy(out.runs)
+    lean(tidy(out.runs))
+}
+
+/// Resolve TeX's math italic into the characters themselves, and merge
+/// what is left into runs.
+///
+/// Unicode has a designed italic for every math letter — the
+/// Mathematical Alphanumeric block — and a math font draws those as
+/// real italic letterforms. A renderer's "italics" flag only SHEARS the
+/// upright glyph, which is what made a formula read as slanted UI text
+/// rather than as mathematics. A letter with no such form (`ℓ`, `ℵ`,
+/// anything the author typed that is not a math letter) simply stands.
+fn lean(pieces: Vec<Piece>) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::new();
+    for p in pieces {
+        let text: String = if p.italic {
+            p.text.chars().map(|c| leaning(c).unwrap_or(c)).collect()
+        } else {
+            p.text
+        };
+        match out.last_mut() {
+            Some(r) if r.scale == p.style.scale && r.rise == p.style.rise => r.text.push_str(&text),
+            _ => out.push(Run {
+                text,
+                scale: p.style.scale,
+                rise: p.style.rise,
+            }),
+        }
+    }
+    out
+}
+
+/// The Mathematical Alphanumeric italic of a letter, when there is one.
+/// Uppercase Greek is absent on purpose: TeX sets `\Gamma` upright.
+fn leaning(c: char) -> Option<char> {
+    let at = |base: u32, offset: u32| char::from_u32(base + offset);
+    match c {
+        'h' => Some('\u{210e}'), // the one hole in the italic latin block
+        'a'..='z' => at(0x1d44e, c as u32 - 'a' as u32),
+        'A'..='Z' => at(0x1d434, c as u32 - 'A' as u32),
+        'α'..='ω' => at(0x1d6fc, c as u32 - 'α' as u32),
+        'ϑ' => Some('𝜗'),
+        'ϵ' => Some('𝜖'),
+        'ϕ' => Some('𝜙'),
+        'ϱ' => Some('𝜚'),
+        'ϖ' => Some('𝜛'),
+        _ => None,
+    }
 }
 
 /// Every character [`to_runs`] can put on screen. The app's font test
@@ -70,13 +183,20 @@ pub fn to_runs(tex: &str) -> Vec<Run> {
 /// inventory (and the tables must not grow past it).
 pub fn glyphs() -> String {
     let mut out = String::from(STANDALONE);
+    // whatever a note's own characters are, they pass through: the
+    // printable ASCII a formula is written in has to be drawable, and
+    // so does the italic of every letter that leans
+    for c in ' '..='~' {
+        out.push(c);
+        if let Some(italic) = leaning(c) {
+            out.push(italic);
+        }
+    }
     for (_, s) in SYMBOLS {
         out.push_str(s);
+        out.extend(s.chars().filter_map(leaning));
     }
     for (_, c) in ACCENTS {
-        out.push(*c);
-    }
-    for (_, c) in SUPERS.iter().chain(SUBS) {
         out.push(*c);
     }
     for c in ['ℂ', '𝔼', '𝔽', 'ℍ', 'ℕ', 'ℙ', 'ℚ', 'ℝ', 'ℤ'] {
@@ -91,14 +211,14 @@ pub fn glyphs() -> String {
 /// matches, so a formula is a handful of runs rather than one per glyph.
 #[derive(Default)]
 struct Runs {
-    runs: Vec<Run>,
+    runs: Vec<Piece>,
 }
 
 impl Runs {
     /// Append `text` at `level`. `upright` forces the whole string
     /// upright: a function name or `\text{…}` is a word, not a product
     /// of variables.
-    fn push(&mut self, text: &str, level: i8, upright: bool) {
+    fn push(&mut self, text: &str, style: Style, upright: bool) {
         for c in text.chars() {
             // a combining mark belongs to the character before it: give
             // it that run, or the accent lands in a run of its own and
@@ -109,28 +229,35 @@ impl Runs {
                 r.text.push(c);
                 continue;
             }
-            self.push_raw(c, level, !upright && c.is_alphabetic());
+            self.push_raw(c, style, !upright && c.is_alphabetic());
         }
     }
 
-    /// Take `runs` as they are, at `level`. `upright` flattens their
-    /// setting — a wrapper that makes a word of its argument.
-    fn extend(&mut self, runs: Vec<Run>, level: i8, upright: bool) {
+    /// Take `runs` as they are. `upright` flattens their setting — a
+    /// wrapper that makes a word of its argument.
+    fn extend(&mut self, runs: Vec<Piece>, upright: bool) {
         for r in runs {
+            let style = r.style;
             for c in r.text.chars() {
-                self.push_raw(c, level, r.italic && !upright);
+                if is_combining(c)
+                    && let Some(last) = self.runs.last_mut()
+                {
+                    last.text.push(c);
+                    continue;
+                }
+                self.push_raw(c, style, r.italic && !upright);
             }
         }
     }
 
     /// Append one character with its setting already decided — the
     /// rebuild after [`tidy`], which must not re-derive what it kept.
-    fn push_raw(&mut self, c: char, level: i8, italic: bool) {
+    fn push_raw(&mut self, c: char, style: Style, italic: bool) {
         match self.runs.last_mut() {
-            Some(r) if r.level == level && r.italic == italic => r.text.push(c),
-            _ => self.runs.push(Run {
+            Some(r) if r.style == style && r.italic == italic => r.text.push(c),
+            _ => self.runs.push(Piece {
                 text: c.to_string(),
-                level,
+                style,
                 italic,
             }),
         }
@@ -142,9 +269,9 @@ impl Runs {
 }
 
 /// Characters the parser emits on its own, outside any table: the radical
-/// sign and the fraction slash, the parens the `(…)` fallbacks add, and
-/// the two spaces `\,` and `\quad` become.
-const STANDALONE: &str = "√/()[]C,\u{2003}\u{2009}";
+/// sign and the fraction slash, the parens a wide argument gets, and the
+/// two spaces `\,` and `\quad` become.
+const STANDALONE: &str = "√/()C,\u{2003}\u{2009}";
 
 /// What `&` becomes. TeX draws nothing for an alignment tab, so in
 /// `aligned` and friends it simply disappears; in a matrix it separates
@@ -173,9 +300,9 @@ struct Parser<'a> {
     i: usize,
     /// What an `&` expands to in the environment being read.
     col: &'static str,
-    /// Inside an argument, where a raised or lowered run has nowhere to
-    /// go: scripts spell themselves with the Unicode tables instead.
-    flat: bool,
+    /// Where what we are reading sits: the main line, or a script of a
+    /// script of it.
+    style: Style,
 }
 
 impl Parser<'_> {
@@ -191,41 +318,30 @@ impl Parser<'_> {
                 '\\' => self.command(out),
                 '{' => self.seq(Some('}'), out),
                 '}' => {} // stray closer: grouping, not content
-                '^' => self.script(out, SUPERS, '^', 1),
-                '_' => self.script(out, SUBS, '_', -1),
-                '&' => out.push(self.col, 0, true),
+                '^' => self.script(out, Style::sup),
+                '_' => self.script(out, Style::sub),
+                '&' => out.push(self.col, self.style, true),
                 // TeX whitespace: source line breaks and tabs are spaces,
                 // `~` is a space that doesn't break. Only `\\` ends a line.
-                '~' | '\n' | '\r' | '\t' => out.push(" ", 0, true),
-                _ => out.push(&c.to_string(), 0, false),
+                '~' | '\n' | '\r' | '\t' => out.push(" ", self.style, true),
+                _ => out.push(&c.to_string(), self.style, false),
             }
         }
     }
 
-    /// A `^` or `_` was consumed: raise or lower its argument, unless we
-    /// are already inside one — then it spells itself, or falls back to
-    /// the honest `^(…)`.
-    fn script(&mut self, out: &mut Runs, table: &[(char, char)], op: char, level: i8) {
+    /// A `^` or `_` was consumed: read its argument one step off the
+    /// line we are on. The step is relative, so `e^{z_i}`'s index lands
+    /// below the exponent rather than below the line.
+    fn script(&mut self, out: &mut Runs, step: fn(Style) -> Style) {
+        let outer = self.style;
+        self.style = step(outer);
         let body = self.arg();
-        if !self.flat {
-            out.extend(body, level, false);
-            return;
-        }
-        match map_script(&joined(&body), table) {
-            // the spelled forms are letters and digits like any other:
-            // `ᵢ` leans because `i` does
-            Some(m) => out.push(&m, 0, false),
-            None => {
-                out.push(&op.to_string(), 0, true);
-                out.extend(parens_if_wide(body), 0, false);
-            }
-        }
+        self.style = outer;
+        out.extend(body, false);
     }
 
-    /// One argument, flattened to text: a `{…}` group, a `\command`, or a
-    /// single character. Everything inside sets on one level.
-    fn arg(&mut self) -> Vec<Run> {
-        let flat = std::mem::replace(&mut self.flat, true);
+    /// One argument: a `{…}` group, a `\command`, or a single character.
+    fn arg(&mut self) -> Vec<Piece> {
         let mut out = Runs::default();
         match self.s.get(self.i) {
             Some('{') => {
@@ -238,11 +354,10 @@ impl Parser<'_> {
             }
             Some(&c) => {
                 self.i += 1;
-                out.push(&c.to_string(), 0, false);
+                out.push(&c.to_string(), self.style, false);
             }
             None => {}
         }
-        self.flat = flat;
         out.runs
     }
 
@@ -257,15 +372,15 @@ impl Parser<'_> {
             if let Some(&c) = self.s.get(self.i) {
                 self.i += 1;
                 match c {
-                    ',' | ':' | ';' => out.push("\u{2009}", 0, true), // thin space
+                    ',' | ':' | ';' => out.push("\u{2009}", self.style, true), // thin space
                     '!' => {}
-                    '|' => out.push("‖", 0, true),
-                    '\\' => out.push("\n", 0, true),
+                    '|' => out.push("‖", self.style, true),
+                    '\\' => out.push("\n", self.style, true),
                     // \{ \} \$ \% \& \# \_ and a lone \
-                    _ => out.push(&c.to_string(), 0, true),
+                    _ => out.push(&c.to_string(), self.style, true),
                 }
             } else {
-                out.push("\\", 0, true);
+                out.push("\\", self.style, true);
             }
             return;
         }
@@ -273,7 +388,7 @@ impl Parser<'_> {
         // accents: combining mark after a single-char base
         if let Some(mark) = accent_mark(&name) {
             let base = self.arg();
-            out.push(&accent(&joined(&base), mark), 0, false);
+            out.push(&accent(&joined(&base), mark), self.style, false);
             return;
         }
         match name.as_str() {
@@ -282,61 +397,58 @@ impl Parser<'_> {
             "text" | "textrm" | "textbf" | "textsf" | "texttt" | "mathrm" | "mathsf" | "mathtt"
             | "mbox" | "operatorname" => {
                 let arg = self.arg();
-                out.extend(arg, 0, true);
+                out.extend(arg, true);
             }
             // wrappers that only change weight or shape: the argument
             // keeps whatever setting its own characters ask for
             "textit" | "mathbf" | "mathit" | "mathcal" | "mathfrak" | "mathscr" | "boldsymbol"
             | "bm" | "pmb" | "overbrace" | "underbrace" => {
                 let arg = self.arg();
-                out.extend(arg, 0, false);
+                out.extend(arg, false);
             }
             // `\mathbb{R}` has a letter of its own
             "mathbb" => {
                 let arg = joined(&self.arg());
-                out.push(&blackboard(&arg), 0, true);
+                out.push(&blackboard(&arg), self.style, true);
             }
             // named functions are set upright — the name IS the rendering
-            _ if FUNCTIONS.contains(&name.as_str()) => out.push(&name, 0, true),
+            _ if FUNCTIONS.contains(&name.as_str()) => out.push(&name, self.style, true),
             "pmod" => {
                 let arg = self.arg();
-                out.push(" (mod ", 0, true);
-                out.extend(arg, 0, false);
-                out.push(")", 0, true);
+                out.push(" (mod ", self.style, true);
+                out.extend(arg, false);
+                out.push(")", self.style, true);
             }
             "frac" | "dfrac" | "tfrac" | "cfrac" => {
                 let (a, b) = (self.arg(), self.arg());
-                out.extend(parens_if_wide(a), 0, false);
-                out.push("/", 0, true);
-                out.extend(parens_if_wide(b), 0, false);
+                out.extend(parens_if_wide(a), false);
+                out.push("/", self.style, true);
+                out.extend(parens_if_wide(b), false);
             }
             "binom" | "dbinom" | "tbinom" => {
                 let (n, k) = (self.arg(), self.arg());
-                out.push("C(", 0, true);
-                out.extend(n, 0, false);
-                out.push(", ", 0, true);
-                out.extend(k, 0, false);
-                out.push(")", 0, true);
+                out.push("C(", self.style, true);
+                out.extend(n, false);
+                out.push(", ", self.style, true);
+                out.extend(k, false);
+                out.push(")", self.style, true);
             }
             "sqrt" => {
                 // `\sqrt[3]{x}`: the index rides as a superscript when it
                 // maps, and stays bracketed when it doesn't
                 if self.s.get(self.i) == Some(&'[') {
                     self.i += 1;
-                    let flat = std::mem::replace(&mut self.flat, true);
+                    let outer = self.style;
+                    self.style = outer.sup();
                     let mut index = Runs::default();
                     self.seq(Some(']'), &mut index);
-                    self.flat = flat;
-                    let index = index.text();
-                    match map_script(&index, SUPERS) {
-                        Some(m) => out.push(&m, 0, true),
-                        None => out.push(&format!("[{index}]"), 0, false),
-                    }
+                    self.style = outer;
+                    out.extend(index.runs, false);
                 }
-                out.push("√", 0, true);
+                out.push("√", self.style, true);
                 if self.s.get(self.i) == Some(&'{') {
                     let arg = self.arg();
-                    out.extend(parens_if_wide(arg), 0, false);
+                    out.extend(parens_if_wide(arg), false);
                 }
             }
             // `\begin{env}` … `\end{env}`
@@ -362,16 +474,16 @@ impl Parser<'_> {
             }
             "hspace" | "vspace" => {
                 let _ = self.arg();
-                out.push(" ", 0, true);
+                out.push(" ", self.style, true);
             }
-            "quad" => out.push("\u{2003}", 0, true),
-            "qquad" => out.push("\u{2003}\u{2003}", 0, true),
+            "quad" => out.push("\u{2003}", self.style, true),
+            "qquad" => out.push("\u{2003}\u{2003}", self.style, true),
             _ => match symbol(&name) {
-                Some(s) => out.push(s, 0, false),
+                Some(s) => out.push(s, self.style, false),
                 None => {
                     // verbatim: the reader sees exactly what they wrote
-                    out.push("\\", 0, true);
-                    out.push(&name, 0, true);
+                    out.push("\\", self.style, true);
+                    out.push(&name, self.style, true);
                 }
             },
         }
@@ -401,14 +513,14 @@ impl Parser<'_> {
             s: &body,
             i: 0,
             col,
-            flat: self.flat,
+            style: self.style,
         };
         let mut rows = Runs::default();
         sub.seq(None, &mut rows);
         // a stack of rows is a block: it starts on its own line when
         // something already precedes it (`x = \begin{cases}…`)
         if rows.text().contains('\n') && !out.text().trim().is_empty() {
-            out.push("\n", 0, true);
+            out.push("\n", self.style, true);
         }
         out.runs.extend(rows.runs);
     }
@@ -468,43 +580,43 @@ impl Parser<'_> {
 /// arrive in one run and the character it should collapse against in
 /// the next; the setting rides along and the runs are rebuilt at the
 /// end.
-fn tidy(runs: Vec<Run>) -> Vec<Run> {
+fn tidy(runs: Vec<Piece>) -> Vec<Piece> {
     let math_space = |c: char| c == '\u{2003}' || c == '\u{2009}';
     let chars = runs
         .iter()
-        .flat_map(|r| r.text.chars().map(|c| (c, r.level, r.italic)));
-    let mut out: Vec<(char, i8, bool)> = Vec::new();
+        .flat_map(|r| r.text.chars().map(move |c| (c, r.style, r.italic)));
+    let mut out: Vec<(char, Style, bool)> = Vec::new();
     let mut line_start = 0usize;
-    let mut pending: Option<(i8, bool)> = None;
-    for (c, level, italic) in chars {
+    let mut pending: Option<(Style, bool)> = None;
+    for (c, style, italic) in chars {
         if c == '\n' {
             pending = None;
             if out.len() == line_start {
                 continue; // a line with nothing on it is not a line
             }
-            out.push(('\n', 0, false));
+            out.push(('\n', Style::BASE, false));
             line_start = out.len();
             continue;
         }
         if c == ' ' || c == '\t' {
-            pending = Some((level, italic));
+            pending = Some((style, italic));
             continue;
         }
-        if let Some((sl, si)) = pending.take()
+        if let Some((ss, si)) = pending.take()
             && out.len() > line_start
             && !out.last().is_some_and(|&(p, _, _)| math_space(p))
             && !math_space(c)
         {
-            out.push((' ', sl, si));
+            out.push((' ', ss, si));
         }
-        out.push((c, level, italic));
+        out.push((c, style, italic));
     }
     while out.last().is_some_and(|&(c, _, _)| c == '\n') {
         out.pop();
     }
     let mut rebuilt = Runs::default();
-    for (c, level, italic) in out {
-        rebuilt.push_raw(c, level, italic);
+    for (c, style, italic) in out {
+        rebuilt.push_raw(c, style, italic);
     }
     rebuilt.runs
 }
@@ -531,7 +643,7 @@ fn blackboard(s: &str) -> String {
 /// The text of a stretch of runs, for the decisions that are about
 /// characters rather than setting: which Unicode script form to use,
 /// which double-struck letter, whether a fraction needs parentheses.
-fn joined(runs: &[Run]) -> String {
+fn joined(runs: &[Piece]) -> String {
     runs.iter().map(|r| r.text.as_str()).collect()
 }
 
@@ -542,18 +654,19 @@ fn is_combining(c: char) -> bool {
 }
 
 /// `(x)` when `x` is more than one glyph, `x` alone otherwise.
-fn parens_if_wide(runs: Vec<Run>) -> Vec<Run> {
+fn parens_if_wide(runs: Vec<Piece>) -> Vec<Piece> {
     if joined(&runs).chars().nth(1).is_none() {
         return runs;
     }
-    let paren = |t: &str| Run {
+    let style = runs.first().map_or(Style::BASE, |r| r.style);
+    let paren = |t: &str, style: Style| Piece {
         text: t.to_string(),
-        level: 0,
+        style,
         italic: false,
     };
-    let mut out = vec![paren("(")];
+    let mut out = vec![paren("(", style)];
     out.extend(runs);
-    out.push(paren(")"));
+    out.push(paren(")", style));
     out
 }
 
@@ -570,15 +683,6 @@ fn accent(base: &str, mark: char) -> String {
         out.push(mark);
     }
     out
-}
-
-/// The script forms of `body`, or None when a character has none.
-fn map_script(body: &str, table: &[(char, char)]) -> Option<String> {
-    let mapped: Option<String> = body
-        .chars()
-        .map(|c| table.iter().find(|(p, _)| *p == c).map(|(_, m)| *m))
-        .collect();
-    mapped.filter(|m| !m.is_empty())
 }
 
 /// Accents, as a combining mark placed after a single-character base.
@@ -606,85 +710,6 @@ const FUNCTIONS: &[&str] = &[
     "sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
     "coth", "log", "ln", "lg", "exp", "det", "dim", "deg", "gcd", "ker", "hom", "arg", "max",
     "min", "sup", "inf", "lim", "limsup", "liminf", "Pr", "mod", "bmod",
-];
-
-const SUPERS: &[(char, char)] = &[
-    ('0', '⁰'),
-    ('1', '¹'),
-    ('2', '²'),
-    ('3', '³'),
-    ('4', '⁴'),
-    ('5', '⁵'),
-    ('6', '⁶'),
-    ('7', '⁷'),
-    ('8', '⁸'),
-    ('9', '⁹'),
-    ('+', '⁺'),
-    ('-', '⁻'),
-    ('=', '⁼'),
-    ('(', '⁽'),
-    (')', '⁾'),
-    ('a', 'ᵃ'),
-    ('b', 'ᵇ'),
-    ('c', 'ᶜ'),
-    ('d', 'ᵈ'),
-    ('e', 'ᵉ'),
-    ('f', 'ᶠ'),
-    ('g', 'ᵍ'),
-    ('h', 'ʰ'),
-    ('i', 'ⁱ'),
-    ('j', 'ʲ'),
-    ('k', 'ᵏ'),
-    ('l', 'ˡ'),
-    ('m', 'ᵐ'),
-    ('n', 'ⁿ'),
-    ('o', 'ᵒ'),
-    ('p', 'ᵖ'),
-    ('r', 'ʳ'),
-    ('s', 'ˢ'),
-    ('t', 'ᵗ'),
-    ('u', 'ᵘ'),
-    ('v', 'ᵛ'),
-    ('w', 'ʷ'),
-    ('x', 'ˣ'),
-    ('y', 'ʸ'),
-    ('z', 'ᶻ'),
-    ('T', 'ᵀ'),
-];
-
-const SUBS: &[(char, char)] = &[
-    ('0', '₀'),
-    ('1', '₁'),
-    ('2', '₂'),
-    ('3', '₃'),
-    ('4', '₄'),
-    ('5', '₅'),
-    ('6', '₆'),
-    ('7', '₇'),
-    ('8', '₈'),
-    ('9', '₉'),
-    ('+', '₊'),
-    ('-', '₋'),
-    ('=', '₌'),
-    ('(', '₍'),
-    (')', '₎'),
-    ('a', 'ₐ'),
-    ('e', 'ₑ'),
-    ('h', 'ₕ'),
-    ('i', 'ᵢ'),
-    ('j', 'ⱼ'),
-    ('k', 'ₖ'),
-    ('l', 'ₗ'),
-    ('m', 'ₘ'),
-    ('n', 'ₙ'),
-    ('o', 'ₒ'),
-    ('p', 'ₚ'),
-    ('r', 'ᵣ'),
-    ('s', 'ₛ'),
-    ('t', 'ₜ'),
-    ('u', 'ᵤ'),
-    ('v', 'ᵥ'),
-    ('x', 'ₓ'),
 ];
 
 fn symbol(name: &str) -> Option<&'static str> {
@@ -865,6 +890,10 @@ const SYMBOLS: &[(&str, &str)] = &[
     ("ddots", "⋱"),
     ("angle", "∠"),
     ("triangle", "△"),
+    // U+25A1, not the U+25FB that would otherwise do: epaint draws
+    // U+25FB as its replacement box, and a face holding the replacement
+    // character becomes the family's replacement face — after which
+    // nothing in it reports as drawable
     ("square", "□"),
     ("Box", "□"),
     ("blacksquare", "∎"),
@@ -897,42 +926,49 @@ mod tests {
     use super::{glyphs, to_runs};
 
     /// The runs, written out so an assertion can read like the formula:
-    /// `^{…}`/`_{…}` around a raised or lowered stretch, `*…*` around
-    /// what leans. Consecutive runs on one level group into one pair of
-    /// braces — the split between `x` and `= 0` inside a subscript is
-    /// about setting, not about structure.
+    /// `^{…}`/`_{…}` around a raised or lowered stretch. Leaning letters
+    /// are the Mathematical Alphanumeric characters themselves, so they
+    /// need no marker — an assertion showing `𝛿` is showing exactly what
+    /// gets drawn.
+    ///
+    /// It rebuilds the nesting from the runs' scale and rise — every run
+    /// carries an ABSOLUTE setting, and this walks back to the tree that
+    /// produced it. A run whose setting is neither the current one nor a
+    /// step off it means the ladder is broken, and this panics rather
+    /// than paper over it.
     fn show(tex: &str) -> String {
         let mut out = String::new();
-        let runs = to_runs(tex);
-        let mut i = 0;
-        while i < runs.len() {
-            let level = runs[i].level;
-            let mut inner = String::new();
-            while i < runs.len() && runs[i].level == level {
-                let r = &runs[i];
-                if r.italic {
-                    inner.push('*');
-                    inner.push_str(&r.text);
-                    inner.push('*');
+        let mut stack = vec![super::Style::BASE];
+        for run in to_runs(tex) {
+            let style = super::Style {
+                scale: run.scale,
+                rise: run.rise,
+            };
+            while *stack.last().expect("the base never pops") != style {
+                let top = *stack.last().expect("the base never pops");
+                if style == top.sup() {
+                    out.push_str("^{");
+                    stack.push(style);
+                } else if style == top.sub() {
+                    out.push_str("_{");
+                    stack.push(style);
                 } else {
-                    inner.push_str(&r.text);
+                    assert!(stack.len() > 1, "{style:?} is off the ladder in {tex:?}");
+                    stack.pop();
+                    out.push('}');
                 }
-                i += 1;
             }
-            match level {
-                1 => out.push_str(&format!("^{{{inner}}}")),
-                -1 => out.push_str(&format!("_{{{inner}}}")),
-                _ => out.push_str(&inner),
-            }
+            out.push_str(&run.text);
         }
+        out.push_str(&"}".repeat(stack.len() - 1));
         out
     }
 
     #[test]
     fn plain_symbols_and_greek() {
-        assert_eq!(show(r"\delta = 2"), "*δ* = 2");
-        assert_eq!(show(r"\alpha \to \beta"), "*α* → *β*");
-        assert_eq!(show(r"\forall x \in S"), "∀ *x* ∈ *S*");
+        assert_eq!(show(r"\delta = 2"), "𝛿 = 2");
+        assert_eq!(show(r"\alpha \to \beta"), "𝛼 → 𝛽");
+        assert_eq!(show(r"\forall x \in S"), "∀ 𝑥 ∈ 𝑆");
     }
 
     /// TeX's math italic: a letter is a variable and leans, a digit or
@@ -940,49 +976,76 @@ mod tests {
     /// tells `log` from three letters multiplied together.
     #[test]
     fn letters_lean_and_everything_else_stands() {
-        assert_eq!(show(r"2x + 3y = 0"), "2*x* + 3*y* = 0");
-        assert_eq!(show(r"\log n"), "log *n*");
-        assert_eq!(show(r"\text{if } x > 0"), "if *x* > 0");
-        assert_eq!(show(r"\mathrm{d}x"), "d*x*");
+        assert_eq!(show(r"2x + 3y = 0"), "2𝑥 + 3𝑦 = 0");
+        assert_eq!(show(r"\log n"), "log 𝑛");
+        assert_eq!(show(r"\text{if } x > 0"), "if 𝑥 > 0");
+        assert_eq!(show(r"\mathrm{d}x"), "d𝑥");
     }
 
-    /// A raised or lowered RUN, not a spelled-out Unicode character:
-    /// `e^{z_i}` has no superscript-with-a-subscript to spell, and used
-    /// to degrade to `e^(zᵢ)` — the caret and parens the reader sees
-    /// whenever one character in a script has no script form.
+    /// A script is a SETTING, not a spelled-out character. Unicode has
+    /// superscript forms for some characters and none for the rest, so
+    /// spelling them meant `x²` here and `e^(zᵢ)` there — a caret and
+    /// parentheses on the page the moment one character in a script had
+    /// no script form, which for `e^{z_i}` is every time.
     #[test]
-    fn scripts_are_levels_and_nest_one_deep() {
-        assert_eq!(show(r"x^2 + y_i"), "*x*^{2} + *y*_{*i*}");
-        assert_eq!(show(r"e^{i\pi}"), "*e*^{*iπ*}");
-        assert_eq!(show(r"\sum_{i=0}^{n} x_i"), "∑_{*i*=0}^{*n*} *x*_{*i*}");
-        assert_eq!(show(r"A^T"), "*A*^{*T*}");
-        // the second level down has nowhere to go: it spells itself
-        assert_eq!(show(r"e^{z_i}"), "*e*^{*zᵢ*}");
-        // …and falls back honestly when it cannot be spelled
-        assert_eq!(show(r"e^{z_{\pi\pi}}"), "*e*^{*z*_(*ππ*)}");
+    fn scripts_are_a_setting_and_nest_as_deep_as_the_formula() {
+        assert_eq!(show(r"x^2 + y_i"), "𝑥^{2} + 𝑦_{𝑖}");
+        assert_eq!(show(r"e^{i\pi}"), "𝑒^{𝑖𝜋}");
+        assert_eq!(show(r"\sum_{i=0}^{n} x_i"), "∑_{𝑖=0}^{𝑛} 𝑥_{𝑖}");
+        assert_eq!(show(r"A^T"), "𝐴^{𝑇}");
+        // a script of a script: nowhere Unicode can go, and where the
+        // old spelling gave up
+        assert_eq!(show(r"e^{z_i}"), "𝑒^{𝑧_{𝑖}}");
+        assert_eq!(show(r"e^{z_{\pi}}"), "𝑒^{𝑧_{𝜋}}");
+    }
+
+    /// TeX's ladder: each step is smaller than the last and moves less
+    /// far than the step before it, and it stops at scriptscript so a
+    /// deeply nested index is still legible.
+    #[test]
+    fn the_script_ladder_narrows_and_then_stops() {
+        let runs = to_runs(r"a^{b^{c^{d}}}");
+        let scales: Vec<f32> = runs.iter().map(|r| r.scale).collect();
+        assert_eq!(
+            scales,
+            vec![1.0, super::SCRIPT, super::SCRIPTSCRIPT, super::SCRIPTSCRIPT]
+        );
+        let rises: Vec<f32> = runs.iter().map(|r| r.rise).collect();
+        assert_eq!(rises[0], 0.0);
+        for pair in rises.windows(2) {
+            assert!(pair[1] < pair[0], "each step rides higher than the last");
+        }
+        for i in 1..rises.len() - 1 {
+            assert!(
+                rises[i] - rises[i + 1] < rises[i - 1] - rises[i] + f32::EPSILON,
+                "and the steps get shorter"
+            );
+        }
+        // a subscript inside a superscript comes back DOWN, but stays
+        // above the line it started from
+        let inner = to_runs(r"e^{z_i}").last().expect("the index").rise;
+        assert!(inner < 0.0, "the index of an exponent is still up there");
     }
 
     #[test]
     fn fractions_roots_and_wrappers() {
         assert_eq!(show(r"\frac{1}{2}"), "1/2");
-        assert_eq!(show(r"\frac{a+b}{c}"), "(*a*+*b*)/*c*");
+        assert_eq!(show(r"\frac{a+b}{c}"), "(𝑎+𝑏)/𝑐");
         // a fraction keeps the setting of what is inside it
-        assert_eq!(show(r"\frac{\sin x}{x}"), "(sin *x*)/*x*");
-        assert_eq!(show(r"\sqrt{x+1}"), "√(*x*+1)");
-        assert_eq!(show(r"\sqrt[3]{x}"), "³√*x*");
-        assert_eq!(show(r"\sqrt[n+1]{x}"), "ⁿ⁺¹√*x*");
-        // an index with no script form keeps its brackets
-        assert_eq!(show(r"\sqrt[\pi]{x}"), "[*π*]√*x*");
-        assert_eq!(show(r"\binom{n}{k}"), "C(*n*, *k*)");
-        assert_eq!(show(r"\mathbb{R}^n"), "ℝ^{*n*}");
+        assert_eq!(show(r"\frac{\sin x}{x}"), "(sin 𝑥)/𝑥");
+        assert_eq!(show(r"\sqrt{x+1}"), "√(𝑥+1)");
+        assert_eq!(show(r"\sqrt[3]{x}"), "^{3}√𝑥");
+        assert_eq!(show(r"\sqrt[n+1]{x}"), "^{𝑛+1}√𝑥");
+        assert_eq!(show(r"\binom{n}{k}"), "C(𝑛, 𝑘)");
+        assert_eq!(show(r"\mathbb{R}^n"), "ℝ^{𝑛}");
     }
 
     /// An accent has to stay in its base's run, or it is laid out on its
     /// own and stops sitting on the letter it belongs to.
     #[test]
     fn accents_ride_single_char_bases() {
-        assert_eq!(show(r"\vec{x}"), "*x\u{20d7}*");
-        assert_eq!(show(r"\hat{y} = \bar{x}"), "*y\u{0302}* = *x\u{0304}*");
+        assert_eq!(show(r"\vec{x}"), "𝑥\u{20d7}");
+        assert_eq!(show(r"\hat{y} = \bar{x}"), "𝑦\u{0302} = 𝑥\u{0304}");
         assert_eq!(to_runs(r"\vec{x}").len(), 1);
     }
 
@@ -990,25 +1053,25 @@ mod tests {
     fn unknown_commands_stay_verbatim() {
         assert_eq!(show(r"\foobar + 1"), r"\foobar + 1");
         // grouping braces disappear, the name does not
-        assert_eq!(show(r"\undefinedcmd{x}"), r"\undefinedcmd*x*");
+        assert_eq!(show(r"\undefinedcmd{x}"), r"\undefinedcmd𝑥");
     }
 
     #[test]
     fn sizing_noise_drops_and_delimiters_stay() {
         assert_eq!(show(r"\left( \frac{1}{2} \right)"), "( 1/2 )");
-        assert_eq!(show(r"\langle u, v \rangle"), "⟨ *u*, *v* ⟩");
+        assert_eq!(show(r"\langle u, v \rangle"), "⟨ 𝑢, 𝑣 ⟩");
         // an invisible delimiter takes its dot with it
-        assert_eq!(show(r"\left\{ x \right."), "{ *x*");
+        assert_eq!(show(r"\left\{ x \right."), "{ 𝑥");
     }
 
     #[test]
     fn named_functions_lose_only_their_backslash() {
-        assert_eq!(show(r"\sin x + \cos y"), "sin *x* + cos *y*");
+        assert_eq!(show(r"\sin x + \cos y"), "sin 𝑥 + cos 𝑦");
         assert_eq!(
             show(r"\lim_{x \to 0} \frac{\sin x}{x} = 1"),
-            "lim_{*x* → 0} (sin *x*)/*x* = 1"
+            "lim_{𝑥 → 0} (sin 𝑥)/𝑥 = 1"
         );
-        assert_eq!(show(r"\log_2 n"), "log_{2} *n*");
+        assert_eq!(show(r"\log_2 n"), "log_{2} 𝑛");
     }
 
     /// A display block wraps where the author wrapped the source, and TeX
@@ -1017,36 +1080,36 @@ mod tests {
     /// equation drew with a blank line above and below.
     #[test]
     fn source_line_breaks_are_spaces_and_only_a_double_backslash_breaks() {
-        assert_eq!(show("\nE = mc^2\n"), "*E* = *mc*^{2}");
-        assert_eq!(show("a\n= b"), "*a* = *b*");
-        assert_eq!(show(r"a \\ b"), "*a*\n*b*");
-        assert_eq!(show("x    +     y"), "*x* + *y*");
+        assert_eq!(show("\nE = mc^2\n"), "𝐸 = 𝑚𝑐^{2}");
+        assert_eq!(show("a\n= b"), "𝑎 = 𝑏");
+        assert_eq!(show(r"a \\ b"), "𝑎\n𝑏");
+        assert_eq!(show("x    +     y"), "𝑥 + 𝑦");
         // a minted space swallows the ordinary ones beside it
-        assert_eq!(show(r"\int_0^1 x^2 \, dx"), "∫_{0}^{1} *x*^{2}\u{2009}*dx*");
+        assert_eq!(show(r"\int_0^1 x^2 \, dx"), "∫_{0}^{1} 𝑥^{2}\u{2009}𝑑𝑥");
     }
 
     #[test]
     fn environments_become_rows() {
         assert_eq!(
             show("\\begin{aligned}\na &= b \\\\\nc &= d\n\\end{aligned}"),
-            "*a* = *b*\n*c* = *d*"
+            "𝑎 = 𝑏\n𝑐 = 𝑑"
         );
         assert_eq!(
             show(r"\begin{pmatrix} a & b \\ c & d \end{pmatrix}"),
-            "*a*\u{2003}*b*\n*c*\u{2003}*d*"
+            "𝑎\u{2003}𝑏\n𝑐\u{2003}𝑑"
         );
         // an environment that follows something starts its own line
         assert_eq!(
             show(r"x = \begin{cases} 1 & p \\ 0 & q \end{cases}"),
-            "*x* =\n1\u{2003}*p*\n0\u{2003}*q*"
+            "𝑥 =\n1\u{2003}𝑝\n0\u{2003}𝑞"
         );
         // a matrix inside cases restores the outer environment's `&`
         assert_eq!(
             show(r"\begin{aligned} a &= \begin{matrix} 1 & 2 \end{matrix} \end{aligned}"),
-            "*a* = 1\u{2003}2"
+            "𝑎 = 1\u{2003}2"
         );
         // an unclosed environment still draws its rows
-        assert_eq!(show(r"\begin{aligned} a &= b"), "*a* = *b*");
+        assert_eq!(show(r"\begin{aligned} a &= b"), "𝑎 = 𝑏");
     }
 
     /// Nothing may reach the screen that the bundled math font can't
@@ -1054,12 +1117,18 @@ mod tests {
     #[test]
     fn the_glyph_inventory_covers_every_table() {
         let g = glyphs();
-        for c in ['ℝ', 'α', '∑', '√', 'ᵢ', '\u{20d7}', '⟹'] {
+        for c in ['ℝ', 'α', '𝛼', '∑', '√', '\u{20d7}', '⟹', '𝑥', '𝐴', 'ℎ'] {
             assert!(g.contains(c), "{c:?} is missing from the inventory");
         }
-        assert!(
-            !g.contains('\\'),
-            "a backslash is verbatim TeX, not a glyph"
+        // an unrecognized command reaches the reader as its own TeX, so
+        // the backslash and the letters spelling it have to be drawable
+        assert!(g.contains('\\'), "verbatim TeX needs its backslash");
+        // …and the inventory is what the tables can EMIT, so a leaning
+        // letter is listed as the character it actually becomes
+        assert_eq!(
+            to_runs("x").first().map(|r| r.text.as_str()),
+            Some("𝑥"),
+            "a variable is the italic character, not a styling flag"
         );
     }
 }

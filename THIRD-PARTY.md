@@ -6,10 +6,9 @@ into the binary, so their licenses travel with every copy.
 
 ## Bundled fonts
 
-Two are licensed under the SIL Open Font License 1.1, whose full text — with
-both copyright notices — is `assets/LICENSE-OFL-1.1.txt`. Neither declares a
-Reserved Font Name, so the subsets below keep their original name records. The
-third is under the Bitstream Vera license (`assets/LICENSE-Bitstream-Vera.txt`).
+All three are licensed under the SIL Open Font License 1.1, whose full text —
+with every copyright notice — is `assets/LICENSE-OFL-1.1.txt`. None declares a
+Reserved Font Name, so the subsets below keep their original name records.
 
 ### `assets/reading.ttf` — Inter
 
@@ -20,19 +19,20 @@ Extended-A, general punctuation, arrows, a few symbols) — the face rendered
 markdown reads in. Anything outside the subset falls through to egui's default
 fonts. Regenerate with `assets/gen-reading-font.sh`.
 
-### `assets/math.ttf` — DejaVu Sans
+### `assets/math.ttf` — Noto Sans Math, Noto Sans, Noto Sans Symbols 2
 
-Copyright (c) 2003 Bitstream, Inc.; DejaVu changes are in the public domain
-(<https://dejavu-fonts.github.io/>). Bitstream Vera license — full text in
-`assets/LICENSE-Bitstream-Vera.txt`. The subset keeps the DejaVu Sans name
-records, which is what the license's rename clause asks of a modified font.
+Copyright 2018 Google LLC (<https://github.com/notofonts/notofonts.github.io>),
+OFL-1.1.
 
-A ~270-codepoint subset holding exactly what `src/mathtext.rs` converts math
-spans into: operators, relations, arrows, greek, super/subscript modifier
-letters and combining accents. It sits behind Inter in the "reading" family,
-so it only ever supplies glyphs Inter has no drawing for. The codepoints are
-not listed by hand — `assets/gen-math-font.sh` reads them from
-`mathtext::glyphs()`, and the test
+A ~370-codepoint subset holding exactly what `src/mathtext.rs` converts math
+spans into: operators, relations, arrows, greek, combining accents, and the
+Mathematical Alphanumeric italics that ARE math italic. Math spans are drawn
+in this face ALONE rather than through the reading chain — epaint centres a
+fallback face against the primary one, so a borrowed `∑` sits off the baseline
+of the letters beside it. No single Noto face covers the whole inventory, so
+`assets/gen-math-font.sh` takes each source in turn for what the earlier ones
+could not draw and merges the subsets into one file. The codepoints are not
+listed by hand — the script reads them from `mathtext::glyphs()`, and the test
 `every_character_mathtext_can_draw_has_a_glyph` fails when the tables outgrow
 the font.
 

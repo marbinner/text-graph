@@ -227,18 +227,14 @@ pub(super) fn reading_frame<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) 
 /// the measure explicitly (`max_rect`, the width the renderer was given)
 /// is what makes the row its own and the centering true.
 const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
-    let base = ui
+    let prose = ui
         .style()
         .text_styles
         .get(&egui::TextStyle::Body)
-        .cloned()
-        .unwrap_or_else(|| egui::FontId::proportional(15.0));
-    let size = if inline { base.size } else { DISPLAY_MATH_SIZE };
-    let job = math_job(
-        tex,
-        &egui::FontId::new(size, base.family),
-        ui.visuals().text_color(),
-    );
+        .map_or(15.0, |f| f.size);
+    let size = if inline { prose } else { DISPLAY_MATH_SIZE };
+    let font = egui::FontId::new(size, egui::FontFamily::Name("math".into()));
+    let job = math_job(ui, tex, &font, ui.visuals().text_color());
     if job.is_empty() {
         return;
     }
@@ -259,30 +255,46 @@ const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
 
 /// One converted math span as a layout job.
 ///
-/// A run's LEVEL is where the two things plain text cannot say get said.
-/// epaint gives exactly the lever needed: a smaller font aligned to the
-/// TOP of the row rides high, aligned to the BOTTOM it sits low, and the
-/// row's height comes from the full-size text either way — so an
-/// exponent is an exponent instead of `^(…)`, at any depth Unicode has
-/// no character for. The run's `italic` is the other: TeX leans
-/// variables and stands operators, digits and function names, which is
-/// what tells `log` from three letters multiplied together.
-pub(super) fn math_job(tex: &str, font: &egui::FontId, color: Color32) -> egui::text::LayoutJob {
+/// The trick is `line_height`. epaint places a glyph's baseline at
+/// `ascent + valign·(row_height − line_height)`, so with everything
+/// BOTTOM-aligned a run's own line_height is a lever on where its
+/// baseline lands — and `mathtext` says exactly where that should be
+/// (`Run::rise`, in ems of the span). Solving for it is what makes an
+/// exponent's exponent land above the exponent, at any depth Unicode
+/// has no character for. The row grows to fit whatever rides highest,
+/// which is what a line with a superscript in it should do.
+///
+/// `ascent` has to be MEASURED rather than assumed: it is the baseline
+/// of a one-glyph galley, and it is not proportional to the size once a
+/// fallback face is in play. The whole span is drawn in one family for
+/// the same reason — epaint centres a fallback face against the primary
+/// one, which would shift a symbol's baseline away from the letters
+/// around it.
+pub(super) fn math_job(
+    ui: &egui::Ui,
+    tex: &str,
+    font: &egui::FontId,
+    color: Color32,
+) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
+    let (base_ascent, base_height) = metrics_of(ui, font);
     for run in text_graph::mathtext::to_runs(tex) {
-        let (size, valign) = match run.level {
-            1 => (font.size * SCRIPT_SCALE, egui::Align::TOP),
-            -1 => (font.size * SCRIPT_SCALE, egui::Align::BOTTOM),
-            _ => (font.size, egui::Align::BOTTOM),
+        let scaled = egui::FontId::new(font.size * run.scale, font.family.clone());
+        // where epaint would put this run's baseline with its natural
+        // line height, versus where the formula wants it
+        let line_height = if run.scale == 1.0 && run.rise == 0.0 {
+            base_height
+        } else {
+            metrics_of(ui, &scaled).0 - base_ascent + base_height - run.rise * font.size
         };
         job.append(
             &run.text,
             0.0,
             egui::TextFormat {
-                font_id: egui::FontId::new(size, font.family.clone()),
+                font_id: scaled,
                 color,
-                italics: run.italic,
-                valign,
+                line_height: Some(line_height.max(0.0)),
+                valign: egui::Align::BOTTOM,
                 ..Default::default()
             },
         );
@@ -290,13 +302,27 @@ pub(super) fn math_job(tex: &str, font: &egui::FontId, color: Color32) -> egui::
     job
 }
 
+/// (baseline, row height) for a font, read off a one-glyph galley. The
+/// baseline is epaint's `font_face_ascent` plus the fallback-centering
+/// it folds in — the quantity [`math_job`] has to solve against, and the
+/// one the API does not hand out. Galley layout is cached, so asking is
+/// cheaper than it reads.
+fn metrics_of(ui: &egui::Ui, font: &egui::FontId) -> (f32, f32) {
+    let job = egui::text::LayoutJob::simple_singleline("x".into(), font.clone(), Color32::WHITE);
+    let galley = ui.painter().layout_job(job);
+    galley.rows.first().map_or((font.size, font.size), |row| {
+        (
+            row.glyphs.first().map_or(font.size, |g| g.pos.y),
+            row.size.y,
+        )
+    })
+}
+
 /// Air above and below a display equation, inside its own row.
 const MATH_BLOCK_GAP: f32 = 4.0;
 /// Display math reads a size up from the prose, the way a TeX display is
 /// set larger than the same formula inline.
 const DISPLAY_MATH_SIZE: f32 = 17.0;
-/// A script is TeX's scriptstyle: about seven tenths of what it rides on.
-const SCRIPT_SCALE: f32 = 0.72;
 
 /// The one CommonMark viewer configuration, shared by the pane and the
 /// hover popup so the two renderings can never drift: vault-checked

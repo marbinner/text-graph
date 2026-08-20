@@ -1,8 +1,11 @@
 Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Copyright 2018 Google LLC (Noto Sans, Noto Sans Math, Noto Sans Symbols 2;
+https://github.com/notofonts/notofonts.github.io)
 
-text-graph bundles subsets of these fonts as assets/reading.ttf and
-assets/icons.ttf; see THIRD-PARTY.md for what was subset and why.
+text-graph bundles subsets of these fonts as assets/reading.ttf,
+assets/icons.ttf and assets/math.ttf; see THIRD-PARTY.md for what was
+subset and why.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:

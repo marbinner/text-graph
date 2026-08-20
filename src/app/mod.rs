@@ -153,19 +153,23 @@ const ICON_MIN_R: f32 = 6.5;
 const GLYPH_MIN_R: f32 = 4.0;
 
 /// The bundled fonts, registered at startup: the Nerd Font subset
-/// (assets/icons.ttf) as the "icons" family for file-type glyphs, and the
-/// "reading" family that rendered markdown bodies use — the Inter subset
-/// (assets/reading.ttf, OFL) for Latin, then the DejaVu subset
-/// (assets/math.ttf) for what `mathtext` converts math spans into, then
-/// egui's default proportional fonts so anything outside all three falls
-/// back instead of tofu-ing.
+/// (assets/icons.ttf) as the "icons" family for file-type glyphs, the
+/// Inter subset (assets/reading.ttf) as the "reading" family that
+/// rendered markdown prose uses, and the Noto Sans Math subset
+/// (assets/math.ttf) as the "math" family that `mathtext`'s runs are set
+/// in. egui's default proportional fonts are appended to both so
+/// anything outside a subset falls back instead of tofu-ing.
 ///
-/// The chain is ORDERED: Inter draws the prose because it comes first,
-/// and math.ttf is behind it precisely so it only supplies the operators,
-/// scripts and accents Inter has no glyph for. Neither Inter nor egui's
-/// default face carries those, and a missing glyph is not invisible —
-/// epaint draws the replacement box, which is what every converted `$…$`
-/// span looked like before math.ttf joined the chain.
+/// Math gets a family of its OWN rather than a fallback behind Inter,
+/// and the difference is not cosmetic: epaint centres a fallback face
+/// against the primary one, so a `∑` resolved through the chain sat off
+/// the baseline of the letters beside it, and the row it inflated
+/// dragged every subscript in the line down with it. One family, one
+/// baseline. `assets/gen-math-font.sh` builds that family to cover
+/// everything `mathtext::glyphs()` reports, so the fallbacks behind it
+/// are a safety net that never fires — a missing glyph is not nothing,
+/// it is epaint's replacement box, which is what every converted `$…$`
+/// span looked like before any of this was bundled.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -184,13 +188,18 @@ fn install_fonts(ctx: &egui::Context) {
         "tg-math".into(),
         egui::FontData::from_static(include_bytes!("../../assets/math.ttf")).into(),
     );
-    let mut reading = vec!["tg-reading".to_string(), "tg-math".to_string()];
-    if let Some(prop) = fonts.families.get(&egui::FontFamily::Proportional) {
-        reading.extend(prop.iter().cloned());
-    }
-    fonts
+    let default: Vec<String> = fonts
         .families
-        .insert(egui::FontFamily::Name("reading".into()), reading);
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    for (family, own) in [("reading", "tg-reading"), ("math", "tg-math")] {
+        let mut chain = vec![own.to_string()];
+        chain.extend(default.iter().cloned());
+        fonts
+            .families
+            .insert(egui::FontFamily::Name(family.into()), chain);
+    }
     ctx.set_fonts(fonts);
 }
 
