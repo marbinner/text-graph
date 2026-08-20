@@ -6,13 +6,14 @@
 //! opening a browser), `![[image embeds]]` become inline images on
 //! `file://` URIs, note embeds degrade to links, and relative markdown
 //! link/image destinations are resolved against the vault (to `tg://` for
-//! notes, absolute `file://` for images). Code spans and fences stay
-//! byte-for-byte untouched. Pure string work — egui-free, headless-tested.
+//! notes, absolute `file://` for images). Code spans, fences and math
+//! spans stay byte-for-byte untouched. Pure string work — egui-free,
+//! headless-tested.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{Event, Parser, Tag};
+use pulldown_cmark::{Event, Options, Parser, Tag};
 
 use crate::graph::{Graph, NodeId, NodeKind};
 use crate::{resolve, vault};
@@ -122,9 +123,33 @@ fn resolve_relative_path(source_dir: &Path, dest: &str) -> Option<PathBuf> {
     (!path.as_os_str().is_empty()).then_some(path)
 }
 
+/// Parser options for every scan in this module: math on, so `$…$` and
+/// `$$…$$` are spans of their own rather than prose the rewrites may walk
+/// into. The renderer parses with math enabled too — the two views of a
+/// body have to agree on where the math is.
+fn options() -> Options {
+    Options::ENABLE_MATH
+}
+
+/// Byte ranges no rewrite below may touch: code (fenced and inline), and
+/// math. Inside `$…$` the markup is TeX, and TeX's spellings collide with
+/// Obsidian's — `x ^2` is an exponent and not a block id, `a == b` is a
+/// comparison and not a highlight, `[[a,b],[c,d]]` is a nested list and
+/// not a wikilink. Every one of those used to be rewritten, so a note's
+/// math reached the reader with pieces missing or turned into links.
+fn verbatim_ranges(body: &str) -> Vec<Range<usize>> {
+    let mut ranges = vault::excluded_ranges(body);
+    for (event, range) in Parser::new_ext(body, options()).into_offset_iter() {
+        if matches!(event, Event::InlineMath(_) | Event::DisplayMath(_)) {
+            ranges.push(range);
+        }
+    }
+    ranges
+}
+
 /// Rewrite `body` (the source node's `read_body` output) for display.
 pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
-    let excluded = vault::excluded_ranges(body);
+    let excluded = verbatim_ranges(body);
     let in_code = |at: usize| excluded.iter().any(|r| r.contains(&at));
 
     // Resolution comes from the graph's per-occurrence index, not its
@@ -244,7 +269,7 @@ pub fn prepare(g: &Graph, root: &Path, source: NodeId, body: &str) -> String {
         .as_deref()
         .and_then(Path::parent)
         .unwrap_or_else(|| Path::new(""));
-    for (event, range) in Parser::new(body).into_offset_iter() {
+    for (event, range) in Parser::new_ext(body, options()).into_offset_iter() {
         let (dest, image) = match &event {
             Event::Start(Tag::Link { dest_url, .. }) => (dest_url.to_string(), false),
             Event::Start(Tag::Image { dest_url, .. }) => (dest_url.to_string(), true),
@@ -405,16 +430,22 @@ fn spans_between(body: &str, mark: &str, in_code: &dyn Fn(usize) -> bool) -> Vec
     while let Some(found) = body[i..].find(mark) {
         let start = i + found;
         let inner_start = start + mark.len();
+        // A mark that isn't an opener leaves the scan just past ITSELF,
+        // never past the mark it failed to pair with: `$a == b$` used to
+        // consume the `==` that opens the next real highlight as its own
+        // closer, and the highlight after any math or code span holding a
+        // stray mark stopped being rewritten.
+        i = inner_start;
         let Some(close) = body[inner_start..].find(mark) else {
             break;
         };
         let end = inner_start + close + mark.len();
-        i = end;
         let inner = &body[inner_start..end - mark.len()];
-        if in_code(start) || inner.is_empty() || inner.contains('\n') {
+        if in_code(start) || in_code(end - mark.len()) || inner.is_empty() || inner.contains('\n') {
             continue;
         }
         out.push((start, end - start));
+        i = end;
     }
     out
 }
@@ -485,11 +516,11 @@ pub enum Segment<'a> {
 /// A table is what pulldown will treat as one: a delimiter row — only
 /// `|`, `-`, `:` and spaces, with at least one dash and one pipe —
 /// directly under a non-blank header line containing `|`, plus every
-/// following non-blank line containing `|`. Fenced code is never a
-/// table. Best-effort by design: a missed table renders exactly as the
-/// unsplit body always did.
+/// following non-blank line containing `|`. Fenced code and math are
+/// never a table. Best-effort by design: a missed table renders exactly
+/// as the unsplit body always did.
 pub fn split_tables(body: &str) -> Vec<Segment<'_>> {
-    let excluded = vault::excluded_ranges(body);
+    let excluded = verbatim_ranges(body);
     let in_code = |at: usize| excluded.iter().any(|r| r.contains(&at));
     let mut lines: Vec<(usize, &str)> = Vec::new(); // (byte offset, with \n)
     let mut at = 0;
@@ -561,6 +592,31 @@ mod tests {
         let g = crate::graph::build(vault::scan(&d).unwrap());
         let src = g.by_path("note.md").unwrap();
         (d, g, src)
+    }
+
+    /// TeX is not Obsidian markup. Every rewrite in `prepare` scans the
+    /// raw body, and inside a math span its patterns mean something
+    /// else — so a trailing `^2` was deleted as a block id, `==` became
+    /// bold, and a nested list `[[a,b],[c,d]]` became a link to whatever
+    /// note the resolver could reach. The math has to come out the far
+    /// side byte-for-byte.
+    #[test]
+    fn math_spans_survive_the_obsidian_rewrites() {
+        let (d, g, src) = one_note_vault("math");
+        let body = concat!(
+            "$$\nx ^2 + y ^2 = r ^2\n$$\n\n",
+            "Inline $a == b$ and $[[a, b], [c, d]]$ and $\\#S = 5$.\n\n",
+            "But ==this== is still a highlight. ^blockid\n",
+        );
+        let out = prepare(&g, &d, src, body);
+        assert!(out.contains("x ^2 + y ^2 = r ^2"), "{out}");
+        assert!(out.contains("$a == b$"), "{out}");
+        assert!(out.contains("$[[a, b], [c, d]]$"), "{out}");
+        assert!(out.contains("$\\#S = 5$"), "{out}");
+        // …and prose around it is rewritten exactly as before
+        assert!(out.contains("**this**"), "{out}");
+        assert!(!out.contains("^blockid"), "{out}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// Obsidian's inline marks, rewritten into CommonMark the renderer

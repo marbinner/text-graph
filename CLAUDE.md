@@ -117,7 +117,9 @@
   `mdview`, `search`, …) must stay egui-free (headless-testable); only
   the bin's `app/` tree touches egui (`highlight`/`thumb` are egui-free
   but gui-gated). `mdview.rs`'s docs carry the Obsidian→CommonMark
-  rewrite contract and the image-safety rules (`safe_image_url` is the
+  rewrite contract (`verbatim_ranges` is the ONE list of what no rewrite
+  may touch — code AND math: inside `$…$` a trailing `^2` is an exponent,
+  not a block id) and the image-safety rules (`safe_image_url` is the
   only thing that may mint `file://`; unsafe destinations are
   neutralized, never left as active image syntax). The one place
   markdown renders is the pane's `preview_column`, which claims `tg://`
