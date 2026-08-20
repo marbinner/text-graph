@@ -272,39 +272,46 @@ fn a_display_equation_takes_a_centred_row_of_its_own() {
     );
 }
 
-/// An exponent has to LOOK like one, at whatever depth the formula puts
-/// it. `mathtext` hands over runs carrying a scale and an absolute rise
-/// rather than characters, because Unicode can spell `x²` and has
-/// nothing at all for the `z_i` in `e^{z_i}` — that one used to degrade
-/// to `e^(zᵢ)`, caret and parens on the page. This is the other half:
-/// `math_job` solving `line_height` so each baseline lands where the
-/// formula asked, which is the part epaint gives no direct lever for.
+/// A formula is a BOX, not a line of text, and this is the difference
+/// on the page: `\frac{a}{b}` stacks around a rule instead of reading
+/// `a/b` — which then needed parentheses to stay true, so
+/// `\frac{\pi^2}{6}` came out `(𝜋²)/6`. A radical draws its own bar over
+/// what it covers, a fence grows to what it holds, and a script rides
+/// clear of a tall base.
 #[test]
-fn every_script_lands_where_the_formula_puts_it() {
+fn a_formula_is_laid_out_as_boxes_around_a_baseline() {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    const TEX: &str = r"x^{a_b}_c";
     const SIZE: f32 = 20.0;
+    /// (width, ascent, descent, rules) per formula, in order.
+    type Shapes = Vec<(f32, f32, f32, usize)>;
+    const TEX: &[&str] = &[
+        "a",
+        r"\frac{a}{b}",
+        r"a^2",
+        r"\sqrt{a}",
+        r"\left(\frac{a}{b}\right)",
+        r"\sqrt{\frac{a}{b}}",
+    ];
 
-    let seen: Arc<Mutex<Vec<(char, f32, f32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen: Arc<Mutex<Shapes>> = Arc::new(Mutex::new(Vec::new()));
     let probe = seen.clone();
-    // the first frame runs before install_fonts, and the reading family
-    // is not bound yet — laying out against it there panics epaint
+    // the first frame runs before install_fonts, and the math family is
+    // not bound yet — laying out against it there panics epaint
     let mut h = Harness::new_ui_state(
         move |ui, ready: &mut bool| {
             if !*ready {
                 return;
             }
-            let font =
-                eframe::egui::FontId::new(SIZE, eframe::egui::FontFamily::Name("math".into()));
-            let job = super::navigator::math_job(ui, TEX, &font, eframe::egui::Color32::WHITE);
-            let galley = ui.painter().layout_job(job);
-            let row = galley.rows.first().expect("one row");
-            *probe.lock().expect("no other thread") = row
-                .glyphs
+            *probe.lock().expect("no other thread") = TEX
                 .iter()
-                .map(|g| (g.chr, g.pos.y, g.font_height))
+                .map(|tex| {
+                    let tree = text_graph::mathtext::to_tree(tex);
+                    let f =
+                        super::math::layout(ui, &tree, SIZE, eframe::egui::Color32::WHITE, true);
+                    (f.width, f.ascent, f.descent, f.rules())
+                })
                 .collect();
         },
         false,
@@ -312,43 +319,46 @@ fn every_script_lands_where_the_formula_puts_it() {
     super::install_fonts(&h.ctx);
     *h.state_mut() = true;
     h.step();
-    let glyphs = seen.lock().expect("no other thread").clone();
-    let at = |c: char| {
-        glyphs
-            .iter()
-            .find(|g| g.0 == c)
-            .copied()
-            .unwrap_or_else(|| panic!("{c:?} never laid out in {glyphs:?}"))
-    };
-    // the letters ARE their math-italic characters by the time they are
-    // laid out — `mathtext::lean` resolves the setting into the text
-    let base = at('𝑥');
-    for run in text_graph::mathtext::to_runs(TEX) {
-        let c = run.text.chars().next().expect("no empty runs");
-        let glyph = at(c);
-        // y grows downward, and `rise` is negative upward, both in ems
-        // of the span's size
-        let got = (base.1 - glyph.1) / SIZE;
-        assert!(
-            (got + run.rise).abs() < 0.1,
-            "{c:?} landed at {got} em, and the formula asked for {}",
-            -run.rise
-        );
-        assert!(
-            (glyph.2 - base.2 * run.scale).abs() < 1.0,
-            "{c:?} is set at {} against a line of {}, scale {}",
-            glyph.2,
-            base.2,
-            run.scale
-        );
-    }
-    // and the ladder is one the formula actually describes: down, up,
-    // and back down but not all the way
-    assert!(at('𝑎').1 < base.1, "the exponent does not ride high");
-    assert!(at('𝑐').1 > base.1, "the index does not sit low");
+    let shapes = seen.lock().expect("no other thread").clone();
+    let (plain, frac, script, root, fenced, tall_root) = (
+        shapes[0], shapes[1], shapes[2], shapes[3], shapes[4], shapes[5],
+    );
+
+    assert_eq!(frac.3, 1, "a fraction draws no bar");
     assert!(
-        at('𝑏').1 > at('𝑎').1 && at('𝑏').1 < base.1,
-        "a subscript inside a superscript left the exponent"
+        frac.1 > plain.1 && frac.2 > plain.2,
+        "a fraction {frac:?} does not straddle the line a letter sits on {plain:?}"
+    );
+    assert!(
+        frac.0 < plain.0 * 3.0,
+        "a fraction is as wide as its widest half, not as wide as both"
+    );
+
+    assert!(
+        script.1 > plain.1 && script.0 > plain.0,
+        "an exponent {script:?} neither raised nor widened the letter {plain:?}"
+    );
+    assert!(
+        (script.2 - plain.2).abs() < 1.0,
+        "an exponent reached below the line"
+    );
+
+    assert_eq!(root.3, 1, "a radical draws no bar over what it covers");
+    assert!(
+        root.0 > plain.0,
+        "a radical {root:?} takes no more room than the letter {plain:?}"
+    );
+    // a radical over a fraction draws both bars and reaches around the
+    // whole of it, without ever setting less room than the fraction alone
+    assert_eq!(tall_root.3, 2, "a radical over a fraction lost a bar");
+    assert!(
+        tall_root.0 > frac.0 && tall_root.1 >= frac.1 && tall_root.2 >= frac.2,
+        "a radical over a fraction {tall_root:?} does not contain it {frac:?}"
+    );
+
+    assert!(
+        fenced.0 > frac.0 && fenced.1 >= frac.1 && fenced.2 >= frac.2,
+        "the fence {fenced:?} did not grow around the fraction {frac:?}"
     );
 }
 
@@ -359,9 +369,15 @@ fn every_script_lands_where_the_formula_puts_it() {
 /// reach the reader as a row of boxes. `assets/math.ttf` is the answer,
 /// and this is the gate that says when it needs regenerating: a symbol
 /// added to `mathtext`'s tables without a rerun of
-/// `assets/gen-math-font.sh` fails right here. It also holds the family
-/// to covering the span on its OWN — a character that fell through to a
-/// fallback would draw off the baseline of the ones around it.
+/// `assets/gen-math-font.sh` fails right here.
+///
+/// It catches a character that only a FALLBACK can draw too, which is
+/// the subtler failure: epaint centres a fallback face against the
+/// primary one, so a borrowed glyph sits off the baseline of the ones
+/// around it. `has_glyph` reports false when a character resolves to the
+/// family's replacement face, and egui's default proportional font —
+/// last in the chain and the one that owns the replacement character —
+/// is exactly that face.
 #[test]
 fn every_character_mathtext_can_draw_has_a_glyph() {
     let h = harness();

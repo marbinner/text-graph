@@ -221,11 +221,13 @@ Note previews render **Obsidian-flavored**: callouts (`> [!warning]`, any
 case, title and fold marker included) get their own colour and icon,
 `==highlights==` read as emphasis, `%%comments%%` stay hidden, `#tags`
 render as chips, and trailing `^block-ids` don't clutter the text.
-Inline `$\delta = 2$` and display `$$…$$` math render as text — greek,
-operators, fractions, roots, named functions and `\begin{aligned}` rows,
-drawn from a bundled math face, with real raised and lowered scripts,
-TeX's lean-the-variables setting, and display math on a centered line of
-its own; no TeX engine, so anything unrecognized stays verbatim rather
+Inline `$\delta = 2$` and display `$$…$$` math are **typeset**, not
+spelled out: `\frac` stacks around a rule, `\sqrt` draws its bar over
+what it covers, `\left(…\right)` grows to its content, a display `\sum`
+takes its limits above and below, and variables are set in real math
+italics. Greek, operators, `\begin{aligned}` rows, matrices and `cases`
+come along; display math gets a centered line of its own. There is no
+TeX engine in the stack, so anything unrecognized stays verbatim rather
 than vanishing.
 `[[wikilinks]]` are real links that jump to their node (ghosts included),
 `![[image embeds]]` and relative image paths render inline, relative
@@ -580,6 +582,7 @@ src/
               header, bodies, connections strip); terminals.rs = card
               state + sync/paint/forwarding/gestures/lifecycle;
               actions.rs = right-click menu, create dialog, spawning;
+              math.rs = the box model rendered math is set with,
               reload.rs = watcher/scan-worker substruct + apply +
               persistence; images.rs = thumbnail textures, previews.rs =
               canvas text previews + hover popup, diag.rs = health

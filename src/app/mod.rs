@@ -15,6 +15,7 @@ mod canvas;
 mod diag;
 mod images;
 mod keymap;
+mod math;
 mod navigator;
 mod picker;
 mod previews;
