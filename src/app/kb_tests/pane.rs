@@ -272,6 +272,34 @@ fn a_display_equation_takes_a_centred_row_of_its_own() {
     );
 }
 
+/// An exponent has to LOOK like one. `mathtext` hands over runs with a
+/// level rather than characters, because Unicode can spell `x²` and has
+/// nothing at all for the `z_i` in `e^{z_i}` — that one used to degrade
+/// to `e^(zᵢ)`, caret and parens on the page. The setting is what makes
+/// the level real: a smaller font, aligned to the top of the row.
+#[test]
+fn an_exponent_is_set_smaller_and_rides_higher() {
+    let h = harness();
+    let font = eframe::egui::FontId::new(15.0, eframe::egui::FontFamily::Name("reading".into()));
+    let job = super::navigator::math_job("x^2 + y_i", &font, eframe::egui::Color32::WHITE);
+    let galley = h.ctx.fonts_mut(|f| f.layout_job(job));
+    let row = galley.rows.first().expect("one row");
+    let glyph = |c: char| {
+        row.glyphs
+            .iter()
+            .find(|g| g.chr == c)
+            .unwrap_or_else(|| panic!("{c:?} never laid out"))
+    };
+    let (base, sup, sub) = (glyph('x'), glyph('2'), glyph('i'));
+    assert!(
+        sup.font_height < base.font_height,
+        "the exponent is set at the base size"
+    );
+    // y grows downward: a smaller y is higher up the row
+    assert!(sup.pos.y < base.pos.y, "the exponent does not ride high");
+    assert!(sub.pos.y > base.pos.y, "the index does not sit low");
+}
+
 /// A glyph no font in the family owns is not invisible — epaint draws
 /// the replacement box in its place. Inter's Latin subset has no
 /// operators, no modifier-letter scripts and no combining accents, and

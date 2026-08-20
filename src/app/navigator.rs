@@ -209,11 +209,11 @@ pub(super) fn reading_frame<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) 
     .inner
 }
 
-/// Math spans (`$…$` / `$$…$$`), drawn as Unicode-substituted text —
-/// `mathtext` carries the conversion contract (best-effort by design,
+/// Math spans (`$…$` / `$$…$$`), set from `mathtext`'s runs — that
+/// module carries the conversion contract (best-effort by design,
 /// unknown TeX stays verbatim). Without a math renderer the parser
 /// swallows the span entirely, so a note's `$\delta = 2$` would simply
-/// vanish from the reading view. Inline math flows italic in the
+/// vanish from the reading view. Inline math flows with the prose in the
 /// reading face; display math gets its own centered line.
 ///
 /// The whole markdown document lays out inside ONE wrapping
@@ -227,12 +227,23 @@ pub(super) fn reading_frame<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) 
 /// the measure explicitly (`max_rect`, the width the renderer was given)
 /// is what makes the row its own and the centering true.
 const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
-    let text = text_graph::mathtext::to_unicode(tex);
-    if text.is_empty() {
+    let base = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .cloned()
+        .unwrap_or_else(|| egui::FontId::proportional(15.0));
+    let size = if inline { base.size } else { DISPLAY_MATH_SIZE };
+    let job = math_job(
+        tex,
+        &egui::FontId::new(size, base.family),
+        ui.visuals().text_color(),
+    );
+    if job.is_empty() {
         return;
     }
     if inline {
-        ui.label(egui::RichText::new(text).italics());
+        ui.label(job);
         return;
     }
     ui.allocate_ui_with_layout(
@@ -240,14 +251,52 @@ const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             ui.add_space(MATH_BLOCK_GAP);
-            ui.label(egui::RichText::new(text).italics().size(17.0));
+            ui.label(job);
             ui.add_space(MATH_BLOCK_GAP);
         },
     );
 };
 
+/// One converted math span as a layout job.
+///
+/// A run's LEVEL is where the two things plain text cannot say get said.
+/// epaint gives exactly the lever needed: a smaller font aligned to the
+/// TOP of the row rides high, aligned to the BOTTOM it sits low, and the
+/// row's height comes from the full-size text either way — so an
+/// exponent is an exponent instead of `^(…)`, at any depth Unicode has
+/// no character for. The run's `italic` is the other: TeX leans
+/// variables and stands operators, digits and function names, which is
+/// what tells `log` from three letters multiplied together.
+pub(super) fn math_job(tex: &str, font: &egui::FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for run in text_graph::mathtext::to_runs(tex) {
+        let (size, valign) = match run.level {
+            1 => (font.size * SCRIPT_SCALE, egui::Align::TOP),
+            -1 => (font.size * SCRIPT_SCALE, egui::Align::BOTTOM),
+            _ => (font.size, egui::Align::BOTTOM),
+        };
+        job.append(
+            &run.text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::new(size, font.family.clone()),
+                color,
+                italics: run.italic,
+                valign,
+                ..Default::default()
+            },
+        );
+    }
+    job
+}
+
 /// Air above and below a display equation, inside its own row.
 const MATH_BLOCK_GAP: f32 = 4.0;
+/// Display math reads a size up from the prose, the way a TeX display is
+/// set larger than the same formula inline.
+const DISPLAY_MATH_SIZE: f32 = 17.0;
+/// A script is TeX's scriptstyle: about seven tenths of what it rides on.
+const SCRIPT_SCALE: f32 = 0.72;
 
 /// The one CommonMark viewer configuration, shared by the pane and the
 /// hover popup so the two renderings can never drift: vault-checked

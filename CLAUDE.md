@@ -76,7 +76,10 @@
   ORDERED chain — `assets/reading.ttf` (Inter subset, OFL) for Latin,
   `assets/math.ttf` (DejaVu Sans subset, Bitstream Vera) for what
   `mathtext` converts math spans into, then egui's default proportional
-  fonts, so nothing tofus. A missing glyph is a REPLACEMENT BOX, not
+  fonts, so nothing tofus. `mathtext` hands the app RUNS (text + level +
+  italic), never a string — a level is what makes `e^{z_i}` an exponent
+  instead of `e^(zᵢ)`, and `navigator::math_job` is the one place that
+  turns one into a smaller top/bottom-aligned span. A missing glyph is a REPLACEMENT BOX, not
   nothing: math.ttf's codepoints come from `mathtext::glyphs()` via
   `assets/gen-math-font.sh` (never a hand-kept list), and
   `every_character_mathtext_can_draw_has_a_glyph` fails when the symbol
