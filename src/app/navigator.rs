@@ -215,18 +215,39 @@ pub(super) fn reading_frame<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) 
 /// swallows the span entirely, so a note's `$\delta = 2$` would simply
 /// vanish from the reading view. Inline math flows italic in the
 /// reading face; display math gets its own centered line.
+///
+/// The whole markdown document lays out inside ONE wrapping
+/// left-to-right Ui — that is how the renderer flows inline text — so a
+/// block element has to claim a full-measure row for itself or it lands
+/// in whatever is left of the current line. `vertical_centered` centred
+/// display math in that remainder, which was fine for `$$…$$` alone in a
+/// paragraph and ruinous the moment one appeared mid-sentence: a few
+/// points of leftover row became the equation's wrap width, and it drew
+/// as a column of single characters down the right margin. Allocating
+/// the measure explicitly (`max_rect`, the width the renderer was given)
+/// is what makes the row its own and the centering true.
 const RENDER_MATH: &egui_commonmark::RenderMathFn = &|ui, tex, inline| {
     let text = text_graph::mathtext::to_unicode(tex);
+    if text.is_empty() {
+        return;
+    }
     if inline {
         ui.label(egui::RichText::new(text).italics());
-    } else {
-        ui.add_space(4.0);
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new(text).italics().size(17.0));
-        });
-        ui.add_space(4.0);
+        return;
     }
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.max_rect().width(), 0.0),
+        egui::Layout::top_down(egui::Align::Center),
+        |ui| {
+            ui.add_space(MATH_BLOCK_GAP);
+            ui.label(egui::RichText::new(text).italics().size(17.0));
+            ui.add_space(MATH_BLOCK_GAP);
+        },
+    );
 };
+
+/// Air above and below a display equation, inside its own row.
+const MATH_BLOCK_GAP: f32 = 4.0;
 
 /// The one CommonMark viewer configuration, shared by the pane and the
 /// hover popup so the two renderings can never drift: vault-checked

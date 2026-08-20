@@ -186,6 +186,92 @@ fn the_reading_family_is_bound_and_the_measure_only_narrows() {
     assert_eq!(super::navigator::reading_width(1000.0), 620.0);
 }
 
+/// Every accessibility label the pane rendered, as (text, screen rect).
+/// The rendered-markdown tests read layout off this: the renderer builds
+/// no widgets of its own to query by name, only labels.
+fn rendered_labels(h: &Harness<'_, Viewer>) -> Vec<(String, eframe::egui::Rect)> {
+    use egui_kittest::kittest::NodeT as _;
+    h.root()
+        .children_recursive()
+        .filter_map(|n| {
+            let node = n.accesskit_node();
+            let text = node.value()?;
+            let b = node.bounding_box()?;
+            Some((
+                text.to_string(),
+                eframe::egui::Rect::from_min_max(
+                    eframe::egui::pos2(b.x0 as f32, b.y0 as f32),
+                    eframe::egui::pos2(b.x1 as f32, b.y1 as f32),
+                ),
+            ))
+        })
+        .collect()
+}
+
+/// Display math is a BLOCK, and the renderer has no block layer: the
+/// whole document flows in one wrapping left-to-right Ui. An equation
+/// that does not claim a full-measure row lands in whatever is left of
+/// the current line — `$$…$$` mid-sentence used to take the few points
+/// of leftover row as its wrap width and draw as a 15-point-wide column
+/// of single characters down the right margin, taller than the
+/// paragraph it interrupted.
+#[test]
+fn a_display_equation_takes_a_centred_row_of_its_own() {
+    let d = std::env::temp_dir().join(format!("tg-mathrow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    // the prelude is long enough to fill the measure, so the equation
+    // meets the worst case: a row with almost nothing left in it
+    std::fs::write(
+        d.join("note.md"),
+        "Prelude words here that eat some of the row: $$E = mc^2$$ and the tail.\n",
+    )
+    .unwrap();
+    let scan = vault::scan(&d).expect("scans");
+    let viewer = Viewer::new(graph::build(scan), d.clone(), config::Config::default());
+    let mut h = Harness::new_ui_state(
+        move |ui, v: &mut Viewer| {
+            v.pump_picker(ui.ctx());
+            v.side_panel(ui);
+        },
+        viewer,
+    );
+    super::install_fonts(&h.ctx);
+    let id = h.state().g.by_path("note.md").expect("note");
+    h.state_mut().selected = Some(id);
+    for _ in 0..4 {
+        h.step();
+    }
+    let _ = std::fs::remove_dir_all(&d);
+
+    let labels = rendered_labels(&h);
+    let find = |needle: &str| {
+        labels
+            .iter()
+            .find(|(t, _)| t.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} never rendered, only {labels:?}"))
+            .1
+    };
+    let math = find("E = mc");
+    let prose = find("Prelude words");
+    assert!(
+        math.width() > math.height(),
+        "the equation drew {}x{} — it is wrapping inside a sliver of row again",
+        math.width(),
+        math.height()
+    );
+    assert!(
+        math.top() >= prose.bottom(),
+        "the equation drew inside the line it interrupted, not under it"
+    );
+    assert!(
+        (math.center().x - prose.center().x).abs() < 8.0,
+        "the equation centred at {} against a measure centred at {}",
+        math.center().x,
+        prose.center().x
+    );
+}
+
 /// A glyph no font in the family owns is not invisible — epaint draws
 /// the replacement box in its place. Inter's Latin subset has no
 /// operators, no modifier-letter scripts and no combining accents, and
