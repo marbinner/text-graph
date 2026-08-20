@@ -186,6 +186,32 @@ fn the_reading_family_is_bound_and_the_measure_only_narrows() {
     assert_eq!(super::navigator::reading_width(1000.0), 620.0);
 }
 
+/// A glyph no font in the family owns is not invisible — epaint draws
+/// the replacement box in its place. Inter's Latin subset has no
+/// operators, no modifier-letter scripts and no combining accents, and
+/// neither does egui's default face, so every `$\alpha \in S$` in a note
+/// used to reach the reader as a row of boxes. `assets/math.ttf` is the
+/// answer, and this is the gate that says when it needs regenerating:
+/// a symbol added to `mathtext`'s tables without a rerun of
+/// `assets/gen-math-font.sh` fails right here.
+#[test]
+fn every_character_mathtext_can_draw_has_a_glyph() {
+    let h = harness();
+    let reading = eframe::egui::FontId::new(15.0, eframe::egui::FontFamily::Name("reading".into()));
+    let mut missing = String::new();
+    h.ctx.fonts_mut(|f| {
+        for c in text_graph::mathtext::glyphs().chars() {
+            if !f.has_glyph(&reading, c) {
+                missing.push(c);
+            }
+        }
+    });
+    assert!(
+        missing.is_empty(),
+        "the reading family cannot draw {missing:?} — rerun assets/gen-math-font.sh"
+    );
+}
+
 /// `r` reads the same file the other way: source with line numbers
 /// instead of rendered markdown. One previewer with two readings — the
 /// toggle is session state, not a setting: persisted, one press pinned

@@ -222,8 +222,9 @@ case, title and fold marker included) get their own colour and icon,
 `==highlights==` read as emphasis, `%%comments%%` stay hidden, `#tags`
 render as chips, and trailing `^block-ids` don't clutter the text.
 Inline `$\delta = 2$` and display `$$…$$` math render as Unicode text —
-greek, operators, scripts, simple fractions; no TeX engine, so anything
-unrecognized stays verbatim rather than vanishing.
+greek, operators, scripts, fractions, roots, named functions and
+`\begin{aligned}` rows, drawn from a bundled math face; no TeX engine, so
+anything unrecognized stays verbatim rather than vanishing.
 `[[wikilinks]]` are real links that jump to their node (ghosts included),
 `![[image embeds]]` and relative image paths render inline, relative
 markdown links to vault files jump too, footnote-style citations
@@ -592,9 +593,13 @@ assets/
   reading.ttf         bundled Inter subset (OFL-1.1) — the face rendered
                       markdown reads in; non-Latin falls back to egui's fonts
   gen-reading-font.sh regenerates it from an Inter release TTF
+  math.ttf            bundled DejaVu Sans subset (Bitstream Vera) — the
+                      operators, scripts and accents math spans convert to
+  gen-math-font.sh    regenerates it; codepoints come from mathtext::glyphs()
 examples/
   tmux_debug.rs       raw control-client event dump — the mirror's debug harness
   discovery_probe.rs  what discovery + mirrors see for a vault, headless
+  math_glyphs.rs      the characters math spans convert to — what math.ttf holds
 fixtures/
   vault/      synthetic test vault — every link variant and trap
   EXPECTED.md hand-counted ground truth the integration tests assert exactly
@@ -660,8 +665,10 @@ editing; `PLAN.md` carries the roadmap and the decisions behind it.
 
 MIT OR Apache-2.0, at your option — see `LICENSE-MIT` and `LICENSE-APACHE`.
 
-The two bundled fonts are licensed separately under the SIL Open Font License
-1.1: `assets/reading.ttf` is a Latin subset of Inter, `assets/icons.ttf` a
-35-glyph subset of JetBrainsMono Nerd Font Propo. `THIRD-PARTY.md` says what
-was subset from what, and `assets/LICENSE-OFL-1.1.txt` carries the OFL text
-with both copyright notices.
+The three bundled fonts are licensed separately. `assets/reading.ttf` (a Latin
+subset of Inter) and `assets/icons.ttf` (a 35-glyph subset of JetBrainsMono
+Nerd Font Propo) are under the SIL Open Font License 1.1; `assets/math.ttf` (a
+math subset of DejaVu Sans) is under the Bitstream Vera license.
+`THIRD-PARTY.md` says what was subset from what, and
+`assets/LICENSE-OFL-1.1.txt` and `assets/LICENSE-Bitstream-Vera.txt` carry the
+license texts with their copyright notices.

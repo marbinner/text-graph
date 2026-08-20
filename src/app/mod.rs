@@ -154,10 +154,18 @@ const GLYPH_MIN_R: f32 = 4.0;
 
 /// The bundled fonts, registered at startup: the Nerd Font subset
 /// (assets/icons.ttf) as the "icons" family for file-type glyphs, and the
-/// Inter subset (assets/reading.ttf, OFL) as the "reading" family that
-/// rendered markdown bodies use — Latin only, with egui's default
-/// proportional fonts appended so anything outside the subset falls back
-/// instead of tofu-ing.
+/// "reading" family that rendered markdown bodies use — the Inter subset
+/// (assets/reading.ttf, OFL) for Latin, then the DejaVu subset
+/// (assets/math.ttf) for what `mathtext` converts math spans into, then
+/// egui's default proportional fonts so anything outside all three falls
+/// back instead of tofu-ing.
+///
+/// The chain is ORDERED: Inter draws the prose because it comes first,
+/// and math.ttf is behind it precisely so it only supplies the operators,
+/// scripts and accents Inter has no glyph for. Neither Inter nor egui's
+/// default face carries those, and a missing glyph is not invisible —
+/// epaint draws the replacement box, which is what every converted `$…$`
+/// span looked like before math.ttf joined the chain.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -172,7 +180,11 @@ fn install_fonts(ctx: &egui::Context) {
         "tg-reading".into(),
         egui::FontData::from_static(include_bytes!("../../assets/reading.ttf")).into(),
     );
-    let mut reading = vec!["tg-reading".to_string()];
+    fonts.font_data.insert(
+        "tg-math".into(),
+        egui::FontData::from_static(include_bytes!("../../assets/math.ttf")).into(),
+    );
+    let mut reading = vec!["tg-reading".to_string(), "tg-math".to_string()];
     if let Some(prop) = fonts.families.get(&egui::FontFamily::Proportional) {
         reading.extend(prop.iter().cloned());
     }

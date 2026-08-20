@@ -72,9 +72,15 @@
   or reload-storm the watcher; the walker also PRUNES those dirs
   (filter_entry), so their contents are never even stat'd. `filetype.rs` is the one place that says
   what an extension *is* (textual? which icon/color?).
-- Bundled fonts: `assets/reading.ttf` (Inter subset, OFL) is the
-  "reading" family rendered markdown draws in — Latin only, with egui's
-  default proportional fonts as the family's fallback so nothing tofus;
+- Bundled fonts: the "reading" family rendered markdown draws in is an
+  ORDERED chain — `assets/reading.ttf` (Inter subset, OFL) for Latin,
+  `assets/math.ttf` (DejaVu Sans subset, Bitstream Vera) for what
+  `mathtext` converts math spans into, then egui's default proportional
+  fonts, so nothing tofus. A missing glyph is a REPLACEMENT BOX, not
+  nothing: math.ttf's codepoints come from `mathtext::glyphs()` via
+  `assets/gen-math-font.sh` (never a hand-kept list), and
+  `every_character_mathtext_can_draw_has_a_glyph` fails when the symbol
+  tables outgrow the font;
   `navigator::reading_frame` is the ONE typography scope for markdown
   (pane + hover popup) and `markdown_viewer` the one renderer config.
   Node icons are Nerd Font glyphs from `assets/icons.ttf` (16KB subset,
