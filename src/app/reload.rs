@@ -188,7 +188,7 @@ impl Viewer {
                 .map(|(i, n)| (n.ident(), (self.sim.x[i], self.sim.y[i])))
                 .collect();
             let mut sim = Sim::new(&g);
-            sim.configure(self.cfg.spread, self.cfg.freeze);
+            sim.configure(self.cfg.spread, self.cfg.freeze, !self.show_dirs);
             for (i, node) in g.nodes.iter().enumerate() {
                 if let Some(&(x, y)) = old_pos.get(&node.ident()) {
                     sim.x[i] = x;
@@ -318,6 +318,7 @@ impl Viewer {
             pins,
             pane_width: self.pane_width,
             hide_web: !self.show_web,
+            hide_dirs: !self.show_dirs,
             // theme and default agent live in the per-user config now;
             // these two are migration-only fields (see state.rs)
             light: None,

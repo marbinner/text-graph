@@ -239,6 +239,15 @@
   moves and reloads clear it (stale indexes point into the old graph).
 - The sim is seeded from `layout::radial` and has zero randomness — same
   vault, same picture. The coincident-node nudge is index-derived, not random.
+- Two view toggles decide what is on the canvas, and `Viewer::node_shown`
+  is the ONE place that says so (cull, hit-test, edges, fit, finder): `w`
+  hides web nodes at PAINT time only — the sim keeps simulating them, so
+  it never reflows — while `F` hides folders and takes them OUT of the
+  physics (`Sim::configure`'s `dirs_out`: no charge, no springs, no
+  integration), because a hidden node that still pushed its neighbours
+  around would be an invisible hand on the layout. Both persist per vault
+  in `state.rs`, inverted (`hide_web`/`hide_dirs`), so the default is
+  "everything visible".
 - Node bodies are never held whole in memory. Markdown scanning reads an
   8 MiB prefix, `vault::read_body` reads a 1 MiB preview prefix and appends a
   truncation notice, and canvas previews cache smaller stamped excerpts.

@@ -45,6 +45,7 @@
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Key};
+use text_graph::graph::NodeKind;
 
 use super::Viewer;
 
@@ -368,13 +369,15 @@ const BINDINGS: &[Binding] = &[
         },
     },
     // p = up to the parent folder — the one tree move worth a key of its
-    // own now that browsing lives in the finder
+    // own now that browsing lives in the finder. Every parent is a
+    // folder, so with `F` hiding those there is nowhere to go: the row
+    // goes quiet rather than selecting something off the canvas.
     Binding {
         trigger: Trigger::Chords(&[bare(Key::P)]),
         press: Press::Repeat,
         guard: Guard::WidgetFree,
         doc: "p",
-        when: |v| v.selected.is_some_and(|sel| v.g.node(sel).parent.is_some()),
+        when: |v| v.show_dirs && v.selected.is_some_and(|sel| v.g.node(sel).parent.is_some()),
         act: |v, _| {
             let Some(parent) = v.selected.and_then(|sel| v.g.node(sel).parent) else {
                 return;
@@ -396,6 +399,36 @@ const BINDINGS: &[Binding] = &[
             let Some(sel) = v.selected else { return };
             let ctx = ui.ctx().clone();
             v.edit_in_graph_terminal(&ctx, sel);
+        },
+    },
+    // Toggle folder nodes. Unlike `w`, hiding these takes them OUT of
+    // the physics (sim.rs): the Contains spine goes with them and the
+    // graph re-settles on wikilinks and gravity alone, so the press is a
+    // reflow, not just a repaint. A folder that was selected goes too —
+    // a selection nobody can see still owns z/G/e/t/a.
+    Binding {
+        trigger: Trigger::Chords(&[shift(Key::F)]),
+        press: Press::Fresh,
+        guard: Guard::WidgetFree,
+        doc: "F",
+        when: always,
+        act: |v, _| {
+            v.show_dirs = !v.show_dirs;
+            if !v.show_dirs
+                && v.selected
+                    .is_some_and(|sel| v.g.node(sel).kind == NodeKind::Dir)
+            {
+                v.selected = None;
+                v.conn_cursor = None;
+            }
+            v.set_flash(
+                if v.show_dirs {
+                    "folders shown — F takes them back out of the graph"
+                } else {
+                    "folders hidden, and out of the layout — F brings them back"
+                }
+                .into(),
+            );
         },
     },
     // Toggle web (cited-URL) nodes — the sim keeps simulating them, so

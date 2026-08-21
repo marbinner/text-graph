@@ -506,6 +506,10 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
         "view",
         &[
             ("w", "show or hide web (cited-URL) nodes"),
+            (
+                "F",
+                "show or hide folder nodes — hidden, they leave the layout too",
+            ),
             (",", "these settings"),
             ("?", "this list"),
         ],

@@ -31,6 +31,11 @@ pub struct ViewState {
     /// Web nodes hidden by the `w` toggle. Stored inverted so the derived
     /// Default (false) means the default view: webs visible.
     pub hide_web: bool,
+    /// Folder nodes hidden by the `F` toggle — inverted for the same
+    /// reason as [`ViewState::hide_web`]. Unlike webs, hidden folders are
+    /// out of the simulation too (see `sim.rs`), so this one is restored
+    /// before the first tick.
+    pub hide_dirs: bool,
     /// Light theme, as written by builds before preferences moved to the
     /// per-user config. READ ONLY: parsed so `config::load_or_migrate` can
     /// seed from it, never written back — `config.rs` owns it now. `None`
@@ -74,6 +79,9 @@ pub fn to_text(s: &ViewState) -> String {
     }
     if s.hide_web {
         out.push_str("hide_web\n");
+    }
+    if s.hide_dirs {
+        out.push_str("hide_dirs\n");
     }
     // `light` and `agent` are deliberately NOT written: they moved to the
     // per-user config, and a save here would keep resurrecting the old
@@ -138,6 +146,7 @@ pub fn from_text(text: &str) -> ViewState {
                 s.pane_width = num(Some(fields)).map(|w| w.clamp(120.0, 4000.0));
             }
             "hide_web" => s.hide_web = true,
+            "hide_dirs" => s.hide_dirs = true,
             "light" => s.light = Some(true),
             "agent" => {
                 if !fields.is_empty() {
@@ -386,6 +395,7 @@ mod tests {
             ],
             pane_width: Some(412.5),
             hide_web: true,
+            hide_dirs: true,
             light: None,
             default_agent: None,
             unknown: vec!["future-thing\tdata".to_string()],
@@ -427,6 +437,7 @@ mod tests {
             pins: vec![("weird\tname".to_string(), "%1".to_string())],
             pane_width: None,
             hide_web: false,
+            hide_dirs: false,
             light: None,
             default_agent: None,
             unknown: Vec::new(),

@@ -746,8 +746,9 @@ impl Viewer {
         }
         let pat = search::pattern(&self.picker.query);
         for (i, n) in self.g.nodes.iter().enumerate() {
-            // hidden web nodes aren't on the canvas to jump to
-            if !self.show_web && n.kind == NodeKind::Web {
+            // a hidden node isn't on the canvas to jump to (browsing is
+            // the surface that still walks folders while `F` hides them)
+            if !self.node_shown(NodeId(i as u32)) {
                 continue;
             }
             let names = Names {

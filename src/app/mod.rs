@@ -376,6 +376,11 @@ struct Viewer {
     cfg: Config,
     /// Web nodes visible (the `w` toggle; persisted inverted as hide_web).
     show_web: bool,
+    /// Folder nodes visible (the `F` toggle; persisted inverted as
+    /// hide_dirs). Unlike `show_web` this one reaches the SIM: hidden
+    /// folders leave the physics, so the graph reflows into a
+    /// wikilinks-only layout and back (see `sim.rs`).
+    show_dirs: bool,
     /// Side-pane width the user dragged to, persisted per vault. `None`
     /// until they DRAG it — a default must never be written back, or the
     /// first frame's window size (eframe opens at 1280 before the WM has
@@ -512,6 +517,7 @@ impl Viewer {
         let vs = state::load(&root);
         let saved_cam = vs.camera;
         let show_web = !vs.hide_web;
+        let show_dirs = !vs.hide_dirs;
         let theme = Theme::get(cfg.light);
         let agent_allowlist = cfg.agent_choices();
         let mut restore_offsets: HashMap<String, Vec<(String, Vec2)>> = HashMap::new();
@@ -556,6 +562,7 @@ impl Viewer {
             settings: settings::SettingsUi::default(),
             cfg,
             show_web,
+            show_dirs,
             pane_width: vs.pane_width,
             matcher: Matcher::new(MatcherConfig::DEFAULT),
             picker: Picker::new(),
@@ -678,7 +685,8 @@ impl Viewer {
             .into_iter()
             .chain(node.children.iter().copied())
             .chain(self.g.outlinks(id).map(|l| l.to))
-            .chain(self.g.backlinks(id).map(|l| l.from));
+            .chain(self.g.backlinks(id).map(|l| l.from))
+            .filter(|n| self.node_shown(*n));
         // the node stays centered, so what matters is how far the
         // furthest neighbour reaches from it in each direction
         let (mut dx, mut dy) = (0.0f32, 0.0f32);
@@ -721,6 +729,18 @@ impl Viewer {
         Pos2::new(self.sim.x[i], self.sim.y[i])
     }
 
+    /// Is this node on the canvas? The two view toggles are the only
+    /// things that take one off it — `w` for web nodes, `F` for folders —
+    /// and this is the ONE place that says so, so the cull, the edges,
+    /// the fit and the finder can never disagree about what is drawn.
+    pub(super) fn node_shown(&self, id: NodeId) -> bool {
+        match self.g.node(id).kind {
+            NodeKind::Web => self.show_web,
+            NodeKind::Dir => self.show_dirs,
+            _ => true,
+        }
+    }
+
     /// Where the camera has to sit for node `i` to land somewhere VISIBLE:
     /// dead center normally, lifted into the band above the floating
     /// finder while that covers the middle of the canvas.
@@ -740,6 +760,11 @@ impl Viewer {
         let mut min = Pos2::new(f32::INFINITY, f32::INFINITY);
         let mut max = Pos2::new(f32::NEG_INFINITY, f32::NEG_INFINITY);
         for i in 0..self.g.nodes.len() {
+            // hidden nodes keep their last position and would drag the
+            // fit out to a corner of the world nobody can see
+            if !self.node_shown(NodeId(i as u32)) {
+                continue;
+            }
             let p = self.world_pos(i);
             min = min.min(p);
             max = max.max(p);

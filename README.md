@@ -67,7 +67,7 @@ own editor, and the graph live-reloads when you save.
 | **File node** | every `.md` file (hidden dirs, `.obsidian/`, `.trash/`, `node_modules/`, `target/`, `__pycache__/` skipped; git-ignore semantics deliberately off) |
 | **Image node** | every raster image (png/jpg/jpeg/gif/webp/bmp) — rendered as its actual picture once you zoom in |
 | **Asset node** | every other visible file — code, config, data, binaries. Text-classified assets get previews; all are linkable by full name (`[[data.csv]]`) |
-| **Dir node** | every directory with files somewhere beneath it |
+| **Dir node** | every directory with files somewhere beneath it; `F` toggles them — hidden, they leave the simulation too, and the graph re-settles on wikilinks alone |
 | **Ghost node** | a `[[target]]` that resolves to nothing — a note you've referenced but not written; drawn hollow |
 | **Web node** | every external URL cited anywhere — ONE cyan globe per normalized URL however many notes cite it, so shared sources become visible bridges between their citers; `w` toggles them, Enter/double-click opens the browser |
 | **Contains edge** | filesystem parent → child; a true tree by construction, and the layout's skeleton — drawn as a **tapered wedge**, thick at the parent thinning to the child |
@@ -152,6 +152,7 @@ focus a terminal and every key goes to the agent until `Ctrl+Q`.
 | hover | highlight the node's neighborhood, dim everything else; nearby labels fade in around the cursor |
 | hover + linger | metadata + full preview popup for any node — note as markdown, text asset raw, image large, folder stats + listing, ghost referencers; on a compact terminal card, its full live screen |
 | `w` | toggle web (cited-URL) nodes — hidden means hidden from view only, the layout never reflows |
+| `F` | toggle **folder** nodes — hidden, they leave the *physics* as well: the Contains spine goes with them and the notes re-settle on their links alone. Persisted per vault |
 | `,` or `⚙` (bottom-right) | **settings** — see below |
 | `?` | every keybinding, in the settings window |
 | `f`, `/` or `Ctrl+F` | **find** anything — see below |

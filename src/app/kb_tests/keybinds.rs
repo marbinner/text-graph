@@ -13,6 +13,48 @@ fn w_toggles_web_nodes() {
     assert!(h.state().show_web);
 }
 
+/// Shift+F is the folder toggle: unlike `w` it reaches the SIMULATION,
+/// so the folders stop moving and stop moving anything else. A folder
+/// that was selected can't stay selected — nothing would show it.
+#[test]
+fn shift_f_takes_folders_out_of_the_graph() {
+    let mut h = harness();
+    assert!(h.state().show_dirs, "folders visible by default");
+    select(&mut h, "topics");
+    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::F);
+    h.step();
+    assert!(!h.state().show_dirs);
+    assert_eq!(
+        selected_path(&h),
+        None,
+        "a hidden folder is not a selection"
+    );
+    assert!(!h.state().picker.open, "Shift+F is not the finder's bare f");
+    let dir = h.state().g.by_path("topics").expect("fixture folder");
+    assert!(!h.state().node_shown(dir), "and it is off the canvas");
+    let file = h
+        .state()
+        .g
+        .by_path("topics/grafér.md")
+        .expect("fixture note");
+    assert!(h.state().node_shown(file), "its files are not");
+
+    // p has nowhere to go while the folders are hidden
+    select(&mut h, "topics/grafér.md");
+    press(&mut h, Key::P);
+    assert_eq!(
+        selected_path(&h).as_deref(),
+        Some("topics/grafér.md"),
+        "p must not select a folder that isn't drawn"
+    );
+
+    h.key_press_modifiers(eframe::egui::Modifiers::SHIFT, Key::F);
+    h.step();
+    assert!(h.state().show_dirs, "and back");
+    press(&mut h, Key::P);
+    assert_eq!(selected_path(&h).as_deref(), Some("topics"));
+}
+
 /// hjkl belong to the CAMERA now, selection or not — choosing a node
 /// lives in the finder (f / b). `p` is the one tree move left: up to the
 /// parent. s and d zoom, so one hand drives the whole view.

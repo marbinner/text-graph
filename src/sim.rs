@@ -7,6 +7,14 @@
 //! Ghosts participate too, seeded next to the first node that references
 //! them.
 //!
+//! Folders can be taken OUT of the physics entirely ([`Sim::configure`]'s
+//! `dirs_out`, the viewer's folder toggle): no charge, no springs, no
+//! integration. Hiding a node that still repelled its neighbours would be
+//! an invisible hand on the layout — with the Contains spine gone the
+//! graph is held together by wikilinks and gravity alone, which is the
+//! whole point of the toggle. Excluded nodes keep their last position and
+//! lose their velocity, so bringing them back is a reheat, not a jolt.
+//!
 //! Repulsion is exact O(n²) up to [`BH_MIN_NODES`] (bit-identical to the
 //! original integration, and faster than building a tree down there) and
 //! Barnes–Hut above it: a quadtree of charge-weighted centers of mass,
@@ -242,6 +250,11 @@ pub struct Sim {
     /// Layout paused (a setting). A frozen sim still honours the pin, so a
     /// dragged node goes exactly where it is dropped and stays there.
     frozen: bool,
+    /// Which nodes are folders — the one thing the sim needs to remember
+    /// about kinds to be able to drop them from the physics later.
+    dir: Vec<bool>,
+    /// Folders are out of the simulation (see the module docs).
+    dirs_out: bool,
     // Barnes–Hut scratch, reused across iterations so the per-iteration
     // tree rebuild allocates nothing in steady state.
     bh_cells: Vec<BhCell>,
@@ -319,6 +332,8 @@ impl Sim {
             alpha: 1.0,
             spread: 1.0,
             frozen: false,
+            dir: g.nodes.iter().map(|n| n.kind == NodeKind::Dir).collect(),
+            dirs_out: false,
             bh_cells: Vec::new(),
             bh_order: Vec::new(),
             bh_stack: Vec::new(),
@@ -326,15 +341,27 @@ impl Sim {
     }
 
     /// Carry the live settings into a sim (a fresh one, or after a reload
-    /// rebuilds it). Reheats when the spread actually moves, since the
-    /// graph has to relax into the new equilibrium to show the change.
-    pub fn configure(&mut self, spread: f32, frozen: bool) {
+    /// rebuilds it). Reheats when the spread actually moves, or when
+    /// folders enter or leave the physics, since the graph has to relax
+    /// into the new equilibrium to show the change.
+    pub fn configure(&mut self, spread: f32, frozen: bool, dirs_out: bool) {
         let spread = spread.clamp(0.1, 10.0);
         if (spread - self.spread).abs() > f32::EPSILON {
             self.spread = spread;
             self.reheat();
         }
+        if dirs_out != self.dirs_out {
+            self.dirs_out = dirs_out;
+            self.reheat();
+        }
         self.frozen = frozen;
+    }
+
+    /// Is this node out of the physics? (Folders, while the view hides
+    /// them.) The one gate every force loop consults.
+    #[inline]
+    fn out(&self, i: usize) -> bool {
+        self.dirs_out && self.dir[i]
     }
 
     pub fn active(&self) -> bool {
@@ -386,7 +413,13 @@ impl Sim {
                 self.bh_repulsion(a * charge_scale);
             } else {
                 for i in 0..n {
+                    if self.out(i) {
+                        continue;
+                    }
                     for j in (i + 1)..n {
+                        if self.out(j) {
+                            continue;
+                        }
                         let mut dx = self.x[i] - self.x[j];
                         let mut dy = self.y[i] - self.y[j];
                         if dx * dx + dy * dy < 1e-6 {
@@ -409,8 +442,13 @@ impl Sim {
 
             // springs
             for &(pa, pb, rest) in &self.springs {
-                let rest = rest * self.spread;
                 let (i, j) = (pa as usize, pb as usize);
+                // a spring with an excluded end (every Contains edge, once
+                // folders are out) simply isn't there
+                if self.out(i) || self.out(j) {
+                    continue;
+                }
+                let rest = rest * self.spread;
                 let dx = self.x[j] - self.x[i];
                 let dy = self.y[j] - self.y[i];
                 let d = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -423,6 +461,13 @@ impl Sim {
 
             // gravity, damping, speed cap, integrate
             for i in 0..n {
+                if self.out(i) {
+                    // out of the physics: it stays where it is, and keeps
+                    // no momentum to resume with when it comes back
+                    self.vx[i] = 0.0;
+                    self.vy[i] = 0.0;
+                    continue;
+                }
                 self.vx[i] -= self.x[i] * GRAVITY * a;
                 self.vy[i] -= self.y[i] * GRAVITY * a;
                 self.vx[i] *= DAMPING;
@@ -450,12 +495,21 @@ impl Sim {
         let mut stack = std::mem::take(&mut self.bh_stack);
         cells.clear();
         order.clear();
-        order.extend(0..n as u32);
+        // the tree holds only the nodes in the physics — an excluded one
+        // neither pushes nor is pushed, so it never enters a cell
+        order.extend((0..n as u32).filter(|&i| !self.out(i as usize)));
+        if order.is_empty() {
+            self.bh_cells = cells;
+            self.bh_order = order;
+            self.bh_stack = stack;
+            return;
+        }
         let mut minx = f32::INFINITY;
         let mut miny = f32::INFINITY;
         let mut maxx = f32::NEG_INFINITY;
         let mut maxy = f32::NEG_INFINITY;
-        for k in 0..n {
+        for &k in order.iter() {
+            let k = k as usize;
             minx = minx.min(self.x[k]);
             maxx = maxx.max(self.x[k]);
             miny = miny.min(self.y[k]);
@@ -474,7 +528,8 @@ impl Sim {
             half,
             0,
         );
-        for i in 0..n {
+        for k in 0..order.len() {
+            let i = order[k] as usize;
             let (fx, fy) = bh_accumulate(
                 &cells,
                 &order,
@@ -567,6 +622,52 @@ mod tests {
         assert!(d(1, 3) < d(2, 3), "linked pair should sit closer");
     }
 
+    /// Folders out of the physics means exactly that: they don't move,
+    /// nothing pulls them, and the Contains springs that held their
+    /// children are gone — the files re-settle on links and gravity
+    /// alone, and the picture is still the same one every run.
+    #[test]
+    fn folders_can_leave_the_physics() {
+        let g = synth();
+        let mut s = Sim::new(&g);
+        s.tick(300);
+        let root = (s.x[0], s.y[0]);
+        let file = (s.x[1], s.y[1]);
+        s.configure(1.0, false, true);
+        assert!(s.active(), "taking folders out has to reheat the layout");
+        s.tick(300);
+        assert_eq!((s.x[0], s.y[0]), root, "the folder stayed exactly put");
+        assert_ne!((s.x[1], s.y[1]), file, "its files re-settled without it");
+        assert!(s.x.iter().chain(&s.y).all(|v| v.is_finite()));
+
+        let settle = || {
+            let mut s = Sim::new(&g);
+            s.configure(1.0, false, true);
+            s.tick(300);
+            (s.x, s.y)
+        };
+        assert_eq!(settle(), settle(), "and it is still deterministic");
+    }
+
+    /// A folder that is out of the physics doesn't push, either: park it
+    /// anywhere at all and every file settles in exactly the same place.
+    /// (On the Barnes-Hut path, where a stray point would also perturb
+    /// the tree's bounds and its buckets.)
+    #[test]
+    fn an_excluded_folder_exerts_no_force() {
+        let g = synth_flat(400); // > BH_MIN_NODES
+        let settle = |dir_at: (f32, f32)| {
+            let mut s = Sim::new(&g);
+            s.configure(1.0, false, true);
+            s.x[0] = dir_at.0;
+            s.y[0] = dir_at.1;
+            s.tick(200);
+            assert_eq!((s.x[0], s.y[0]), dir_at, "and it never moved");
+            (s.x[1..].to_vec(), s.y[1..].to_vec())
+        };
+        assert_eq!(settle((0.0, 0.0)), settle((37.0, -12.0)));
+    }
+
     #[test]
     fn stale_pin_out_of_range_does_not_panic() {
         let g = synth();
@@ -583,7 +684,7 @@ mod tests {
         let g = synth();
         let extent = |spread: f32| {
             let mut s = Sim::new(&g);
-            s.configure(spread, false);
+            s.configure(spread, false, false);
             s.tick(600);
             let n = s.x.len() as f32;
             let (cx, cy) = (s.x.iter().sum::<f32>() / n, s.y.iter().sum::<f32>() / n);
@@ -602,8 +703,8 @@ mod tests {
         // still deterministic at a non-default setting
         let mut a = Sim::new(&g);
         let mut b = Sim::new(&g);
-        a.configure(1.6, false);
-        b.configure(1.6, false);
+        a.configure(1.6, false, false);
+        b.configure(1.6, false, false);
         a.tick(200);
         b.tick(200);
         assert_eq!((a.x, a.y), (b.x, b.y));
@@ -614,7 +715,7 @@ mod tests {
         let g = synth();
         let mut s = Sim::new(&g);
         s.tick(50);
-        s.configure(1.0, true);
+        s.configure(1.0, true, false);
         let (x, y) = (s.x.clone(), s.y.clone());
         s.tick(300);
         assert_eq!(

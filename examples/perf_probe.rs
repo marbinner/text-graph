@@ -67,7 +67,7 @@ fn main() {
     let cfg = Config::default();
     let t = Instant::now();
     let mut sim = Sim::new(&g);
-    sim.configure(cfg.spread, false);
+    sim.configure(cfg.spread, false, false);
     let seed_ms = ms(t);
 
     let t = Instant::now();

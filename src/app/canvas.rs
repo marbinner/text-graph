@@ -114,7 +114,8 @@ impl Viewer {
     }
 
     fn step_sim(&mut self, ui: &egui::Ui) {
-        self.sim.configure(self.cfg.spread, self.cfg.freeze);
+        self.sim
+            .configure(self.cfg.spread, self.cfg.freeze, !self.show_dirs);
         if self.sim.active() {
             self.sim.tick(3);
             ui.ctx().request_repaint();
@@ -317,9 +318,11 @@ impl Viewer {
     fn cull(&self, rect: Rect, view: Rect) -> Vec<(NodeId, Pos2, f32)> {
         let mut visible: Vec<(NodeId, Pos2, f32)> = Vec::new();
         for i in 0..self.g.nodes.len() {
-            // hidden web nodes are skipped at render/hit-test only — the
-            // sim keeps simulating them, so toggling never reflows
-            if !self.show_web && self.g.nodes[i].kind == NodeKind::Web {
+            // one rule for what is on the canvas (`node_shown`), and it
+            // covers render AND hit-test together: hidden web nodes are
+            // skipped here only (the sim keeps simulating them, so `w`
+            // never reflows), while hidden folders are out of the sim too
+            if !self.node_shown(NodeId(i as u32)) {
                 continue;
             }
             let s = self.cam.to_screen(rect, self.world_pos(i));
@@ -525,6 +528,11 @@ impl Viewer {
         // contains edges (under everything)
         for (i, node) in self.g.nodes.iter().enumerate() {
             let Some(parent) = node.parent else { continue };
+            // every Contains edge ends on a folder, so hiding folders
+            // takes the whole tree spine off the canvas with them
+            if !self.node_shown(parent) || !self.node_shown(NodeId(i as u32)) {
+                continue;
+            }
             let sa = self.cam.to_screen(rect, self.world_pos(i));
             let sb = self.cam.to_screen(rect, self.world_pos(parent.0 as usize));
             // bbox test, not endpoint containment: a long edge crossing the
@@ -546,6 +554,9 @@ impl Viewer {
         // touch the active node
         for l in &self.g.links {
             if l.kind == LinkKind::External && !self.show_web {
+                continue;
+            }
+            if !self.node_shown(l.from) || !self.node_shown(l.to) {
                 continue;
             }
             let sa = self.cam.to_screen(rect, self.world_pos(l.from.0 as usize));
